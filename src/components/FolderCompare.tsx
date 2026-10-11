@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   api,
   errorMessage,
@@ -14,11 +14,21 @@ import { VirtualList } from "./VirtualList";
 
 type Filter = "all" | "diffs" | "same" | "orphans";
 
+/** What a saved folder session remembers besides its paths. */
+export interface FolderSettings {
+  criteria: CompareCriteria;
+  includeHidden: boolean;
+  exclude: string;
+  filter: Filter;
+}
+
 interface Props {
   left: string;
   right: string;
   onPathsChange: (left: string, right: string) => void;
   onOpenFiles: (left: string, right: string) => void;
+  settings?: Partial<FolderSettings>;
+  onSettingsChange?: (s: FolderSettings) => void;
 }
 
 const STATUS_ICON: Record<EntryStatus, string> = {
@@ -74,12 +84,18 @@ interface FlatRow {
   depth: number;
 }
 
-export function FolderCompare({ left, right, onPathsChange, onOpenFiles }: Props) {
-  const [criteria, setCriteria] = useState<CompareCriteria>("sizeAndTimestamp");
-  const [includeHidden, setIncludeHidden] = useState(true);
-  const [excludeText, setExcludeText] = useState(DEFAULT_EXCLUDE);
-  const [exclude, setExclude] = useState(DEFAULT_EXCLUDE);
-  const [filter, setFilter] = useState<Filter>("all");
+export function FolderCompare({ left, right, onPathsChange, onOpenFiles, settings, onSettingsChange }: Props) {
+  const [criteria, setCriteria] = useState<CompareCriteria>(settings?.criteria ?? "sizeAndTimestamp");
+  const [includeHidden, setIncludeHidden] = useState(settings?.includeHidden ?? true);
+  const [excludeText, setExcludeText] = useState(settings?.exclude ?? DEFAULT_EXCLUDE);
+  const [exclude, setExclude] = useState(settings?.exclude ?? DEFAULT_EXCLUDE);
+  const [filter, setFilter] = useState<Filter>(settings?.filter ?? "all");
+  const reportSettings = useRef(onSettingsChange);
+  reportSettings.current = onSettingsChange;
+  useEffect(
+    () => reportSettings.current?.({ criteria, includeHidden, exclude, filter }),
+    [criteria, includeHidden, exclude, filter],
+  );
   const [result, setResult] = useState<FolderCompareResult | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
