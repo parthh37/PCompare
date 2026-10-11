@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api, errorMessage, type HexChunk, type HexSummary } from "../lib/api";
 import { formatSize, hex } from "../lib/format";
+import { autoRefreshTitle, useAutoRefresh } from "../lib/useAutoRefresh";
 import { PathBar } from "./PathBar";
 import { VirtualList, type VirtualListHandle } from "./VirtualList";
 
@@ -18,6 +19,7 @@ const printable = (b: number | undefined) =>
   b === undefined ? " " : b >= 0x20 && b < 0x7f ? String.fromCharCode(b) : "·";
 
 export function HexCompare({ left, right, onPathsChange }: Props) {
+  const [autoRefresh, setAutoRefresh] = useState(false);
   const [summary, setSummary] = useState<HexSummary | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [cursor, setCursor] = useState<number | null>(null);
@@ -25,8 +27,12 @@ export function HexCompare({ left, right, onPathsChange }: Props) {
   const chunks = useRef(new Map<number, HexChunk>());
   const pending = useRef(new Set<number>());
   const list = useRef<VirtualListHandle>(null);
+  /** Bumped on reload so chunk responses from the previous file contents are dropped. */
+  const generation = useRef(0);
+  const visibleRange = useRef<[number, number]>([0, 0]);
 
   useEffect(() => {
+    generation.current++;
     chunks.current.clear();
     pending.current.clear();
     setSummary(null);
@@ -44,6 +50,8 @@ export function HexCompare({ left, right, onPathsChange }: Props) {
 
   const ensureRows = useCallback(
     (first: number, last: number) => {
+      visibleRange.current = [first, last];
+      const gen = generation.current;
       const firstChunk = Math.floor((first * BYTES_PER_ROW) / CHUNK_BYTES);
       const lastChunk = Math.floor((last * BYTES_PER_ROW) / CHUNK_BYTES);
       for (let c = firstChunk; c <= lastChunk; c++) {
@@ -52,15 +60,35 @@ export function HexCompare({ left, right, onPathsChange }: Props) {
         api
           .hexChunk(left, right, c * CHUNK_BYTES, CHUNK_BYTES)
           .then((chunk) => {
+            if (gen !== generation.current) return;
             chunks.current.set(c, chunk);
             bump((n) => n + 1);
           })
           .catch((e) => setError(errorMessage(e)))
-          .finally(() => pending.current.delete(c));
+          .finally(() => gen === generation.current && pending.current.delete(c));
       }
     },
     [left, right],
   );
+
+  /** Re-reads both files in place, keeping the scroll position and cursor. */
+  const reload = useCallback(async () => {
+    if (!left || !right) return;
+    try {
+      const s = await api.hexSummary(left, right);
+      generation.current++;
+      chunks.current.clear();
+      pending.current.clear();
+      setSummary(s);
+      setError(null);
+      ensureRows(...visibleRange.current);
+      bump((n) => n + 1);
+    } catch (e) {
+      setError(errorMessage(e));
+    }
+  }, [left, right, ensureRows]);
+
+  const watchState = useAutoRefresh({ enabled: autoRefresh, paths: [left, right], onChange: reload });
 
   useEffect(() => {
     if (cursor != null) list.current?.scrollToRow(Math.floor(cursor / BYTES_PER_ROW));
@@ -123,6 +151,13 @@ export function HexCompare({ left, right, onPathsChange }: Props) {
           ↓ Next difference
         </button>
         <span className="spacer" />
+        <label className={`check${watchState === "watching" || watchState === "polling" ? " live" : ""}`} title={autoRefreshTitle(watchState)}>
+          <input type="checkbox" checked={autoRefresh} onChange={(e) => setAutoRefresh(e.target.checked)} />
+          Auto-refresh
+        </label>
+        <button onClick={reload} title="Reload both files">
+          ⟳ Refresh
+        </button>
       </div>
       <PathBar left={left} right={right} directory={false} onCompare={onPathsChange} />
       <div className="session-body">
