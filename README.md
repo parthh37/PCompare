@@ -11,6 +11,8 @@ A fast, modern file & folder comparison tool for Windows — inspired by Beyond 
 | **Folder Compare** | Recursive, parallel (rayon) comparison by size+timestamp, size, or byte content · filters (All / Differences / Same / Orphans) · glob excludes · hidden-file toggle · case-insensitive name pairing on Windows · double-click to drill into files |
 | **Text Compare** | Side-by-side aligned diff · word-level intra-line highlights · Patience or Myers algorithm · ignore whitespace (trailing / changes / all) and case, with *unimportant* differences shown separately · All / Context / Diffs-only views · overview map · prev/next difference (Alt+↑/↓) · encoding (UTF-8/16 BOM, Windows-1252) and line-ending detection |
 | **Hex Compare** | Streams files of any size in 4 KB pages · byte-level highlighting · next-difference search |
+| **Saved sessions** | Name and save any comparison (Ctrl+S) — paths plus view settings · reopen, rename, delete from Home |
+| **Connection profiles** | Amazon S3 & S3-compatible (R2, MinIO, Wasabi…), Azure Blob, Google Cloud Storage, Backblaze B2, FTP/FTPS, SFTP, WebDAV, OneDrive, Dropbox, Google Drive · secrets kept in the OS keychain · use `remote://<profile>/path` (or 🌐) on either side of any compare |
 | **Shell** | Tabbed sessions · drag two files/folders onto the window · `pcompare <left> <right>` command line |
 
 ## Roadmap
@@ -24,11 +26,13 @@ A fast, modern file & folder comparison tool for Windows — inspired by Beyond 
 - [ ] **Table / CSV compare** with key columns
 - [ ] **Image compare** (side-by-side, overlay, pixel-diff, tolerance)
 - [ ] Archive compare (zip / 7z / tar as folders)
-- [ ] Saved sessions & workspaces, file-format rules per extension
+- [x] Saved sessions
+- [ ] Workspaces (save all open tabs), file-format rules per extension
 - [ ] HTML / text reports, folder compare reports
 - [ ] Progress + cancellation for huge folder trees
 - [ ] Windows Explorer context menu ("Select left side" / "Compare to…")
-- [ ] Remote: SFTP / FTP / S3 / WebDAV
+- [x] Remote: SFTP / FTP / S3 / WebDAV / OneDrive / Dropbox / Google Drive / Azure / GCS / B2
+- [ ] Remote write-back (sync actions on remote profiles)
 
 ### Phase 3 — Extended features (beyond Beyond Compare)
 - [ ] Structural diff for JSON / YAML / XML (key-order-insensitive)
@@ -54,10 +58,23 @@ npm run tauri build        # produce MSI + NSIS installers (on Windows)
 ### Project layout
 
 ```
-crates/pcompare-core/   Rust diff engines (text, folder, hex) — UI-agnostic, unit tested
+crates/pcompare-core/   Rust diff engines (text, folder, hex) + saved sessions — UI-agnostic, unit tested
+crates/pcompare-remote/ Connection profiles and remote file systems (OpenDAL + russh SFTP)
 src-tauri/              Tauri shell exposing the engines as commands
 src/                    React + TypeScript UI
 ```
+
+### Connecting OneDrive, Dropbox or Google Drive
+
+These use OAuth sign-in, which needs an app registration you control:
+
+1. Register an app in the provider's developer console (linked from the profile form).
+2. Add the redirect URI `http://localhost:53682/` (Microsoft: "Mobile and desktop applications"; Google: "Desktop app").
+3. Paste the Client ID (and, for Google, the client secret) into the profile and click **Sign in…**.
+
+### Testing against live servers
+
+`cargo test -p pcompare-remote --test live` is skipped unless `PCOMPARE_LIVE_PROFILES` points at a JSON list of profiles; see the header of `crates/pcompare-remote/tests/live.rs` for the format and fixture layout.
 
 ### Use as a git difftool
 
