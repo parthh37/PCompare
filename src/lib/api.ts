@@ -1,6 +1,7 @@
 // Typed bridge to the Rust commands in src-tauri/src/main.rs.
 // Field names mirror the serde `camelCase` structs in pcompare-core.
 import { invoke } from "@tauri-apps/api/core";
+import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 
 export type PathKind = "file" | "directory" | "missing";
 
@@ -12,7 +13,16 @@ export interface TextDiffOptions {
   whitespace: WhitespaceMode;
   ignoreCase: boolean;
   algorithm: DiffAlgorithm;
+  /** Regexes for text that never matters; matches are removed before comparing. */
+  ignorePatterns: string[];
 }
+
+export const DEFAULT_TEXT_OPTIONS: TextDiffOptions = {
+  whitespace: "compare",
+  ignoreCase: false,
+  algorithm: "patience",
+  ignorePatterns: [],
+};
 
 export type RowKind = "equal" | "unimportant" | "changed" | "leftOnly" | "rightOnly";
 
@@ -58,19 +68,35 @@ export interface TextFileCompare {
 }
 
 // ---------- folder ----------
-export type CompareCriteria = "sizeAndTimestamp" | "size" | "content";
+/** How file contents are read after the quick (size/timestamp) tests. */
+export type ContentMethod = "off" | "binary" | "crc" | "rules";
+
+export interface FolderFilters {
+  includeFiles: string[];
+  excludeFiles: string[];
+  excludeFolders: string[];
+  minSize: number | null;
+  maxSize: number | null;
+  modifiedAfterMs: number | null;
+  modifiedBeforeMs: number | null;
+}
 
 export interface FolderCompareOptions {
-  criteria: CompareCriteria;
+  compareSize: boolean;
+  compareTimestamp: boolean;
+  content: ContentMethod;
+  overrideQuickTests: boolean;
+  rules: TextDiffOptions;
   recursive: boolean;
   exclude: string[];
+  filters: FolderFilters;
   includeHidden: boolean;
   ignoreNameCase: boolean;
   timeToleranceSecs: number;
   ignoreDstShift: boolean;
 }
 
-export type EntryStatus = "same" | "different" | "leftOnly" | "rightOnly" | "typeMismatch" | "error";
+export type EntryStatus = "same" | "similar" | "different" | "leftOnly" | "rightOnly" | "typeMismatch" | "error";
 export type Side = "left" | "right";
 
 export interface EntryMeta {
@@ -89,14 +115,30 @@ export interface FolderEntry {
   right: EntryMeta | null;
   children: FolderEntry[];
   error: string | null;
+  contentChecked: ContentMethod | null;
+  crc: [number, number] | null;
+}
+
+export interface FolderStats {
+  same: number;
+  similar: number;
+  different: number;
+  leftOnly: number;
+  rightOnly: number;
+  errors: number;
 }
 
 export interface FolderCompareResult {
   leftRoot: string;
   rightRoot: string;
   entries: FolderEntry[];
-  stats: { same: number; different: number; leftOnly: number; rightOnly: number; errors: number };
+  stats: FolderStats;
   elapsedMs: number;
+}
+
+export interface ContentVerdict {
+  status: EntryStatus;
+  crc: [number, number] | null;
 }
 
 // ---------- hex ----------
@@ -209,6 +251,21 @@ export const api = {
     invoke<TextFileCompare>("compare_text_files", { left, right, options }),
   compareFolders: (left: string, right: string, options: FolderCompareOptions) =>
     invoke<FolderCompareResult>("compare_folders", { left, right, options }),
+  compareFileContents: (
+    left: string,
+    leftSize: number,
+    right: string,
+    rightSize: number,
+    method: ContentMethod,
+    rules: TextDiffOptions,
+  ) => invoke<ContentVerdict>("compare_file_contents", { left, leftSize, right, rightSize, method, rules }),
+
+  /** Watches local paths; resolves to how many could be watched (remote ones can't). */
+  watchPaths: (id: string, paths: string[], exclude: string[]) =>
+    invoke<number>("watch_paths", { id, paths, exclude }),
+  unwatchPaths: (id: string) => invoke<void>("unwatch_paths", { id }),
+  onFsChanged: (handler: (id: string) => void): Promise<UnlistenFn> =>
+    listen<{ id: string }>("fs-changed", (e) => handler(e.payload.id)),
   hexSummary: (left: string, right: string) => invoke<HexSummary>("hex_summary", { left, right }),
   hexChunk: (left: string, right: string, offset: number, len: number) =>
     invoke<HexChunk>("hex_chunk", { left, right, offset, len }),
