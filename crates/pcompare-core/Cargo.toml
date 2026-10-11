@@ -1,0 +1,19 @@
+[package]
+name = "pcompare-core"
+description = "Diff engines (text, folder, binary) powering PCompare"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+serde.workspace = true
+thiserror.workspace = true
+similar = "2"
+encoding_rs = "0.8"
+globset = "0.4"
+rayon = "1"
+
+[dev-dependencies]
+tempfile = "3"
+serde_json.workspace = true
