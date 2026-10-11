@@ -18,6 +18,12 @@ const CHAR_WIDTH = 7.8;
 const CONTEXT_LINES = 3;
 
 type ViewMode = "all" | "context" | "diffs";
+
+/** What a saved text session remembers besides its paths. */
+export interface TextSettings {
+  options: TextDiffOptions;
+  mode: ViewMode;
+}
 type DisplayItem = { row: number } | { gap: number };
 
 interface Props {
@@ -25,6 +31,8 @@ interface Props {
   right: string;
   onPathsChange: (left: string, right: string) => void;
   onOpenHex: () => void;
+  settings?: Partial<TextSettings>;
+  onSettingsChange?: (s: TextSettings) => void;
 }
 
 const isImportant = (r: DiffRow) => r.kind !== "equal" && r.kind !== "unimportant";
@@ -75,13 +83,17 @@ function FileInfo({ info }: { info: TextFileInfo }) {
   );
 }
 
-export function TextCompare({ left, right, onPathsChange, onOpenHex }: Props) {
+export function TextCompare({ left, right, onPathsChange, onOpenHex, settings, onSettingsChange }: Props) {
   const [options, setOptions] = useState<TextDiffOptions>({
     whitespace: "compare",
     ignoreCase: false,
     algorithm: "patience",
+    ...settings?.options,
   });
-  const [mode, setMode] = useState<ViewMode>("all");
+  const [mode, setMode] = useState<ViewMode>(settings?.mode ?? "all");
+  const reportSettings = useRef(onSettingsChange);
+  reportSettings.current = onSettingsChange;
+  useEffect(() => reportSettings.current?.({ options, mode }), [options, mode]);
   const [result, setResult] = useState<TextFileCompare | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);

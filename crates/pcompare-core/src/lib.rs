@@ -7,8 +7,11 @@
 pub mod error;
 pub mod folder;
 pub mod hex;
+pub mod session;
+pub mod store;
 pub mod text;
 pub mod textfile;
+pub mod vfs;
 
 pub use error::{CoreError, Result};
 

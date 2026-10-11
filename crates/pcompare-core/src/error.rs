@@ -10,13 +10,27 @@ pub enum CoreError {
     },
     #[error("invalid filter pattern `{pattern}`: {message}")]
     BadPattern { pattern: String, message: String },
+    /// Failures from remote back ends (network, auth, protocol).
+    #[error("{path}: {message}")]
+    Remote { path: String, message: String },
+    #[error("{0}")]
+    Other(String),
 }
 
 impl CoreError {
-    pub(crate) fn io(path: impl Into<PathBuf>, source: std::io::Error) -> Self {
+    pub fn io(path: impl Into<PathBuf>, source: std::io::Error) -> Self {
         CoreError::Io {
             path: path.into(),
             source,
+        }
+    }
+}
+
+impl CoreError {
+    pub fn remote(path: impl Into<String>, message: impl std::fmt::Display) -> Self {
+        CoreError::Remote {
+            path: path.into(),
+            message: message.to_string(),
         }
     }
 }
