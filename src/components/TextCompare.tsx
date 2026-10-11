@@ -1,7 +1,8 @@
-import { ArrowDown, ArrowUp, Binary, RefreshCw } from "lucide-react";
+import { ArrowDown, ArrowUp, Binary, ListFilter, RefreshCw } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState, type WheelEvent } from "react";
 import {
   api,
+  DEFAULT_TEXT_OPTIONS,
   errorMessage,
   type DiffRow,
   type Segment,
@@ -11,6 +12,8 @@ import {
   type WhitespaceMode,
 } from "../lib/api";
 import { formatSize } from "../lib/format";
+import { autoRefreshTitle, useAutoRefresh } from "../lib/useAutoRefresh";
+import { Modal } from "./Modal";
 import { PathBar } from "./PathBar";
 import { VirtualList, type VirtualListHandle } from "./VirtualList";
 
@@ -24,6 +27,7 @@ type ViewMode = "all" | "context" | "diffs";
 export interface TextSettings {
   options: TextDiffOptions;
   mode: ViewMode;
+  autoRefresh: boolean;
 }
 type DisplayItem = { row: number } | { gap: number };
 
@@ -85,16 +89,14 @@ function FileInfo({ info }: { info: TextFileInfo }) {
 }
 
 export function TextCompare({ left, right, onPathsChange, onOpenHex, settings, onSettingsChange }: Props) {
-  const [options, setOptions] = useState<TextDiffOptions>({
-    whitespace: "compare",
-    ignoreCase: false,
-    algorithm: "patience",
-    ...settings?.options,
-  });
+  const [options, setOptions] = useState<TextDiffOptions>({ ...DEFAULT_TEXT_OPTIONS, ...settings?.options });
   const [mode, setMode] = useState<ViewMode>(settings?.mode ?? "all");
+  const [autoRefresh, setAutoRefresh] = useState(settings?.autoRefresh ?? false);
+  const [editingRules, setEditingRules] = useState(false);
   const reportSettings = useRef(onSettingsChange);
   reportSettings.current = onSettingsChange;
-  useEffect(() => reportSettings.current?.({ options, mode }), [options, mode]);
+  useEffect(() => reportSettings.current?.({ options, mode, autoRefresh }), [options, mode, autoRefresh]);
+  const root = useRef<HTMLDivElement>(null);
   const [result, setResult] = useState<TextFileCompare | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -102,24 +104,36 @@ export function TextCompare({ left, right, onPathsChange, onOpenHex, settings, o
   const [hx, setHx] = useState(0);
   const list = useRef<VirtualListHandle>(null);
 
-  const run = useCallback(async () => {
-    if (!left || !right) return;
-    setLoading(true);
-    setError(null);
-    try {
-      setResult(await api.compareTextFiles(left, right, options));
-      setHunkIdx(-1);
-    } catch (e) {
-      setError(errorMessage(e));
-      setResult(null);
-    } finally {
-      setLoading(false);
-    }
-  }, [left, right, options]);
+  const requestSeq = useRef(0);
+  /** `quiet` reloads (auto-refresh) keep the view and current difference instead of resetting. */
+  const run = useCallback(
+    async (quiet = false) => {
+      if (!left || !right) return;
+      const seq = ++requestSeq.current;
+      if (!quiet) setLoading(true);
+      try {
+        const res = await api.compareTextFiles(left, right, options);
+        if (seq !== requestSeq.current) return;
+        setResult(res);
+        setError(null);
+        if (!quiet) setHunkIdx(-1);
+        else setHunkIdx((i) => Math.min(i, (res.diff?.hunks.length ?? 0) - 1));
+      } catch (e) {
+        if (seq !== requestSeq.current) return;
+        setError(errorMessage(e));
+        if (!quiet) setResult(null);
+      } finally {
+        if (seq === requestSeq.current) setLoading(false);
+      }
+    },
+    [left, right, options],
+  );
 
   useEffect(() => {
     run();
   }, [run]);
+
+  const watchState = useAutoRefresh({ enabled: autoRefresh, paths: [left, right], onChange: () => run(true) });
 
   const diff = result?.diff ?? null;
   const rows = diff?.rows ?? [];
@@ -150,6 +164,8 @@ export function TextCompare({ left, right, onPathsChange, onOpenHex, settings, o
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      // Every open tab stays mounted; only the visible one handles keys.
+      if (!root.current?.offsetParent) return;
       if (e.altKey && e.key === "ArrowDown") goHunk(hunkIdx + 1);
       else if (e.altKey && e.key === "ArrowUp") goHunk(hunkIdx - 1);
       else if (e.key === "F5") run();
@@ -194,8 +210,9 @@ export function TextCompare({ left, right, onPathsChange, onOpenHex, settings, o
   };
 
   const stats = diff?.stats;
+  const patternCount = options.ignorePatterns.filter((p) => p.trim()).length;
   return (
-    <div className="session">
+    <div className="session" ref={root}>
       <div className="toolbar">
         <button onClick={() => goHunk(hunkIdx - 1)} disabled={!hunks.length} title="Previous difference (Alt+↑)">
           <ArrowUp size={14} /> Prev
@@ -242,11 +259,25 @@ export function TextCompare({ left, right, onPathsChange, onOpenHex, settings, o
             <option value="myers">Myers</option>
           </select>
         </label>
+        <button onClick={() => setEditingRules(true)} title="Regexes for text that never matters">
+          <ListFilter size={14} /> Ignore rules{patternCount ? ` · ${patternCount}` : ""}
+        </button>
         <span className="spacer" />
-        <button onClick={run} title="Refresh (F5)">
+        <label className={`check${watchState === "watching" || watchState === "polling" ? " live" : ""}`} title={autoRefreshTitle(watchState)}>
+          <input type="checkbox" checked={autoRefresh} onChange={(e) => setAutoRefresh(e.target.checked)} />
+          Auto-refresh
+        </label>
+        <button onClick={() => run()} title="Refresh (F5)">
           <RefreshCw size={14} /> Refresh
         </button>
       </div>
+      {editingRules && (
+        <IgnoreRulesDialog
+          patterns={options.ignorePatterns}
+          onClose={() => setEditingRules(false)}
+          onApply={(ignorePatterns) => setOptions({ ...options, ignorePatterns })}
+        />
+      )}
 
       <PathBar left={left} right={right} directory={false} onCompare={onPathsChange} />
 
@@ -301,6 +332,53 @@ export function TextCompare({ left, right, onPathsChange, onOpenHex, settings, o
           ))}
       </div>
     </div>
+  );
+}
+
+function IgnoreRulesDialog({
+  patterns,
+  onApply,
+  onClose,
+}: {
+  patterns: string[];
+  onApply: (p: string[]) => void;
+  onClose: () => void;
+}) {
+  const [text, setText] = useState(patterns.join("\n"));
+  return (
+    <Modal
+      title="Ignore rules"
+      onClose={onClose}
+      footer={
+        <>
+          <button onClick={onClose}>Cancel</button>
+          <button
+            className="primary"
+            onClick={() => {
+              onApply(text.split("\n").map((p) => p.trim()).filter(Boolean));
+              onClose();
+            }}
+          >
+            Apply
+          </button>
+        </>
+      }
+    >
+      <label className="field">
+        <span>Ignore text matching (one regex per line)</span>
+        <textarea
+          rows={6}
+          spellCheck={false}
+          autoFocus
+          value={text}
+          placeholder={"\\$Id:[^$]*\\$\n^\\s*//.*$"}
+          onChange={(e) => setText(e.target.value)}
+        />
+        <small className="muted">
+          Matching text is removed before lines are compared — lines that differ only there are shown as unimportant.
+        </small>
+      </label>
+    </Modal>
   );
 }
 

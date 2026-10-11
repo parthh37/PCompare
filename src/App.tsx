@@ -1,5 +1,5 @@
 import { getCurrentWebview } from "@tauri-apps/api/webview";
-import { Globe, Plus, Save, X } from "lucide-react";
+import { CircleArrowUp, Globe, Plus, Save, X } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { FolderCompare } from "./components/FolderCompare";
 import { FolderMerge } from "./components/FolderMerge";
@@ -21,6 +21,7 @@ import { basename } from "./lib/format";
 import type { MergePaths } from "./lib/sessionProps";
 import { SESSIONS, isCompareKind, sessionForFiles, type CompareKind, type SessionKind } from "./lib/sessions";
 import { ShellContext } from "./lib/shell";
+import { autoUpdateEnabled, setAutoUpdateEnabled, useUpdater } from "./lib/useUpdater";
 
 export type { SessionKind } from "./lib/sessions";
 
@@ -57,6 +58,8 @@ export default function App() {
   const [saved, setSaved] = useState<SavedSession[]>([]);
   const [saving, setSaving] = useState<Tab | null>(null);
   const [toast, setToast] = useState<string | null>(null);
+  const updater = useUpdater(setToast);
+  const [autoUpdate, setAutoUpdate] = useState(autoUpdateEnabled);
 
   const refreshSaved = useCallback(
     () =>
@@ -230,7 +233,12 @@ export default function App() {
         return (
           <FolderCompare
             {...two}
-            onOpenFiles={(left, right) => openTab(sessionForFiles(left, right), left, right)}
+            onOpenFiles={(left, right, rules) => {
+              const kind = sessionForFiles(left, right);
+              // Text rules only mean something to a text compare.
+              openTab(kind, left, right, kind === "text" ? { settings: { options: rules } } : {});
+            }}
+            onOpenHex={(left, right) => openTab("hex", left, right)}
             onOpenSync={(left, right) => openTab("sync", left, right)}
           />
         );
@@ -290,7 +298,58 @@ export default function App() {
           <button className="tab-action" title="Connection profiles" onClick={openProfiles}>
             <Globe size={14} /> Profiles
           </button>
+          <button
+            className="tab-action"
+            title={`PCompare ${updater.version} — check for updates`}
+            disabled={updater.phase.kind === "checking" || updater.phase.kind === "downloading"}
+            onClick={updater.checkNow}
+          >
+            <CircleArrowUp size={14} /> {updater.phase.kind === "checking" ? "Checking…" : "Updates"}
+          </button>
         </nav>
+
+        {updater.bannerVisible && (
+          <div className="update-banner">
+            {updater.phase.kind === "downloading" ? (
+              <>
+                <span>
+                  Downloading PCompare {updater.phase.update.version}
+                  {updater.phase.total
+                    ? ` — ${Math.round((updater.phase.done / updater.phase.total) * 100)}%`
+                    : "…"}
+                </span>
+                <progress value={updater.phase.done} max={updater.phase.total ?? undefined} />
+              </>
+            ) : updater.phase.kind === "available" ? (
+              <>
+                <span>
+                  <b>PCompare {updater.phase.update.version}</b> is available (you have {updater.version}).
+                </span>
+                {updater.phase.update.body && (
+                  <span className="muted update-notes" title={updater.phase.update.body}>
+                    {updater.phase.update.body.split("\n")[0]}
+                  </span>
+                )}
+                <span className="spacer" />
+                <label className="check muted">
+                  <input
+                    type="checkbox"
+                    checked={autoUpdate}
+                    onChange={(e) => {
+                      setAutoUpdateEnabled(e.target.checked);
+                      setAutoUpdate(e.target.checked);
+                    }}
+                  />
+                  Check automatically
+                </label>
+                <button onClick={updater.dismiss}>Later</button>
+                <button className="primary" onClick={updater.install}>
+                  Install &amp; restart
+                </button>
+              </>
+            ) : null}
+          </div>
+        )}
 
         {tabs.map((t) => (
           // Inactive tabs stay mounted so their state and scroll position survive.

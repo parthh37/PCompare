@@ -1,4 +1,4 @@
-use pcompare_core::folder::{compare_folders, CompareCriteria, EntryStatus, FolderCompareOptions, FolderEntry};
+use pcompare_core::folder::{compare_folders, ContentMethod, EntryStatus, FolderCompareOptions, FolderEntry, FolderFilters};
 use pcompare_core::hex;
 use std::fs;
 use std::path::Path;
@@ -23,7 +23,7 @@ fn find<'a>(entries: &'a [FolderEntry], rel: &str) -> &'a FolderEntry {
 
 fn content_opts() -> FolderCompareOptions {
     FolderCompareOptions {
-        criteria: CompareCriteria::Content,
+        content: ContentMethod::Binary,
         ignore_name_case: false,
         ..Default::default()
     }
@@ -128,4 +128,111 @@ fn hex_summary_and_navigation() {
     let chunk = hex::read_chunk(&a, &b, 4, 16).unwrap();
     assert_eq!(chunk.left, vec![4, 5]);
     assert_eq!(chunk.right, vec![4, 5, 6, 7]);
+}
+
+#[test]
+fn rules_based_treats_line_endings_and_ignored_text_as_similar() {
+    let (l, r) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    write(l.path(), "eol.txt", b"one\ntwo\n");
+    write(r.path(), "eol.txt", b"one\r\ntwo\r\n");
+    write(l.path(), "stamp.txt", b"built 2026-01-01\nbody\n");
+    write(r.path(), "stamp.txt", b"built 2026-10-12\nbody\n");
+    write(l.path(), "real.txt", b"alpha\n");
+    write(r.path(), "real.txt", b"beta\n");
+    write(l.path(), "same.bin", b"\0\x01\x02");
+    write(r.path(), "same.bin", b"\0\x01\x02");
+    let mut opts = FolderCompareOptions {
+        content: ContentMethod::Rules,
+        ..content_opts()
+    };
+    opts.rules.ignore_patterns = vec![r"\d{4}-\d{2}-\d{2}".into()];
+
+    let res = compare_folders(l.path(), r.path(), &opts).unwrap();
+    let e = &res.entries;
+    assert_eq!(find(e, "eol.txt").status, EntryStatus::Similar);
+    assert_eq!(find(e, "stamp.txt").status, EntryStatus::Similar);
+    assert_eq!(find(e, "real.txt").status, EntryStatus::Different);
+    assert_eq!(find(e, "same.bin").status, EntryStatus::Same);
+    assert_eq!(find(e, "eol.txt").content_checked, Some(ContentMethod::Rules));
+    assert_eq!(res.stats.similar, 2);
+}
+
+#[test]
+fn crc_reports_checksums() {
+    let (l, r) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    write(l.path(), "a.txt", b"hello");
+    write(r.path(), "a.txt", b"hellp");
+    let opts = FolderCompareOptions {
+        content: ContentMethod::Crc,
+        ..content_opts()
+    };
+    let res = compare_folders(l.path(), r.path(), &opts).unwrap();
+    let a = find(&res.entries, "a.txt");
+    assert_eq!(a.status, EntryStatus::Different);
+    let [lc, rc] = a.crc.expect("crc computed");
+    assert_eq!(lc, 0x3610a686); // CRC-32 of "hello"
+    assert_ne!(lc, rc);
+}
+
+#[test]
+fn quick_tests_without_override_keep_timestamp_differences() {
+    let (l, r) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    write(l.path(), "a.txt", b"same bytes");
+    write(r.path(), "a.txt", b"same bytes");
+    let old = std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1_000_000_000);
+    fs::File::options().write(true).open(l.path().join("a.txt")).unwrap().set_modified(old).unwrap();
+
+    let overriding = compare_folders(l.path(), r.path(), &content_opts()).unwrap();
+    assert_eq!(overriding.entries[0].status, EntryStatus::Same, "content overrides the quick test");
+
+    let strict = FolderCompareOptions {
+        override_quick_tests: false,
+        ..content_opts()
+    };
+    let res = compare_folders(l.path(), r.path(), &strict).unwrap();
+    assert_eq!(res.entries[0].status, EntryStatus::Different);
+    assert_eq!(res.entries[0].content_checked, Some(ContentMethod::Binary));
+}
+
+#[test]
+fn name_filters_split_files_and_folders() {
+    let (l, r) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    for root in [l.path(), r.path()] {
+        write(root, "src/main.rs", b"fn main(){}");
+        write(root, "src/notes.md", b"#");
+        write(root, "target/debug/app.rs", b"x");
+        write(root, "README.MD", b"#");
+    }
+    let opts = FolderCompareOptions {
+        filters: FolderFilters {
+            include_files: vec!["*.rs".into()],
+            exclude_folders: vec!["target".into()],
+            ..Default::default()
+        },
+        ..content_opts()
+    };
+    let res = compare_folders(l.path(), r.path(), &opts).unwrap();
+    let names: Vec<_> = res.entries.iter().map(|e| e.rel_path.as_str()).collect();
+    assert_eq!(names, vec!["src"]);
+    let src: Vec<_> = res.entries[0].children.iter().map(|e| e.name.as_str()).collect();
+    assert_eq!(src, vec!["main.rs"]);
+}
+
+#[test]
+fn size_filter_hides_small_pairs() {
+    let (l, r) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    write(l.path(), "tiny.txt", b"1");
+    write(r.path(), "tiny.txt", b"2");
+    write(l.path(), "big.txt", &[b'a'; 4096]);
+    write(r.path(), "big.txt", &[b'a'; 4096]);
+    let opts = FolderCompareOptions {
+        filters: FolderFilters {
+            min_size: Some(1024),
+            ..Default::default()
+        },
+        ..content_opts()
+    };
+    let res = compare_folders(l.path(), r.path(), &opts).unwrap();
+    let names: Vec<_> = res.entries.iter().map(|e| e.name.as_str()).collect();
+    assert_eq!(names, vec!["big.txt"]);
 }

@@ -6,8 +6,9 @@ mod meta;
 mod picture;
 mod sync;
 mod table;
+mod watch;
 
-use pcompare_core::folder::{self, FolderCompareOptions, FolderCompareResult};
+use pcompare_core::folder::{self, ContentMethod, ContentVerdict, FolderCompareOptions, FolderCompareResult};
 use pcompare_core::hex::{self, HexChunk, HexSummary};
 use pcompare_core::session::{SavedSession, SessionInput, SessionStore};
 use pcompare_core::text::{self, TextDiffOptions, TextDiffResult};
@@ -24,6 +25,7 @@ use tauri_plugin_opener::OpenerExt;
 struct AppState {
     sessions: SessionStore,
     remote: RemoteManager,
+    watchers: watch::Watchers,
 }
 
 fn state(app: &AppHandle) -> tauri::State<'_, AppState> {
@@ -104,7 +106,11 @@ async fn compare_text_files(
         // Show the user's path, not the download cache location.
         l.info.path = left;
         r.info.path = right;
-        let diff = (!binary).then(|| text::diff_text(&l.text, &r.text, &options));
+        let diff = if binary {
+            None
+        } else {
+            Some(text::diff_text(&l.text, &r.text, &options)?)
+        };
         Ok(TextFileCompare {
             left: l.info,
             right: r.info,
@@ -132,6 +138,42 @@ async fn compare_folders(
         })
     })
     .await
+}
+
+/// Re-checks one file pair with a specific content method — the folder
+/// view's "Compare contents" action on a selected row.
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+async fn compare_file_contents(
+    app: AppHandle,
+    left: String,
+    left_size: u64,
+    right: String,
+    right_size: u64,
+    method: ContentMethod,
+    rules: TextDiffOptions,
+) -> CmdResult<ContentVerdict> {
+    blocking(move || {
+        with_remote(&app, [&left, &right], |r| {
+            let (lfs, lpath) = r.target(&left)?;
+            let (rfs, rpath) = r.target(&right)?;
+            folder::compare_contents(&*lfs, &lpath, left_size, &*rfs, &rpath, right_size, method, &rules)
+        })
+    })
+    .await
+}
+
+// ---------- auto-refresh ----------
+
+/// Watches local paths for a session; changes arrive as `fs-changed` events.
+#[tauri::command]
+fn watch_paths(app: AppHandle, id: String, paths: Vec<String>, exclude: Vec<String>) -> CmdResult<usize> {
+    state(&app).watchers.watch(app.clone(), id, paths, exclude)
+}
+
+#[tauri::command]
+fn unwatch_paths(app: AppHandle, id: String) {
+    state(&app).watchers.unwatch(&id);
 }
 
 /// Local paths for a hex session; remote files are downloaded on `refresh`
@@ -288,6 +330,8 @@ fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_process::init())
         .setup(|app| {
             let config_dir = app.path().app_config_dir()?;
             let cache_dir = app.path().app_cache_dir()?.join("remote");
@@ -296,6 +340,7 @@ fn main() {
             app.manage(AppState {
                 sessions: SessionStore::new(config_dir.join("sessions.json")),
                 remote,
+                watchers: watch::Watchers::default(),
             });
             Ok(())
         })
@@ -304,6 +349,9 @@ fn main() {
             launch_args,
             compare_text_files,
             compare_folders,
+            compare_file_contents,
+            watch_paths,
+            unwatch_paths,
             hex_summary,
             hex_chunk,
             hex_next_difference,
