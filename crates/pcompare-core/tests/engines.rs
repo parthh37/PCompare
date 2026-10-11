@@ -1,4 +1,6 @@
-use pcompare_core::folder::{compare_folders, ContentMethod, EntryStatus, FolderCompareOptions, FolderEntry, FolderFilters};
+use pcompare_core::folder::{
+    compare_folders, pair_passes, ContentMethod, EntryMeta, EntryStatus, FolderCompareOptions, FolderEntry, FolderFilters,
+};
 use pcompare_core::hex;
 use std::fs;
 use std::path::Path;
@@ -235,4 +237,22 @@ fn size_filter_hides_small_pairs() {
     let res = compare_folders(l.path(), r.path(), &opts).unwrap();
     let names: Vec<_> = res.entries.iter().map(|e| e.name.as_str()).collect();
     assert_eq!(names, vec!["big.txt"]);
+}
+
+#[test]
+fn size_and_date_filters_keep_a_pair_when_either_side_matches() {
+    let file = |size, modified_ms| EntryMeta { size, modified_ms, is_dir: false };
+    let size = FolderFilters { max_size: Some(100), ..Default::default() };
+    // Grew past the limit on one side only: still listed.
+    assert!(pair_passes(Some(&file(50, None)), Some(&file(500, None)), &size));
+    assert!(!pair_passes(Some(&file(500, None)), Some(&file(600, None)), &size));
+    // Orphans are judged by the side that exists.
+    assert!(pair_passes(None, Some(&file(10, None)), &size));
+    assert!(!pair_passes(Some(&file(500, None)), None, &size));
+
+    let date = FolderFilters { modified_after_ms: Some(1_000), ..Default::default() };
+    assert!(!pair_passes(Some(&file(1, Some(500))), Some(&file(1, Some(999))), &date));
+    assert!(pair_passes(Some(&file(1, Some(500))), Some(&file(1, Some(1_000))), &date));
+    // Unknown timestamps can't be proven out of range.
+    assert!(pair_passes(Some(&file(1, None)), None, &date));
 }
