@@ -1,7 +1,9 @@
+import { Globe, Pencil, Trash } from "lucide-react";
 import { useState } from "react";
-import type { SessionKind } from "../App";
-import { isRemote, type SavedKind, type SavedSession } from "../lib/api";
+import { isRemote, type SavedSession } from "../lib/api";
 import { formatTime } from "../lib/format";
+import { COMPARE_KINDS, SESSIONS, type SessionKind } from "../lib/sessions";
+import { SessionIcon } from "./SessionIcon";
 
 interface Props {
   onNew: (kind: Exclude<SessionKind, "home">) => void;
@@ -11,15 +13,17 @@ interface Props {
   onDeleteSaved: (s: SavedSession) => void;
 }
 
-const SESSIONS: { kind: SavedKind; icon: string; title: string; text: string }[] = [
-  { kind: "folder", icon: "🗂️", title: "Folder Compare", text: "Compare two folder trees by size, timestamp or content." },
-  { kind: "text", icon: "📝", title: "Text Compare", text: "Side-by-side line diff with word-level highlights." },
-  { kind: "hex", icon: "🔢", title: "Hex Compare", text: "Byte-level comparison of binary files of any size." },
-];
+const COMING = ["Archive Compare", "Git integration", "Structural JSON / XML diff", "Folder reports"];
 
-const KIND_ICON: Record<SavedKind, string> = { folder: "🗂️", text: "📝", hex: "🔢" };
-
-const COMING = ["Folder Sync", "Text Merge (3-way)", "Table / CSV Compare", "Image Compare", "Archive Compare", "Git integration"];
+/** Remote paths get a small globe so cloud locations stand out in the list. */
+function PathText({ path }: { path: string }) {
+  return (
+    <span title={path}>
+      {isRemote(path) && <Globe size={11} className="inline-icon" />}
+      {path}
+    </span>
+  );
+}
 
 function SavedRow({ s, onOpen, onRename, onDelete }: {
   s: SavedSession;
@@ -39,7 +43,7 @@ function SavedRow({ s, onOpen, onRename, onDelete }: {
 
   return (
     <div className="saved-row" onDoubleClick={() => !renaming && onOpen()}>
-      <span className="saved-icon">{KIND_ICON[s.kind]}</span>
+      <SessionIcon kind={s.kind} size={14} tile />
       <div className="saved-main">
         {renaming ? (
           <input
@@ -61,23 +65,23 @@ function SavedRow({ s, onOpen, onRename, onDelete }: {
           </button>
         )}
         <div className="saved-paths muted">
-          <span title={s.left}>{isRemote(s.left) ? "🌐 " : ""}{s.left}</span>
+          <PathText path={s.left} />
           <span>↔</span>
-          <span title={s.right}>{isRemote(s.right) ? "🌐 " : ""}{s.right}</span>
+          <PathText path={s.right} />
         </div>
       </div>
       <span className="muted saved-time">{formatTime(s.modifiedMs)}</span>
       <div className="saved-actions">
-        <button onClick={() => setRenaming(true)} title="Rename">
-          ✎
+        <button className="icon-btn" onClick={() => setRenaming(true)} title="Rename" aria-label="Rename">
+          <Pencil size={13} />
         </button>
         {confirm ? (
           <button className="danger" onClick={onDelete} onBlur={() => setConfirm(false)} autoFocus>
             Delete?
           </button>
         ) : (
-          <button onClick={() => setConfirm(true)} title="Delete">
-            🗑
+          <button className="icon-btn" onClick={() => setConfirm(true)} title="Delete" aria-label="Delete">
+            <Trash size={13} />
           </button>
         )}
       </div>
@@ -99,18 +103,19 @@ export function Home({ onNew, saved, onOpenSaved, onRenameSaved, onDeleteSaved }
         <p className="muted">Choose a session, or drop two files or folders anywhere in this window.</p>
       </header>
       <div className="cards">
-        {SESSIONS.map((s) => (
-          <button key={s.kind} className="card" onClick={() => onNew(s.kind)}>
-            <span className="card-icon">{s.icon}</span>
-            <span className="card-title">{s.title}</span>
-            <span className="card-text">{s.text}</span>
-          </button>
-        ))}
-        <button className="card" onClick={() => onNew("profiles")}>
-          <span className="card-icon">🌐</span>
-          <span className="card-title">Connection Profiles</span>
-          <span className="card-text">Connect S3, OneDrive, Dropbox, Google Drive, FTP, SFTP, WebDAV and more.</span>
-        </button>
+        {[...COMPARE_KINDS, "profiles" as const].map((kind) => {
+          const info = SESSIONS[kind];
+          return (
+            <button key={kind} className="card" onClick={() => onNew(kind)}>
+              <SessionIcon kind={kind} size={18} tile />
+              <span className="card-title">
+                {info.label}
+                {info.windowsOnly && <span className="badge">Windows</span>}
+              </span>
+              <span className="card-text">{info.description}</span>
+            </button>
+          );
+        })}
       </div>
 
       <div className="saved-head">
@@ -121,7 +126,7 @@ export function Home({ onNew, saved, onOpenSaved, onRenameSaved, onDeleteSaved }
       </div>
       {saved.length === 0 ? (
         <p className="muted">
-          No saved sessions yet. Open a comparison and press <kbd>Ctrl</kbd>+<kbd>S</kbd> to save it with a name.
+          No saved sessions yet. Open a comparison and press <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>S</kbd> to save it with a name.
         </p>
       ) : (
         <div className="saved-list">

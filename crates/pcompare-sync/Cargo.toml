@@ -1,0 +1,16 @@
+[package]
+name = "pcompare-sync"
+description = "Folder sync and 3-way folder merge engines for PCompare"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+pcompare-core = { path = "../pcompare-core" }
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+tempfile = "3"

@@ -1,6 +1,7 @@
 // Typed bridge to the Rust commands in src-tauri/src/main.rs.
 // Field names mirror the serde `camelCase` structs in pcompare-core.
 import { invoke } from "@tauri-apps/api/core";
+import type { CompareKind } from "./sessions";
 
 export type PathKind = "file" | "directory" | "missing";
 
@@ -115,7 +116,7 @@ export interface HexChunk {
 }
 
 // ---------- saved sessions ----------
-export type SavedKind = "text" | "folder" | "hex";
+export type SavedKind = CompareKind;
 
 export interface SavedSession {
   id: string;
@@ -123,6 +124,9 @@ export interface SavedSession {
   kind: SavedKind;
   left: string;
   right: string;
+  /** 3-way sessions only. */
+  base?: string;
+  output?: string;
   settings: Record<string, unknown> | null;
   createdMs: number;
   modifiedMs: number;
@@ -134,6 +138,8 @@ export interface SessionInput {
   kind: SavedKind;
   left: string;
   right: string;
+  base?: string;
+  output?: string;
   settings?: unknown;
 }
 

@@ -3893,7 +3893,12 @@ name = "pcompare"
 version = "0.1.0"
 dependencies = [
  "pcompare-core",
+ "pcompare-merge",
+ "pcompare-meta",
+ "pcompare-picture",
  "pcompare-remote",
+ "pcompare-sync",
+ "pcompare-table",
  "serde",
  "serde_json",
  "tauri",
@@ -3917,6 +3922,39 @@ dependencies = [
 ]
 
 [[package]]
+name = "pcompare-merge"
+version = "0.1.0"
+dependencies = [
+ "pcompare-core",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.21",
+]
+
+[[package]]
+name = "pcompare-meta"
+version = "0.1.0"
+dependencies = [
+ "pcompare-core",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.21",
+]
+
+[[package]]
+name = "pcompare-picture"
+version = "0.1.0"
+dependencies = [
+ "pcompare-core",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "pcompare-remote"
 version = "0.1.0"
 dependencies = [
@@ -3935,6 +3973,28 @@ dependencies = [
  "thiserror 2.0.21",
  "tokio",
  "tokio-util",
+]
+
+[[package]]
+name = "pcompare-sync"
+version = "0.1.0"
+dependencies = [
+ "pcompare-core",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.21",
+]
+
+[[package]]
+name = "pcompare-table"
+version = "0.1.0"
+dependencies = [
+ "pcompare-core",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.21",
 ]
 
 [[package]]

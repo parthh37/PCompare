@@ -1,3 +1,4 @@
+import { ArrowDown } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api, errorMessage, type HexChunk, type HexSummary } from "../lib/api";
 import { formatSize, hex } from "../lib/format";
@@ -120,7 +121,7 @@ export function HexCompare({ left, right, onPathsChange }: Props) {
     <div className="session">
       <div className="toolbar">
         <button onClick={nextDiff} disabled={!summary || summary.identical}>
-          ↓ Next difference
+          <ArrowDown size={14} /> Next difference
         </button>
         <span className="spacer" />
       </div>

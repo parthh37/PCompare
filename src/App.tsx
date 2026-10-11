@@ -1,22 +1,37 @@
 import { getCurrentWebview } from "@tauri-apps/api/webview";
+import { Globe, Plus, Save, X } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { FolderCompare } from "./components/FolderCompare";
+import { FolderMerge } from "./components/FolderMerge";
+import { FolderSync } from "./components/FolderSync";
 import { HexCompare } from "./components/HexCompare";
 import { Home } from "./components/Home";
+import { Mp3Compare } from "./components/Mp3Compare";
+import { PictureCompare } from "./components/PictureCompare";
 import { Profiles } from "./components/Profiles";
+import { RegistryCompare } from "./components/RegistryCompare";
 import { SaveSessionDialog } from "./components/SaveSessionDialog";
+import { SessionIcon } from "./components/SessionIcon";
+import { TableCompare } from "./components/TableCompare";
 import { TextCompare } from "./components/TextCompare";
-import { api, errorMessage, type SavedKind, type SavedSession } from "./lib/api";
+import { TextMerge } from "./components/TextMerge";
+import { VersionCompare } from "./components/VersionCompare";
+import { api, errorMessage, type SavedSession } from "./lib/api";
 import { basename } from "./lib/format";
+import type { MergePaths } from "./lib/sessionProps";
+import { SESSIONS, isCompareKind, sessionForFiles, type CompareKind, type SessionKind } from "./lib/sessions";
 import { ShellContext } from "./lib/shell";
 
-export type SessionKind = "home" | "text" | "folder" | "hex" | "profiles";
+export type { SessionKind } from "./lib/sessions";
 
-interface Tab {
+export interface Tab {
   id: number;
   kind: SessionKind;
   left: string;
   right: string;
+  /** 3-way sessions: common ancestor and merge destination. */
+  base?: string;
+  output?: string;
   /** View settings reported by the session, persisted when saved. */
   settings?: Record<string, unknown>;
   /** Set once the tab is backed by a saved session. */
@@ -24,25 +39,16 @@ interface Tab {
   sessionName?: string;
 }
 
-const KIND_LABEL: Record<SessionKind, string> = {
-  home: "Home",
-  text: "Text Compare",
-  folder: "Folder Compare",
-  hex: "Hex Compare",
-  profiles: "Connection Profiles",
-};
-
-const KIND_ICON: Record<SessionKind, string> = { home: "🏠", text: "📝", folder: "🗂️", hex: "🔢", profiles: "🌐" };
-
-const isSavable = (k: SessionKind): k is SavedKind => k === "text" || k === "folder" || k === "hex";
-
 function tabTitle(t: Tab): string {
   if (t.sessionName) return t.sessionName;
-  if (!isSavable(t.kind) || !t.left || !t.right) return KIND_LABEL[t.kind];
+  if (!isCompareKind(t.kind) || !t.left || !t.right) return SESSIONS[t.kind].label;
   const l = basename(t.left);
   const r = basename(t.right);
   return l === r ? l : `${l} ↔ ${r}`;
 }
+
+const canSaveTab = (t: Tab | undefined): t is Tab & { kind: CompareKind } =>
+  !!t && isCompareKind(t.kind) && !!t.left && !!t.right;
 
 export default function App() {
   const nextId = useRef(1);
@@ -82,14 +88,21 @@ export default function App() {
   const openSaved = (s: SavedSession) =>
     focusOr(
       (t) => t.sessionId === s.id,
-      () => openTab(s.kind, s.left, s.right, { settings: s.settings ?? {}, sessionId: s.id, sessionName: s.name }),
+      () =>
+        openTab(s.kind, s.left, s.right, {
+          base: s.base,
+          output: s.output,
+          settings: s.settings ?? {},
+          sessionId: s.id,
+          sessionName: s.name,
+        }),
     );
 
   /** Picks the session type from what the two paths are. */
   const openAuto = useCallback(
     async (left: string, right: string) => {
       const [lk, rk] = await Promise.all([api.pathKind(left), api.pathKind(right)]);
-      openTab(lk === "directory" && rk === "directory" ? "folder" : "text", left, right);
+      openTab(lk === "directory" && rk === "directory" ? "folder" : sessionForFiles(left, right), left, right);
     },
     [openTab],
   );
@@ -106,15 +119,19 @@ export default function App() {
       return remaining;
     });
 
-  // `pcompare.exe <left> <right>` from the shell or a git difftool.
+  // `pcompare.exe <left> <right>` from the shell or a git difftool, and
+  // `pcompare.exe <left> <right> <base> [<output>]` (Beyond Compare's order) as a git mergetool.
   useEffect(() => {
     api
       .launchArgs()
-      .then((args) => {
-        if (args.length >= 2) openAuto(args[0], args[1]);
+      .then(async ([left, right, base, output]) => {
+        if (!left || !right) return;
+        if (!base) return openAuto(left, right);
+        const kind = (await api.pathKind(base)) === "directory" ? "folderMerge" : "merge";
+        openTab(kind, left, right, { base, output: output ?? "" });
       })
       .catch(() => {});
-  }, [openAuto]);
+  }, [openAuto, openTab]);
 
   // Dropping two files/folders onto the window starts a comparison.
   useEffect(() => {
@@ -131,14 +148,14 @@ export default function App() {
   }, [openAuto]);
 
   const activeTab = tabs.find((t) => t.id === active);
-  const canSave = !!activeTab && isSavable(activeTab.kind) && !!activeTab.left && !!activeTab.right;
+  const canSave = canSaveTab(activeTab);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const mod = e.ctrlKey || e.metaKey;
       if (mod && e.key.toLowerCase() === "t") openTab("home");
       else if (mod && e.key.toLowerCase() === "w") closeTab(active);
-      else if (mod && e.key.toLowerCase() === "s") canSave && setSaving(activeTab!);
+      else if (mod && e.shiftKey && e.key.toLowerCase() === "s") canSave && setSaving(activeTab!);
       else return;
       e.preventDefault();
     };
@@ -152,128 +169,156 @@ export default function App() {
     return () => clearTimeout(t);
   }, [toast]);
 
+  const renderSession = (t: Tab) => {
+    const two = {
+      left: t.left,
+      right: t.right,
+      settings: t.settings,
+      onSettingsChange: (settings: object) => updateTab(t.id, { settings: { ...settings } }),
+      onPathsChange: (left: string, right: string) => updateTab(t.id, { left, right }),
+    };
+    const three = {
+      left: t.left,
+      right: t.right,
+      base: t.base ?? "",
+      output: t.output ?? "",
+      settings: t.settings,
+      onSettingsChange: two.onSettingsChange,
+      onPathsChange: (p: MergePaths) => updateTab(t.id, p),
+    };
+    switch (t.kind) {
+      case "home":
+        return (
+          <Home
+            onNew={(kind) => (kind === "profiles" ? openProfiles() : updateTab(t.id, { kind }))}
+            saved={saved}
+            onOpenSaved={openSaved}
+            onRenameSaved={(s, name) =>
+              api
+                .renameSession(s.id, name)
+                .then((r) => {
+                  setTabs((ts) => ts.map((x) => (x.sessionId === r.id ? { ...x, sessionName: r.name } : x)));
+                  return refreshSaved();
+                })
+                .catch((e) => setToast(errorMessage(e)))
+            }
+            onDeleteSaved={(s) =>
+              api
+                .deleteSession(s.id)
+                .then(() => {
+                  // Open tabs keep working, they just stop being linked to the deleted session.
+                  setTabs((ts) =>
+                    ts.map((x) => (x.sessionId === s.id ? { ...x, sessionId: undefined, sessionName: undefined } : x)),
+                  );
+                  return refreshSaved();
+                })
+                .catch((e) => setToast(errorMessage(e)))
+            }
+          />
+        );
+      case "profiles":
+        return <Profiles />;
+      case "text":
+        return <TextCompare {...two} onOpenHex={() => updateTab(t.id, { kind: "hex" })} />;
+      case "merge":
+        return <TextMerge {...three} />;
+      case "table":
+        return <TableCompare {...two} />;
+      case "picture":
+        return <PictureCompare {...two} />;
+      case "folder":
+        return (
+          <FolderCompare
+            {...two}
+            onOpenFiles={(left, right) => openTab(sessionForFiles(left, right), left, right)}
+            onOpenSync={(left, right) => openTab("sync", left, right)}
+          />
+        );
+      case "sync":
+        return <FolderSync {...two} />;
+      case "folderMerge":
+        return <FolderMerge {...three} />;
+      case "hex":
+        return <HexCompare left={t.left} right={t.right} onPathsChange={two.onPathsChange} />;
+      case "registry":
+        return <RegistryCompare {...two} />;
+      case "version":
+        return <VersionCompare {...two} />;
+      case "mp3":
+        return <Mp3Compare {...two} />;
+    }
+  };
+
   return (
     <ShellContext.Provider value={{ openProfiles }}>
-    <div className="app">
-      <nav className="tabbar">
-        {tabs.map((t) => (
-          <div
-            key={t.id}
-            className={`tab${t.id === active ? " active" : ""}`}
-            onClick={() => setActive(t.id)}
-            onAuxClick={(e) => e.button === 1 && closeTab(t.id)}
-            title={t.left && t.right ? `${t.left}\n${t.right}` : undefined}
-          >
-            <span>{KIND_ICON[t.kind]}</span>
-            <span className="tab-title">{tabTitle(t)}</span>
-            <button
-              className="tab-close"
-              onClick={(e) => {
-                e.stopPropagation();
-                closeTab(t.id);
-              }}
+      <div className="app">
+        <nav className="tabbar">
+          {tabs.map((t) => (
+            <div
+              key={t.id}
+              className={`tab${t.id === active ? " active" : ""}`}
+              onClick={() => setActive(t.id)}
+              onAuxClick={(e) => e.button === 1 && closeTab(t.id)}
+              title={t.left && t.right ? `${t.left}\n${t.right}` : undefined}
             >
-              ×
-            </button>
-          </div>
+              <SessionIcon kind={t.kind} />
+              <span className="tab-title">{tabTitle(t)}</span>
+              <button
+                className="tab-close"
+                aria-label="Close tab"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  closeTab(t.id);
+                }}
+              >
+                <X size={13} />
+              </button>
+            </div>
+          ))}
+          <button className="tab-new" title="New session (Ctrl+T)" aria-label="New session" onClick={() => openTab("home")}>
+            <Plus size={15} />
+          </button>
+          <span className="spacer" />
+          <button
+            className="tab-action"
+            title="Save session (Ctrl+Shift+S)"
+            disabled={!canSave}
+            onClick={() => canSave && setSaving(activeTab!)}
+          >
+            <Save size={14} /> Save session
+          </button>
+          <button className="tab-action" title="Connection profiles" onClick={openProfiles}>
+            <Globe size={14} /> Profiles
+          </button>
+        </nav>
+
+        {tabs.map((t) => (
+          // Inactive tabs stay mounted so their state and scroll position survive.
+          <main key={t.id} className="tabpanel" hidden={t.id !== active}>
+            {renderSession(t)}
+          </main>
         ))}
-        <button className="tab-new" title="New session (Ctrl+T)" onClick={() => openTab("home")}>
-          +
-        </button>
-        <span className="spacer" />
-        <button
-          className="tab-action"
-          title="Save session (Ctrl+S)"
-          disabled={!canSave}
-          onClick={() => canSave && setSaving(activeTab!)}
-        >
-          💾 Save
-        </button>
-        <button className="tab-action" title="Connection profiles" onClick={openProfiles}>
-          🌐 Profiles
-        </button>
-      </nav>
 
-      {tabs.map((t) => (
-        // Inactive tabs stay mounted so their state and scroll position survive.
-        <main key={t.id} className="tabpanel" hidden={t.id !== active}>
-          {t.kind === "home" && (
-            <Home
-              onNew={(kind) => (kind === "profiles" ? openProfiles() : updateTab(t.id, { kind }))}
-              saved={saved}
-              onOpenSaved={openSaved}
-              onRenameSaved={(s, name) =>
-                api
-                  .renameSession(s.id, name)
-                  .then((r) => {
-                    setTabs((ts) => ts.map((x) => (x.sessionId === r.id ? { ...x, sessionName: r.name } : x)));
-                    return refreshSaved();
-                  })
-                  .catch((e) => setToast(errorMessage(e)))
-              }
-              onDeleteSaved={(s) =>
-                api
-                  .deleteSession(s.id)
-                  .then(() => {
-                    // Open tabs keep working, they just stop being linked to the deleted session.
-                    setTabs((ts) =>
-                      ts.map((x) => (x.sessionId === s.id ? { ...x, sessionId: undefined, sessionName: undefined } : x)),
-                    );
-                    return refreshSaved();
-                  })
-                  .catch((e) => setToast(errorMessage(e)))
-              }
-            />
-          )}
-          {t.kind === "profiles" && <Profiles />}
-          {t.kind === "text" && (
-            <TextCompare
-              left={t.left}
-              right={t.right}
-              settings={t.settings}
-              onSettingsChange={(settings) => updateTab(t.id, { settings: { ...settings } })}
-              onPathsChange={(left, right) => updateTab(t.id, { left, right })}
-              onOpenHex={() => updateTab(t.id, { kind: "hex" })}
-            />
-          )}
-          {t.kind === "folder" && (
-            <FolderCompare
-              left={t.left}
-              right={t.right}
-              settings={t.settings}
-              onSettingsChange={(settings) => updateTab(t.id, { settings: { ...settings } })}
-              onPathsChange={(left, right) => updateTab(t.id, { left, right })}
-              onOpenFiles={(left, right) => openTab("text", left, right)}
-            />
-          )}
-          {t.kind === "hex" && (
-            <HexCompare
-              left={t.left}
-              right={t.right}
-              onPathsChange={(left, right) => updateTab(t.id, { left, right })}
-            />
-          )}
-        </main>
-      ))}
-
-      {saving && isSavable(saving.kind) && (
-        <SaveSessionDialog
-          kind={saving.kind}
-          left={saving.left}
-          right={saving.right}
-          settings={saving.settings ?? {}}
-          sessionId={saving.sessionId}
-          defaultName={tabTitle(saving)}
-          onClose={() => setSaving(null)}
-          onSaved={(s) => {
-            updateTab(saving.id, { sessionId: s.id, sessionName: s.name });
-            setToast(`Saved session “${s.name}”`);
-            refreshSaved();
-          }}
-        />
-      )}
-      {toast && <div className="toast">{toast}</div>}
-    </div>
+        {saving && canSaveTab(saving) && (
+          <SaveSessionDialog
+            kind={saving.kind}
+            left={saving.left}
+            right={saving.right}
+            base={saving.base}
+            output={saving.output}
+            settings={saving.settings ?? {}}
+            sessionId={saving.sessionId}
+            defaultName={tabTitle(saving)}
+            onClose={() => setSaving(null)}
+            onSaved={(s) => {
+              updateTab(saving.id, { sessionId: s.id, sessionName: s.name });
+              setToast(`Saved session “${s.name}”`);
+              refreshSaved();
+            }}
+          />
+        )}
+        {toast && <div className="toast">{toast}</div>}
+      </div>
     </ShellContext.Provider>
   );
 }

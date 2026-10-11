@@ -1,3 +1,4 @@
+import { ArrowDown, ArrowUp, Binary, RefreshCw } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState, type WheelEvent } from "react";
 import {
   api,
@@ -197,10 +198,10 @@ export function TextCompare({ left, right, onPathsChange, onOpenHex, settings, o
     <div className="session">
       <div className="toolbar">
         <button onClick={() => goHunk(hunkIdx - 1)} disabled={!hunks.length} title="Previous difference (Alt+↑)">
-          ↑ Prev
+          <ArrowUp size={14} /> Prev
         </button>
         <button onClick={() => goHunk(hunkIdx + 1)} disabled={!hunks.length} title="Next difference (Alt+↓)">
-          ↓ Next
+          <ArrowDown size={14} /> Next
         </button>
         <span className="sep" />
         <div className="seg-control">
@@ -243,7 +244,7 @@ export function TextCompare({ left, right, onPathsChange, onOpenHex, settings, o
         </label>
         <span className="spacer" />
         <button onClick={run} title="Refresh (F5)">
-          ⟳ Refresh
+          <RefreshCw size={14} /> Refresh
         </button>
       </div>
 
@@ -263,7 +264,7 @@ export function TextCompare({ left, right, onPathsChange, onOpenHex, settings, o
           <div className="empty-state">
             <p>One or both files look binary.</p>
             <button className="primary" onClick={onOpenHex}>
-              Open in Hex Compare
+              <Binary size={14} /> Open in Hex Compare
             </button>
           </div>
         )}
