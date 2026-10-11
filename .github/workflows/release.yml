@@ -1,17 +1,76 @@
 name: Release
 
-# Push a tag like v0.1.0 to build Windows installers and attach them to a draft release.
+# Publishing = pushing a version tag:
+#   npm run version:bump 0.2.0 && git commit -am "Release v0.2.0" && git tag v0.2.0 && git push --follow-tags
+#
+# Builds Windows (NSIS + MSI) and macOS (Apple Silicon + Intel DMG) installers,
+# signs the updater artifacts, and publishes a GitHub release with latest.json —
+# the file installed copies poll for over-the-air updates. The release stays a
+# draft until every platform succeeds, so clients never see a half-built one.
+#
+# Required secrets:  TAURI_SIGNING_PRIVATE_KEY (+ TAURI_SIGNING_PRIVATE_KEY_PASSWORD if set)
+# Optional secrets:  APPLE_CERTIFICATE, APPLE_CERTIFICATE_PASSWORD, APPLE_SIGNING_IDENTITY,
+#                    APPLE_ID, APPLE_PASSWORD, APPLE_TEAM_ID  (Developer ID signing + notarization)
 on:
   push:
     tags: ["v*"]
-  workflow_dispatch:
 
 permissions:
   contents: write
 
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
-  windows:
-    runs-on: windows-latest
+  create-release:
+    runs-on: ubuntu-latest
+    outputs:
+      release_id: ${{ steps.create.outputs.result }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Tag must match app version
+        run: node scripts/version.mjs check "$GITHUB_REF_NAME"
+      - name: Updater signing key must be configured
+        env:
+          KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+        run: |
+          if [ -z "$KEY" ]; then
+            echo "::error::Add the TAURI_SIGNING_PRIVATE_KEY repository secret (see README → Releasing)."
+            exit 1
+          fi
+      - id: create
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const tag = process.env.GITHUB_REF_NAME;
+            const { data } = await github.rest.repos.createRelease({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              tag_name: tag,
+              name: `PCompare ${tag}`,
+              draft: true,
+              prerelease: tag.includes("-"),
+              generate_release_notes: true,
+            });
+            return data.id;
+
+  build:
+    needs: create-release
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: windows-latest
+            args: ""
+            rust-targets: ""
+          - platform: macos-latest
+            args: --target aarch64-apple-darwin
+            rust-targets: aarch64-apple-darwin
+          - platform: macos-latest
+            args: --target x86_64-apple-darwin
+            rust-targets: x86_64-apple-darwin
+    runs-on: ${{ matrix.platform }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -19,13 +78,64 @@ jobs:
           node-version: 22
           cache: npm
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.rust-targets }}
       - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.rust-targets }}
       - run: npm ci
+
+      # Only export Apple credentials when they exist; an empty APPLE_CERTIFICATE
+      # would make the bundler try (and fail) to import a certificate. Without
+      # them the app is ad-hoc signed (see tauri.conf.json) and users approve it
+      # once under System Settings → Privacy & Security.
+      - name: Apple code signing (optional)
+        if: runner.os == 'macOS'
+        shell: bash
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          if [ -n "$APPLE_CERTIFICATE" ]; then
+            for v in APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_SIGNING_IDENTITY; do
+              echo "$v=${!v}" >> "$GITHUB_ENV"
+            done
+            if [ -n "$APPLE_ID" ]; then
+              for v in APPLE_ID APPLE_PASSWORD APPLE_TEAM_ID; do echo "$v=${!v}" >> "$GITHUB_ENV"; done
+            fi
+            echo "Developer ID signing enabled"
+          else
+            echo "No Apple certificate — building ad-hoc signed"
+          fi
+
       - uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
-          tagName: ${{ github.ref_name }}
-          releaseName: PCompare ${{ github.ref_name }}
-          releaseBody: See the assets below for the MSI and NSIS installers.
-          releaseDraft: true
+          releaseId: ${{ needs.create-release.outputs.release_id }}
+          args: ${{ matrix.args }}
+          # Windows clients update through the NSIS installer (per-user, no UAC prompt).
+          updaterJsonPreferNsis: true
+
+  publish-release:
+    needs: [create-release, build]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/github-script@v7
+        env:
+          RELEASE_ID: ${{ needs.create-release.outputs.release_id }}
+        with:
+          script: |
+            await github.rest.repos.updateRelease({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              release_id: Number(process.env.RELEASE_ID),
+              draft: false,
+              make_latest: process.env.GITHUB_REF_NAME.includes("-") ? "false" : "true",
+            });

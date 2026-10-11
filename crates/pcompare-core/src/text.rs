@@ -1,5 +1,7 @@
 //! Line-oriented text comparison producing aligned side-by-side rows.
 
+use crate::{CoreError, Result};
+use regex::Regex;
 use serde::{Deserialize, Serialize};
 use similar::{capture_diff_slices, Algorithm, ChangeTag, DiffOp, TextDiff};
 
@@ -42,6 +44,10 @@ pub struct TextDiffOptions {
     pub whitespace: WhitespaceMode,
     pub ignore_case: bool,
     pub algorithm: DiffAlgorithm,
+    /// Regular expressions for text that never matters (version stamps,
+    /// generated timestamps, ...). Matches are removed before lines are
+    /// compared, so lines differing only there show as unimportant.
+    pub ignore_patterns: Vec<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -99,18 +105,53 @@ pub struct TextDiffResult {
     pub identical: bool,
 }
 
-/// Builds the string that is actually compared for a line.
-pub fn comparison_key(line: &str, opts: &TextDiffOptions) -> String {
-    let key = match opts.whitespace {
-        WhitespaceMode::Compare => line.to_owned(),
-        WhitespaceMode::IgnoreTrailing => line.trim_end().to_owned(),
-        WhitespaceMode::IgnoreChanges => line.split_whitespace().collect::<Vec<_>>().join(" "),
-        WhitespaceMode::IgnoreAll => line.chars().filter(|c| !c.is_whitespace()).collect(),
-    };
-    if opts.ignore_case {
-        key.to_lowercase()
-    } else {
-        key
+/// Turns a line into the string that is actually compared. Built once per
+/// diff so regexes are compiled a single time.
+pub struct LineNormalizer {
+    whitespace: WhitespaceMode,
+    ignore_case: bool,
+    ignore: Vec<Regex>,
+}
+
+impl LineNormalizer {
+    pub fn new(opts: &TextDiffOptions) -> Result<Self> {
+        let ignore = opts
+            .ignore_patterns
+            .iter()
+            .map(|p| p.trim())
+            .filter(|p| !p.is_empty())
+            .map(|p| {
+                Regex::new(p).map_err(|e| CoreError::BadPattern {
+                    pattern: p.to_owned(),
+                    message: e.to_string(),
+                })
+            })
+            .collect::<Result<_>>()?;
+        Ok(Self {
+            whitespace: opts.whitespace,
+            ignore_case: opts.ignore_case,
+            ignore,
+        })
+    }
+
+    pub fn key(&self, line: &str) -> String {
+        let mut stripped = std::borrow::Cow::Borrowed(line);
+        for re in &self.ignore {
+            if let std::borrow::Cow::Owned(s) = re.replace_all(&stripped, "") {
+                stripped = std::borrow::Cow::Owned(s);
+            }
+        }
+        let key = match self.whitespace {
+            WhitespaceMode::Compare => stripped.into_owned(),
+            WhitespaceMode::IgnoreTrailing => stripped.trim_end().to_owned(),
+            WhitespaceMode::IgnoreChanges => stripped.split_whitespace().collect::<Vec<_>>().join(" "),
+            WhitespaceMode::IgnoreAll => stripped.chars().filter(|c| !c.is_whitespace()).collect(),
+        };
+        if self.ignore_case {
+            key.to_lowercase()
+        } else {
+            key
+        }
     }
 }
 
@@ -151,9 +192,10 @@ pub fn inline_diff(left: &str, right: &str) -> (Vec<Segment>, Vec<Segment>) {
     (l, r)
 }
 
-pub fn diff_lines(left: &[&str], right: &[&str], opts: &TextDiffOptions) -> TextDiffResult {
-    let left_keys: Vec<String> = left.iter().map(|l| comparison_key(l, opts)).collect();
-    let right_keys: Vec<String> = right.iter().map(|l| comparison_key(l, opts)).collect();
+pub fn diff_lines(left: &[&str], right: &[&str], opts: &TextDiffOptions) -> Result<TextDiffResult> {
+    let norm = LineNormalizer::new(opts)?;
+    let left_keys: Vec<String> = left.iter().map(|l| norm.key(l)).collect();
+    let right_keys: Vec<String> = right.iter().map(|l| norm.key(l)).collect();
     let ops = capture_diff_slices(opts.algorithm.into(), &left_keys, &right_keys);
 
     let mut rows = Vec::with_capacity(left.len().max(right.len()));
@@ -240,12 +282,12 @@ pub fn diff_lines(left: &[&str], right: &[&str], opts: &TextDiffOptions) -> Text
     }
 
     let hunks = collect_hunks(&rows);
-    TextDiffResult {
+    Ok(TextDiffResult {
         identical: hunks.is_empty() && stats.unimportant == 0,
         rows,
         hunks,
         stats,
-    }
+    })
 }
 
 fn collect_hunks(rows: &[DiffRow]) -> Vec<Hunk> {
@@ -274,7 +316,7 @@ fn collect_hunks(rows: &[DiffRow]) -> Vec<Hunk> {
     hunks
 }
 
-pub fn diff_text(left: &str, right: &str, opts: &TextDiffOptions) -> TextDiffResult {
+pub fn diff_text(left: &str, right: &str, opts: &TextDiffOptions) -> Result<TextDiffResult> {
     let l: Vec<&str> = left.lines().collect();
     let r: Vec<&str> = right.lines().collect();
     diff_lines(&l, &r, opts)
@@ -290,7 +332,7 @@ mod tests {
 
     #[test]
     fn identical_text() {
-        let res = diff_text("a\nb\n", "a\r\nb\r\n", &TextDiffOptions::default());
+        let res = diff_text("a\nb\n", "a\r\nb\r\n", &TextDiffOptions::default()).unwrap();
         assert!(res.identical);
         assert_eq!(res.stats.equal, 2);
     }
@@ -301,7 +343,8 @@ mod tests {
             "one\ntwo\nthree\n",
             "one\ntwo!\nthree\nfour\n",
             &TextDiffOptions::default(),
-        );
+        )
+        .unwrap();
         use RowKind::*;
         assert_eq!(kinds(&res), vec![Equal, Changed, Equal, RightOnly]);
         assert_eq!(res.hunks.len(), 2);
@@ -315,7 +358,7 @@ mod tests {
             whitespace: WhitespaceMode::IgnoreChanges,
             ..Default::default()
         };
-        let res = diff_text("let  x = 1;\n", "let x = 1;  \n", &opts);
+        let res = diff_text("let  x = 1;\n", "let x = 1;  \n", &opts).unwrap();
         assert_eq!(kinds(&res), vec![RowKind::Unimportant]);
         assert!(res.hunks.is_empty());
         assert!(!res.identical);
@@ -327,8 +370,28 @@ mod tests {
             ignore_case: true,
             ..Default::default()
         };
-        let res = diff_text("SELECT 1\n", "select 1\n", &opts);
+        let res = diff_text("SELECT 1\n", "select 1\n", &opts).unwrap();
         assert!(res.hunks.is_empty());
+    }
+
+    #[test]
+    fn ignore_patterns_make_lines_unimportant() {
+        let opts = TextDiffOptions {
+            ignore_patterns: vec![r"\$Id:[^$]*\$".into()],
+            ..Default::default()
+        };
+        let res = diff_text("// $Id: a.c 41 $\nint x;\n", "// $Id: a.c 42 $\nint x;\n", &opts).unwrap();
+        assert_eq!(kinds(&res), vec![RowKind::Unimportant, RowKind::Equal]);
+        assert!(res.hunks.is_empty());
+    }
+
+    #[test]
+    fn bad_ignore_pattern_is_an_error() {
+        let opts = TextDiffOptions {
+            ignore_patterns: vec!["(".into()],
+            ..Default::default()
+        };
+        assert!(diff_text("a", "b", &opts).is_err());
     }
 
     #[test]

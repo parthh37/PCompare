@@ -170,7 +170,7 @@ select:focus {
 }
 .toolbar label.grow {
   flex: 1;
-  min-width: 160px;
+  min-width: 120px;
 }
 .toolbar label.grow input {
   flex: 1;
@@ -941,6 +941,164 @@ kbd {
 .tabpanel > .home {
   max-height: 100%;
   overflow-y: auto;
+}
+
+/* ---------- compare contents / filters ---------- */
+.s-similar .name,
+.s-similar .status {
+  color: var(--unimportant);
+}
+.s-similar-fg {
+  color: var(--unimportant);
+}
+/* Contents were actually read (BC's "0110" marker): underline the status glyph. */
+.fcell.status.checked {
+  text-decoration: underline dotted;
+  text-underline-offset: 3px;
+}
+.toolbar select.active {
+  border-color: var(--accent);
+  background: rgba(91, 156, 255, 0.18);
+}
+.toolbar .name-filter {
+  width: 140px;
+}
+.toolbar .more-filters {
+  width: 96px;
+}
+.settings-grid fieldset > small {
+  display: block;
+  margin-bottom: 8px;
+}
+.toolbar label.live {
+  color: var(--ok);
+}
+textarea {
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--text);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  padding: 6px 8px;
+  resize: vertical;
+}
+textarea:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.ctx-menu {
+  position: fixed;
+  z-index: 40;
+  min-width: 200px;
+  padding: 4px;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+  display: flex;
+  flex-direction: column;
+}
+.ctx-menu button {
+  border: none;
+  background: none;
+  text-align: left;
+  padding: 5px 10px;
+  border-radius: 4px;
+}
+.ctx-menu button:hover:not(:disabled) {
+  background: rgba(91, 156, 255, 0.18);
+}
+.ctx-menu hr {
+  border: none;
+  border-top: 1px solid var(--border);
+  margin: 4px 0;
+}
+.ctx-label {
+  padding: 4px 10px 2px;
+  font-size: 11px;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+/* ---------- session settings ---------- */
+.settings-pages {
+  margin-bottom: 14px;
+}
+.settings-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 14px;
+}
+.settings-grid.single {
+  grid-template-columns: 1fr;
+}
+.settings-grid fieldset {
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  padding: 10px 12px 12px;
+  margin: 0;
+  min-width: 0;
+}
+.settings-grid legend {
+  padding: 0 5px;
+  font-weight: 600;
+  font-size: 12px;
+  color: var(--muted);
+}
+.field.indent {
+  margin-left: 22px;
+}
+.field.radio {
+  flex-direction: row;
+  align-items: flex-start;
+  gap: 7px;
+  margin-bottom: 9px;
+}
+.field.radio input {
+  margin-top: 3px;
+}
+.field.radio > span {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-weight: normal;
+}
+.field-row {
+  display: flex;
+  gap: 10px;
+  align-items: flex-end;
+}
+.field-row .field {
+  flex: 1;
+  min-width: 0;
+}
+
+/* ---------- updates ---------- */
+.update-banner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 12px;
+  background: rgba(91, 156, 255, 0.12);
+  border-bottom: 1px solid rgba(91, 156, 255, 0.35);
+}
+.update-banner label.check {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+.update-notes {
+  max-width: 40ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.update-banner progress {
+  flex: 1;
+  max-width: 260px;
 }
 
 /* ---------- icons ---------- */

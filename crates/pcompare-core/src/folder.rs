@@ -1,15 +1,21 @@
 //! Recursive folder comparison.
 //!
 //! Each directory level is listed on both sides, entries are paired by name,
-//! and paired files are classified according to [`CompareCriteria`]. Work
+//! and paired files are classified by quick tests and an optional content pass. Work
 //! inside a directory runs on the rayon pool, so content comparison of many
 //! files and recursion into sibling folders happen in parallel.
 //!
+//! Classification follows Beyond Compare's model: cheap *quick tests* (size,
+//! timestamp) run on metadata, then an optional *content* pass (binary, CRC
+//! or rules-based) reads the files and, by default, overrides the quick result.
+//!
 //! Both sides go through [`Vfs`], so either side may be a remote store.
 
+use crate::text::{self, TextDiffOptions};
+use crate::textfile;
 use crate::vfs::{LocalFs, Vfs};
 use crate::{CoreError, Result};
-use globset::{Glob, GlobSet, GlobSetBuilder};
+use globset::{GlobBuilder, GlobSet, GlobSetBuilder};
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -17,25 +23,56 @@ use std::io::Read;
 use std::path::Path;
 use std::time::Instant;
 
+/// How file contents are compared after the quick tests.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub enum CompareCriteria {
-    /// Fast: equal size and equal (within tolerance) modification time.
+pub enum ContentMethod {
+    /// Metadata only — the quick tests decide.
     #[default]
-    SizeAndTimestamp,
-    /// Equal size only.
-    Size,
-    /// Byte-for-byte comparison (sizes are checked first).
-    Content,
+    Off,
+    /// Byte-for-byte; stops reading at the first difference.
+    Binary,
+    /// CRC-32 of both files; reads everything but yields checksums to show.
+    Crc,
+    /// Decodes text and compares it with the text rules, so encoding,
+    /// line-ending and ignored-pattern differences count as *similar*.
+    /// Binary files fall back to a binary comparison.
+    Rules,
+}
+
+/// Name, size and date filters. Name masks are globs matched against the
+/// entry name and its relative path; size/date filters only apply to files.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct FolderFilters {
+    /// When non-empty, only files matching one of these are compared.
+    pub include_files: Vec<String>,
+    pub exclude_files: Vec<String>,
+    pub exclude_folders: Vec<String>,
+    pub min_size: Option<u64>,
+    pub max_size: Option<u64>,
+    /// Milliseconds since the Unix epoch.
+    pub modified_after_ms: Option<i64>,
+    pub modified_before_ms: Option<i64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct FolderCompareOptions {
-    pub criteria: CompareCriteria,
+    /// Quick test: sizes must match.
+    pub compare_size: bool,
+    /// Quick test: timestamps must match (within tolerance).
+    pub compare_timestamp: bool,
+    pub content: ContentMethod,
+    /// Let the content result replace the quick-test result (Beyond Compare's
+    /// default). When off, a pair is the same only if both agree.
+    pub override_quick_tests: bool,
+    /// Text rules used by [`ContentMethod::Rules`].
+    pub rules: TextDiffOptions,
     pub recursive: bool,
-    /// Glob patterns matched against both the entry name and its relative path.
+    /// Glob patterns excluded everywhere (files and folders).
     pub exclude: Vec<String>,
+    pub filters: FolderFilters,
     pub include_hidden: bool,
     /// Pair `Readme.md` with `README.md`. Defaults to on for Windows.
     pub ignore_name_case: bool,
@@ -48,9 +85,14 @@ pub struct FolderCompareOptions {
 impl Default for FolderCompareOptions {
     fn default() -> Self {
         Self {
-            criteria: CompareCriteria::default(),
+            compare_size: true,
+            compare_timestamp: true,
+            content: ContentMethod::Off,
+            override_quick_tests: true,
+            rules: TextDiffOptions::default(),
             recursive: true,
             exclude: Vec::new(),
+            filters: FolderFilters::default(),
             include_hidden: true,
             ignore_name_case: cfg!(windows),
             time_tolerance_secs: 2,
@@ -63,6 +105,9 @@ impl Default for FolderCompareOptions {
 #[serde(rename_all = "camelCase")]
 pub enum EntryStatus {
     Same,
+    /// Bytes differ but a rules-based comparison found only unimportant
+    /// differences (encoding, line endings, whitespace, ignored patterns).
+    Similar,
     Different,
     LeftOnly,
     RightOnly,
@@ -100,12 +145,17 @@ pub struct FolderEntry {
     pub right: Option<EntryMeta>,
     pub children: Vec<FolderEntry>,
     pub error: Option<String>,
+    /// Which content method produced the status, if contents were read.
+    pub content_checked: Option<ContentMethod>,
+    /// Left and right CRC-32, when computed.
+    pub crc: Option<[u32; 2]>,
 }
 
 #[derive(Debug, Clone, Default, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FolderStats {
     pub same: usize,
+    pub similar: usize,
     pub different: usize,
     pub left_only: usize,
     pub right_only: usize,
@@ -125,6 +175,9 @@ pub struct FolderCompareResult {
 struct Ctx<'a> {
     opts: &'a FolderCompareOptions,
     exclude: GlobSet,
+    include_files: GlobSet,
+    exclude_files: GlobSet,
+    exclude_folders: GlobSet,
     left: &'a dyn Vfs,
     right: &'a dyn Vfs,
 }
@@ -138,10 +191,13 @@ impl Ctx<'_> {
     }
 }
 
-fn build_globset(patterns: &[String]) -> Result<GlobSet> {
+fn build_globset(patterns: &[String], case_insensitive: bool) -> Result<GlobSet> {
     let mut builder = GlobSetBuilder::new();
     for p in patterns.iter().map(|p| p.trim()).filter(|p| !p.is_empty()) {
-        let glob = Glob::new(p).map_err(|e| CoreError::BadPattern {
+        let glob = GlobBuilder::new(p)
+            .case_insensitive(case_insensitive)
+            .build()
+            .map_err(|e| CoreError::BadPattern {
             pattern: p.to_owned(),
             message: e.to_string(),
         })?;
@@ -167,7 +223,14 @@ fn list_dir(fs: &dyn Vfs, dir: &str, rel: &str, ctx: &Ctx) -> Result<BTreeMap<St
             continue;
         }
         let rel_path = join_rel(rel, &entry.name);
-        if ctx.exclude.is_match(&entry.name) || ctx.exclude.is_match(&rel_path) {
+        let hit = |set: &GlobSet| set.is_match(&entry.name) || set.is_match(&rel_path);
+        let excluded = hit(&ctx.exclude)
+            || if entry.meta.is_dir {
+                hit(&ctx.exclude_folders)
+            } else {
+                hit(&ctx.exclude_files) || (!ctx.include_files.is_empty() && !hit(&ctx.include_files))
+            };
+        if excluded {
             continue;
         }
         let key = if ctx.opts.ignore_name_case {
@@ -261,19 +324,115 @@ fn newer_side(l: &EntryMeta, r: &EntryMeta, opts: &FolderCompareOptions) -> Opti
     }
 }
 
-fn compare_file_pair(lp: &str, rp: &str, l: &EntryMeta, r: &EntryMeta, ctx: &Ctx) -> Result<bool> {
-    Ok(match ctx.opts.criteria {
-        CompareCriteria::Size => l.size == r.size,
-        CompareCriteria::SizeAndTimestamp => {
-            l.size == r.size && timestamps_match(l.modified_ms, r.modified_ms, ctx.opts)
+/// Outcome of reading two files' contents.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ContentVerdict {
+    pub status: EntryStatus,
+    pub crc: Option<[u32; 2]>,
+}
+
+/// Files larger than this are never decoded for a rules-based comparison;
+/// they fall back to binary so a stray multi-GB log can't exhaust memory.
+pub const RULES_MAX_BYTES: u64 = 32 * 1024 * 1024;
+
+fn read_all(fs: &dyn Vfs, path: &str) -> Result<Vec<u8>> {
+    let mut buf = Vec::new();
+    fs.open(path)?.read_to_end(&mut buf).map_err(|e| CoreError::io(path, e))?;
+    Ok(buf)
+}
+
+fn crc32(fs: &dyn Vfs, path: &str) -> Result<u32> {
+    let mut reader = fs.open(path)?;
+    let mut hasher = crc32fast::Hasher::new();
+    let mut buf = vec![0u8; 128 * 1024];
+    loop {
+        let n = read_full(&mut reader, &mut buf).map_err(|e| CoreError::io(path, e))?;
+        if n == 0 {
+            return Ok(hasher.finalize());
         }
-        CompareCriteria::Content => {
-            l.size == r.size && {
-                let (mut lf, mut rf) = (ctx.left.open(lp)?, ctx.right.open(rp)?);
-                streams_equal(&mut lf, lp, &mut rf, rp)?
+        hasher.update(&buf[..n]);
+    }
+}
+
+/// Compares two files' contents with `method`. Sizes are passed in so the
+/// binary paths can short-circuit without opening anything.
+#[allow(clippy::too_many_arguments)]
+pub fn compare_contents(
+    left_fs: &dyn Vfs,
+    left: &str,
+    left_size: u64,
+    right_fs: &dyn Vfs,
+    right: &str,
+    right_size: u64,
+    method: ContentMethod,
+    rules: &TextDiffOptions,
+) -> Result<ContentVerdict> {
+    let same_or_diff = |equal: bool| if equal { EntryStatus::Same } else { EntryStatus::Different };
+    let binary = || -> Result<ContentVerdict> {
+        let equal = left_size == right_size && {
+            let (mut lf, mut rf) = (left_fs.open(left)?, right_fs.open(right)?);
+            streams_equal(&mut lf, left, &mut rf, right)?
+        };
+        Ok(ContentVerdict { status: same_or_diff(equal), crc: None })
+    };
+    match method {
+        ContentMethod::Off | ContentMethod::Binary => binary(),
+        ContentMethod::Crc => {
+            let crc = [crc32(left_fs, left)?, crc32(right_fs, right)?];
+            Ok(ContentVerdict {
+                status: same_or_diff(left_size == right_size && crc[0] == crc[1]),
+                crc: Some(crc),
+            })
+        }
+        ContentMethod::Rules => {
+            // Binary first: identical bytes are the common case and cheap.
+            let quick = binary()?;
+            if quick.status == EntryStatus::Same || left_size.max(right_size) > RULES_MAX_BYTES {
+                return Ok(quick);
             }
+            let (lb, rb) = (read_all(left_fs, left)?, read_all(right_fs, right)?);
+            if textfile::is_probably_binary(&lb) || textfile::is_probably_binary(&rb) {
+                return Ok(quick);
+            }
+            let (lt, rt) = (textfile::decode(&lb).0, textfile::decode(&rb).0);
+            let diff = text::diff_text(&lt, &rt, rules)?;
+            let status = if diff.hunks.is_empty() {
+                EntryStatus::Similar
+            } else {
+                EntryStatus::Different
+            };
+            Ok(ContentVerdict { status, crc: None })
         }
-    })
+    }
+}
+
+/// Quick tests on metadata alone.
+fn quick_tests_pass(l: &EntryMeta, r: &EntryMeta, opts: &FolderCompareOptions) -> bool {
+    (!opts.compare_size || l.size == r.size)
+        && (!opts.compare_timestamp || timestamps_match(l.modified_ms, r.modified_ms, opts))
+}
+
+fn compare_file_pair(lp: &str, rp: &str, l: &EntryMeta, r: &EntryMeta, ctx: &Ctx) -> Result<ContentVerdict> {
+    let opts = ctx.opts;
+    let quick_same = quick_tests_pass(l, r, opts);
+    let quick = ContentVerdict {
+        status: if quick_same { EntryStatus::Same } else { EntryStatus::Different },
+        crc: None,
+    };
+    // Without override, a failed quick test is final — no need to read anything.
+    if opts.content == ContentMethod::Off || (!quick_same && !opts.override_quick_tests) {
+        return Ok(quick);
+    }
+    compare_contents(ctx.left, lp, l.size, ctx.right, rp, r.size, opts.content, &opts.rules)
+}
+
+/// Whether a file pair survives the size/date filters. `None` is the side
+/// where the file doesn't exist (an orphan).
+pub fn pair_passes(left: Option<&EntryMeta>, right: Option<&EntryMeta>, filters: &FolderFilters) -> bool {
+    // TODO(you): decide how size/date filters treat a pair. See chat notes.
+    let _ = (left, right, filters);
+    true
 }
 
 fn error_entry(name: String, rel_path: String, is_dir: bool, err: CoreError) -> FolderEntry {
@@ -287,6 +446,8 @@ fn error_entry(name: String, rel_path: String, is_dir: bool, err: CoreError) -> 
         right: None,
         children: Vec::new(),
         error: Some(err.to_string()),
+        content_checked: None,
+        crc: None,
     }
 }
 
@@ -297,8 +458,13 @@ fn orphan_tree(dir: &str, rel: &str, side: Side, ctx: &Ctx) -> Vec<FolderEntry> 
         Ok(l) => l,
         Err(e) => return vec![error_entry("<unreadable>".into(), rel.into(), false, e)],
     };
+    let passes = |m: &EntryMeta| match side {
+        Side::Left => pair_passes(Some(m), None, &ctx.opts.filters),
+        Side::Right => pair_passes(None, Some(m), &ctx.opts.filters),
+    };
     listed
         .into_par_iter()
+        .filter(|(_, item)| item.meta.is_dir || passes(&item.meta))
         .map(|(_, item)| {
             let rel_path = join_rel(rel, &item.name);
             let children = if item.meta.is_dir && ctx.opts.recursive {
@@ -320,6 +486,8 @@ fn orphan_tree(dir: &str, rel: &str, side: Side, ctx: &Ctx) -> Vec<FolderEntry> 
                 right,
                 children,
                 error: None,
+                content_checked: None,
+                crc: None,
             }
         })
         .collect()
@@ -334,6 +502,10 @@ fn compare_dirs(ldir: &str, rdir: &str, rel: &str, ctx: &Ctx) -> Result<Vec<Fold
         pairs.push((left.remove(&key), Some(r)));
     }
     pairs.extend(left.into_values().map(|l| (Some(l), None)));
+    pairs.retain(|(l, r)| {
+        let any_dir = l.iter().chain(r.iter()).any(|x| x.meta.is_dir);
+        any_dir || pair_passes(l.as_ref().map(|x| &x.meta), r.as_ref().map(|x| &x.meta), &ctx.opts.filters)
+    });
 
     let mut entries: Vec<FolderEntry> = pairs
         .into_par_iter()
@@ -368,6 +540,8 @@ fn compare_pair(
         right: r.as_ref().map(|x| x.meta.clone()),
         children: Vec::new(),
         error: None,
+        content_checked: None,
+        crc: None,
     };
 
     match (&l, &r) {
@@ -394,12 +568,7 @@ fn compare_pair(
                 let (ld, rd) = (ctx.left.join(ldir, &l.name), ctx.right.join(rdir, &r.name));
                 match compare_dirs(&ld, &rd, &rel_path, ctx) {
                     Ok(children) => {
-                        let all_same = children.iter().all(|c| c.status == EntryStatus::Same);
-                        entry.status = if all_same {
-                            EntryStatus::Same
-                        } else {
-                            EntryStatus::Different
-                        };
+                        entry.status = folder_status(&children);
                         entry.children = children;
                     }
                     Err(e) => {
@@ -412,10 +581,15 @@ fn compare_pair(
         (Some(l), Some(r)) => {
             let (lp, rp) = (ctx.left.join(ldir, &l.name), ctx.right.join(rdir, &r.name));
             match compare_file_pair(&lp, &rp, &l.meta, &r.meta, ctx) {
-                Ok(true) => entry.status = EntryStatus::Same,
-                Ok(false) => {
-                    entry.status = EntryStatus::Different;
-                    entry.newer = newer_side(&l.meta, &r.meta, ctx.opts);
+                Ok(verdict) => {
+                    entry.status = verdict.status;
+                    entry.crc = verdict.crc;
+                    if ctx.opts.content != ContentMethod::Off {
+                        entry.content_checked = Some(ctx.opts.content);
+                    }
+                    if verdict.status != EntryStatus::Same {
+                        entry.newer = newer_side(&l.meta, &r.meta, ctx.opts);
+                    }
                 }
                 Err(e) => {
                     entry.status = EntryStatus::Error;
@@ -428,11 +602,27 @@ fn compare_pair(
     entry
 }
 
+/// A folder is the same when everything inside is, similar when the only
+/// deviations are similar files, and different otherwise.
+pub fn folder_status(children: &[FolderEntry]) -> EntryStatus {
+    if children.iter().all(|c| c.status == EntryStatus::Same) {
+        EntryStatus::Same
+    } else if children
+        .iter()
+        .all(|c| matches!(c.status, EntryStatus::Same | EntryStatus::Similar))
+    {
+        EntryStatus::Similar
+    } else {
+        EntryStatus::Different
+    }
+}
+
 fn tally(entries: &[FolderEntry], stats: &mut FolderStats) {
     for e in entries {
         if !e.is_dir {
             match e.status {
                 EntryStatus::Same => stats.same += 1,
+                EntryStatus::Similar => stats.similar += 1,
                 EntryStatus::Different | EntryStatus::TypeMismatch => stats.different += 1,
                 EntryStatus::LeftOnly => stats.left_only += 1,
                 EntryStatus::RightOnly => stats.right_only += 1,
@@ -463,9 +653,17 @@ pub fn compare_folders_with(
     opts: &FolderCompareOptions,
 ) -> Result<FolderCompareResult> {
     let started = Instant::now();
+    // Fail fast on bad regexes rather than once per file pair.
+    if opts.content == ContentMethod::Rules {
+        text::LineNormalizer::new(&opts.rules)?;
+    }
+    let ci = opts.ignore_name_case;
     let ctx = Ctx {
         opts,
-        exclude: build_globset(&opts.exclude)?,
+        exclude: build_globset(&opts.exclude, ci)?,
+        include_files: build_globset(&opts.filters.include_files, ci)?,
+        exclude_files: build_globset(&opts.filters.exclude_files, ci)?,
+        exclude_folders: build_globset(&opts.filters.exclude_folders, ci)?,
         left: left_fs,
         right: right_fs,
     };
