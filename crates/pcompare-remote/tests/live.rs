@@ -12,7 +12,7 @@
 //! `left/a.txt` = `right/a.txt` = "hello\n", `left/sub/b.txt` = "one\n",
 //! `right/sub/b.txt` = "two!\n", and `left/orphan.txt`.
 
-use pcompare_core::folder::{compare_folders_with, CompareCriteria, FolderCompareOptions};
+use pcompare_core::folder::{compare_folders_with, ContentMethod, FolderCompareOptions};
 use pcompare_remote::profile::{MemorySecrets, ProfileInput};
 use pcompare_remote::RemoteManager;
 use serde::Deserialize;
@@ -43,7 +43,7 @@ fn live_profiles_roundtrip() {
         assert_eq!(names, ["sub", "a.txt", "orphan.txt"], "{name}: folders first, then by name");
 
         let opts = FolderCompareOptions {
-            criteria: CompareCriteria::Content,
+            content: ContentMethod::Binary,
             ..Default::default()
         };
         let (lfs, l) = m.target(&format!("{base}/left")).unwrap();
