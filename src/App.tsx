@@ -9,6 +9,7 @@ import { TextCompare } from "./components/TextCompare";
 import { api, errorMessage, type SavedKind, type SavedSession } from "./lib/api";
 import { basename } from "./lib/format";
 import { ShellContext } from "./lib/shell";
+import { autoUpdateEnabled, setAutoUpdateEnabled, useUpdater } from "./lib/useUpdater";
 
 export type SessionKind = "home" | "text" | "folder" | "hex" | "profiles";
 
@@ -51,6 +52,8 @@ export default function App() {
   const [saved, setSaved] = useState<SavedSession[]>([]);
   const [saving, setSaving] = useState<Tab | null>(null);
   const [toast, setToast] = useState<string | null>(null);
+  const updater = useUpdater(setToast);
+  const [autoUpdate, setAutoUpdate] = useState(autoUpdateEnabled);
 
   const refreshSaved = useCallback(
     () =>
@@ -192,7 +195,58 @@ export default function App() {
         <button className="tab-action" title="Connection profiles" onClick={openProfiles}>
           🌐 Profiles
         </button>
+        <button
+          className="tab-action"
+          title={`PCompare ${updater.version} — check for updates`}
+          disabled={updater.phase.kind === "checking" || updater.phase.kind === "downloading"}
+          onClick={updater.checkNow}
+        >
+          {updater.phase.kind === "checking" ? "Checking…" : "⬆ Updates"}
+        </button>
       </nav>
+
+      {updater.bannerVisible && (
+        <div className="update-banner">
+          {updater.phase.kind === "downloading" ? (
+            <>
+              <span>
+                Downloading PCompare {updater.phase.update.version}
+                {updater.phase.total
+                  ? ` — ${Math.round((updater.phase.done / updater.phase.total) * 100)}%`
+                  : "…"}
+              </span>
+              <progress value={updater.phase.done} max={updater.phase.total ?? undefined} />
+            </>
+          ) : updater.phase.kind === "available" ? (
+            <>
+              <span>
+                <b>PCompare {updater.phase.update.version}</b> is available (you have {updater.version}).
+              </span>
+              {updater.phase.update.body && (
+                <span className="muted update-notes" title={updater.phase.update.body}>
+                  {updater.phase.update.body.split("\n")[0]}
+                </span>
+              )}
+              <span className="spacer" />
+              <label className="check muted">
+                <input
+                  type="checkbox"
+                  checked={autoUpdate}
+                  onChange={(e) => {
+                    setAutoUpdateEnabled(e.target.checked);
+                    setAutoUpdate(e.target.checked);
+                  }}
+                />
+                Check automatically
+              </label>
+              <button onClick={updater.dismiss}>Later</button>
+              <button className="primary" onClick={updater.install}>
+                Install &amp; restart
+              </button>
+            </>
+          ) : null}
+        </div>
+      )}
 
       {tabs.map((t) => (
         // Inactive tabs stay mounted so their state and scroll position survive.
@@ -243,7 +297,8 @@ export default function App() {
               settings={t.settings}
               onSettingsChange={(settings) => updateTab(t.id, { settings: { ...settings } })}
               onPathsChange={(left, right) => updateTab(t.id, { left, right })}
-              onOpenFiles={(left, right) => openTab("text", left, right)}
+              onOpenFiles={(left, right, rules) => openTab("text", left, right, { settings: { options: rules } })}
+              onOpenHex={(left, right) => openTab("hex", left, right)}
             />
           )}
           {t.kind === "hex" && (

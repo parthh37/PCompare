@@ -36,7 +36,25 @@
       "icons/icon.ico"
     ],
     "windows": {
-      "nsis": { "installMode": "currentUser" }
+      "nsis": {
+        "installMode": "currentUser"
+      }
+    },
+    "createUpdaterArtifacts": true,
+    "macOS": {
+      "minimumSystemVersion": "11.0",
+      "signingIdentity": "-"
+    }
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDFDNkE1OTk3QzkwMkVDOTUKUldTVjdBTEpsMWxxSElsY0lJWWdmOHV3K2tIVDNUWHZPRUNpenliMVhWNHAydExVZnRlSDJOMmwK",
+      "endpoints": [
+        "https://github.com/parthh37/PCompare/releases/latest/download/latest.json"
+      ],
+      "windows": {
+        "installMode": "passive"
+      }
     }
   }
 }
