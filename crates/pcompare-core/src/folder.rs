@@ -4,16 +4,18 @@
 //! and paired files are classified according to [`CompareCriteria`]. Work
 //! inside a directory runs on the rayon pool, so content comparison of many
 //! files and recursion into sibling folders happen in parallel.
+//!
+//! Both sides go through [`Vfs`], so either side may be a remote store.
 
+use crate::vfs::{LocalFs, Vfs};
 use crate::{CoreError, Result};
 use globset::{Glob, GlobSet, GlobSetBuilder};
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
-use std::fs::{self, Metadata};
 use std::io::Read;
 use std::path::Path;
-use std::time::{Instant, UNIX_EPOCH};
+use std::time::Instant;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -123,6 +125,17 @@ pub struct FolderCompareResult {
 struct Ctx<'a> {
     opts: &'a FolderCompareOptions,
     exclude: GlobSet,
+    left: &'a dyn Vfs,
+    right: &'a dyn Vfs,
+}
+
+impl Ctx<'_> {
+    fn fs(&self, side: Side) -> &dyn Vfs {
+        match side {
+            Side::Left => self.left,
+            Side::Right => self.right,
+        }
+    }
 }
 
 fn build_globset(patterns: &[String]) -> Result<GlobSet> {
@@ -140,31 +153,6 @@ fn build_globset(patterns: &[String]) -> Result<GlobSet> {
     })
 }
 
-fn to_meta(m: &Metadata) -> EntryMeta {
-    let modified_ms = m
-        .modified()
-        .ok()
-        .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
-        .map(|d| d.as_millis() as i64);
-    EntryMeta {
-        size: if m.is_dir() { 0 } else { m.len() },
-        modified_ms,
-        is_dir: m.is_dir(),
-    }
-}
-
-#[cfg(windows)]
-fn is_hidden(name: &str, meta: &Metadata) -> bool {
-    use std::os::windows::fs::MetadataExt;
-    const FILE_ATTRIBUTE_HIDDEN: u32 = 0x2;
-    name.starts_with('.') || meta.file_attributes() & FILE_ATTRIBUTE_HIDDEN != 0
-}
-
-#[cfg(not(windows))]
-fn is_hidden(name: &str, _meta: &Metadata) -> bool {
-    name.starts_with('.')
-}
-
 struct Listed {
     name: String,
     meta: EntryMeta,
@@ -172,37 +160,26 @@ struct Listed {
 
 /// Lists one directory, applying hidden/exclude filters. Keys are the pairing
 /// keys (lower-cased when names are matched case-insensitively).
-fn list_dir(dir: &Path, rel: &str, ctx: &Ctx) -> Result<BTreeMap<String, Listed>> {
+fn list_dir(fs: &dyn Vfs, dir: &str, rel: &str, ctx: &Ctx) -> Result<BTreeMap<String, Listed>> {
     let mut out = BTreeMap::new();
-    let read = fs::read_dir(dir).map_err(|e| CoreError::io(dir, e))?;
-    for entry in read {
-        let entry = entry.map_err(|e| CoreError::io(dir, e))?;
-        let name = entry.file_name().to_string_lossy().into_owned();
-        // `fs::metadata` follows symlinks so linked files compare by target.
-        let meta = match fs::metadata(entry.path()) {
-            Ok(m) => m,
-            Err(_) => match entry.metadata() {
-                Ok(m) => m, // dangling link: fall back to the link itself
-                Err(e) => return Err(CoreError::io(entry.path(), e)),
-            },
-        };
-        if !ctx.opts.include_hidden && is_hidden(&name, &meta) {
+    for entry in fs.read_dir(dir)? {
+        if !ctx.opts.include_hidden && entry.hidden {
             continue;
         }
-        let rel_path = join_rel(rel, &name);
-        if ctx.exclude.is_match(&name) || ctx.exclude.is_match(&rel_path) {
+        let rel_path = join_rel(rel, &entry.name);
+        if ctx.exclude.is_match(&entry.name) || ctx.exclude.is_match(&rel_path) {
             continue;
         }
         let key = if ctx.opts.ignore_name_case {
-            name.to_lowercase()
+            entry.name.to_lowercase()
         } else {
-            name.clone()
+            entry.name.clone()
         };
         out.insert(
             key,
             Listed {
-                name,
-                meta: to_meta(&meta),
+                name: entry.name,
+                meta: entry.meta,
             },
         );
     }
@@ -218,7 +195,7 @@ fn join_rel(rel: &str, name: &str) -> String {
 }
 
 /// Fills `buf` as far as possible; returns bytes read (short only at EOF).
-fn read_full(reader: &mut impl Read, buf: &mut [u8]) -> std::io::Result<usize> {
+fn read_full(reader: &mut (impl Read + ?Sized), buf: &mut [u8]) -> std::io::Result<usize> {
     let mut filled = 0;
     while filled < buf.len() {
         match reader.read(&mut buf[filled..]) {
@@ -231,15 +208,18 @@ fn read_full(reader: &mut impl Read, buf: &mut [u8]) -> std::io::Result<usize> {
     Ok(filled)
 }
 
-/// Streams both files in lock-step; stops at the first differing chunk.
-pub fn files_equal(left: &Path, right: &Path) -> Result<bool> {
+/// Streams both readers in lock-step; stops at the first differing chunk.
+pub fn streams_equal(
+    lf: &mut dyn Read,
+    left_name: &str,
+    rf: &mut dyn Read,
+    right_name: &str,
+) -> Result<bool> {
     const CHUNK: usize = 128 * 1024;
-    let mut lf = fs::File::open(left).map_err(|e| CoreError::io(left, e))?;
-    let mut rf = fs::File::open(right).map_err(|e| CoreError::io(right, e))?;
     let (mut lb, mut rb) = (vec![0u8; CHUNK], vec![0u8; CHUNK]);
     loop {
-        let ln = read_full(&mut lf, &mut lb).map_err(|e| CoreError::io(left, e))?;
-        let rn = read_full(&mut rf, &mut rb).map_err(|e| CoreError::io(right, e))?;
+        let ln = read_full(lf, &mut lb).map_err(|e| CoreError::io(left_name, e))?;
+        let rn = read_full(rf, &mut rb).map_err(|e| CoreError::io(right_name, e))?;
         if ln != rn || lb[..ln] != rb[..rn] {
             return Ok(false);
         }
@@ -247,6 +227,13 @@ pub fn files_equal(left: &Path, right: &Path) -> Result<bool> {
             return Ok(true);
         }
     }
+}
+
+/// Byte-for-byte comparison of two local files.
+pub fn files_equal(left: &Path, right: &Path) -> Result<bool> {
+    let (l, r) = (left.to_string_lossy(), right.to_string_lossy());
+    let (mut lf, mut rf) = (LocalFs.open(&l)?, LocalFs.open(&r)?);
+    streams_equal(&mut lf, &l, &mut rf, &r)
 }
 
 /// Decides whether two modification times should be considered "the same".
@@ -274,13 +261,18 @@ fn newer_side(l: &EntryMeta, r: &EntryMeta, opts: &FolderCompareOptions) -> Opti
     }
 }
 
-fn compare_file_pair(lp: &Path, rp: &Path, l: &EntryMeta, r: &EntryMeta, ctx: &Ctx) -> Result<bool> {
+fn compare_file_pair(lp: &str, rp: &str, l: &EntryMeta, r: &EntryMeta, ctx: &Ctx) -> Result<bool> {
     Ok(match ctx.opts.criteria {
         CompareCriteria::Size => l.size == r.size,
         CompareCriteria::SizeAndTimestamp => {
             l.size == r.size && timestamps_match(l.modified_ms, r.modified_ms, ctx.opts)
         }
-        CompareCriteria::Content => l.size == r.size && files_equal(lp, rp)?,
+        CompareCriteria::Content => {
+            l.size == r.size && {
+                let (mut lf, mut rf) = (ctx.left.open(lp)?, ctx.right.open(rp)?);
+                streams_equal(&mut lf, lp, &mut rf, rp)?
+            }
+        }
     })
 }
 
@@ -299,8 +291,9 @@ fn error_entry(name: String, rel_path: String, is_dir: bool, err: CoreError) -> 
 }
 
 /// Lists an orphaned folder so its contents are visible in the tree.
-fn orphan_tree(dir: &Path, rel: &str, side: Side, ctx: &Ctx) -> Vec<FolderEntry> {
-    let listed = match list_dir(dir, rel, ctx) {
+fn orphan_tree(dir: &str, rel: &str, side: Side, ctx: &Ctx) -> Vec<FolderEntry> {
+    let fs = ctx.fs(side);
+    let listed = match list_dir(fs, dir, rel, ctx) {
         Ok(l) => l,
         Err(e) => return vec![error_entry("<unreadable>".into(), rel.into(), false, e)],
     };
@@ -309,7 +302,7 @@ fn orphan_tree(dir: &Path, rel: &str, side: Side, ctx: &Ctx) -> Vec<FolderEntry>
         .map(|(_, item)| {
             let rel_path = join_rel(rel, &item.name);
             let children = if item.meta.is_dir && ctx.opts.recursive {
-                orphan_tree(&dir.join(&item.name), &rel_path, side, ctx)
+                orphan_tree(&fs.join(dir, &item.name), &rel_path, side, ctx)
             } else {
                 Vec::new()
             };
@@ -332,9 +325,9 @@ fn orphan_tree(dir: &Path, rel: &str, side: Side, ctx: &Ctx) -> Vec<FolderEntry>
         .collect()
 }
 
-fn compare_dirs(ldir: &Path, rdir: &Path, rel: &str, ctx: &Ctx) -> Result<Vec<FolderEntry>> {
-    let mut left = list_dir(ldir, rel, ctx)?;
-    let right = list_dir(rdir, rel, ctx)?;
+fn compare_dirs(ldir: &str, rdir: &str, rel: &str, ctx: &Ctx) -> Result<Vec<FolderEntry>> {
+    let mut left = list_dir(ctx.left, ldir, rel, ctx)?;
+    let right = list_dir(ctx.right, rdir, rel, ctx)?;
 
     let mut pairs: Vec<(Option<Listed>, Option<Listed>)> = Vec::new();
     for (key, r) in right {
@@ -356,8 +349,8 @@ fn compare_dirs(ldir: &Path, rdir: &Path, rel: &str, ctx: &Ctx) -> Result<Vec<Fo
 }
 
 fn compare_pair(
-    ldir: &Path,
-    rdir: &Path,
+    ldir: &str,
+    rdir: &str,
     rel: &str,
     pair: (Option<Listed>, Option<Listed>),
     ctx: &Ctx,
@@ -382,14 +375,14 @@ fn compare_pair(
             entry.status = EntryStatus::LeftOnly;
             entry.is_dir = l.meta.is_dir;
             if l.meta.is_dir && ctx.opts.recursive {
-                entry.children = orphan_tree(&ldir.join(&l.name), &rel_path, Side::Left, ctx);
+                entry.children = orphan_tree(&ctx.left.join(ldir, &l.name), &rel_path, Side::Left, ctx);
             }
         }
         (None, Some(r)) => {
             entry.status = EntryStatus::RightOnly;
             entry.is_dir = r.meta.is_dir;
             if r.meta.is_dir && ctx.opts.recursive {
-                entry.children = orphan_tree(&rdir.join(&r.name), &rel_path, Side::Right, ctx);
+                entry.children = orphan_tree(&ctx.right.join(rdir, &r.name), &rel_path, Side::Right, ctx);
             }
         }
         (Some(l), Some(r)) if l.meta.is_dir != r.meta.is_dir => {
@@ -398,7 +391,8 @@ fn compare_pair(
         (Some(l), Some(r)) if l.meta.is_dir => {
             entry.is_dir = true;
             if ctx.opts.recursive {
-                match compare_dirs(&ldir.join(&l.name), &rdir.join(&r.name), &rel_path, ctx) {
+                let (ld, rd) = (ctx.left.join(ldir, &l.name), ctx.right.join(rdir, &r.name));
+                match compare_dirs(&ld, &rd, &rel_path, ctx) {
                     Ok(children) => {
                         let all_same = children.iter().all(|c| c.status == EntryStatus::Same);
                         entry.status = if all_same {
@@ -416,7 +410,7 @@ fn compare_pair(
             }
         }
         (Some(l), Some(r)) => {
-            let (lp, rp) = (ldir.join(&l.name), rdir.join(&r.name));
+            let (lp, rp) = (ctx.left.join(ldir, &l.name), ctx.right.join(rdir, &r.name));
             match compare_file_pair(&lp, &rp, &l.meta, &r.meta, ctx) {
                 Ok(true) => entry.status = EntryStatus::Same,
                 Ok(false) => {
@@ -456,18 +450,31 @@ pub fn compare_folders(
     right: impl AsRef<Path>,
     opts: &FolderCompareOptions,
 ) -> Result<FolderCompareResult> {
+    let (left, right) = (left.as_ref().to_string_lossy(), right.as_ref().to_string_lossy());
+    compare_folders_with(&LocalFs, &left, &LocalFs, &right, opts)
+}
+
+/// Compares two folders that may live on different file systems.
+pub fn compare_folders_with(
+    left_fs: &dyn Vfs,
+    left: &str,
+    right_fs: &dyn Vfs,
+    right: &str,
+    opts: &FolderCompareOptions,
+) -> Result<FolderCompareResult> {
     let started = Instant::now();
-    let (left, right) = (left.as_ref(), right.as_ref());
     let ctx = Ctx {
         opts,
         exclude: build_globset(&opts.exclude)?,
+        left: left_fs,
+        right: right_fs,
     };
     let entries = compare_dirs(left, right, "", &ctx)?;
     let mut stats = FolderStats::default();
     tally(&entries, &mut stats);
     Ok(FolderCompareResult {
-        left_root: left.display().to_string(),
-        right_root: right.display().to_string(),
+        left_root: left.to_owned(),
+        right_root: right.to_owned(),
         entries,
         stats,
         elapsed_ms: started.elapsed().as_millis(),

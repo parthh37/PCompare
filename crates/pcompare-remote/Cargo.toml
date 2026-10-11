@@ -1,0 +1,41 @@
+[package]
+name = "pcompare-remote"
+description = "Connection profiles and remote file systems (S3, OneDrive, Dropbox, FTP, SFTP, ...) for PCompare"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+pcompare-core = { path = "../pcompare-core" }
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+opendal = { version = "0.59", default-features = false, features = [
+    "http-transport-reqwest",
+    "executors-tokio",
+    "blocking",
+    "layers-retry",
+    "layers-timeout",
+    "services-s3",
+    "services-azblob",
+    "services-gcs",
+    "services-b2",
+    "services-ftp",
+    "services-webdav",
+    "services-onedrive",
+    "services-dropbox",
+    "services-gdrive",
+] }
+russh = "0.64"
+russh-sftp = "3"
+tokio = { version = "1", features = ["rt-multi-thread", "net", "time", "io-util", "sync", "macros"] }
+tokio-util = { version = "0.7", features = ["io-util"] }
+keyring = "4"
+reqwest = { version = "0.13", default-features = false, features = ["rustls", "json", "form"] }
+sha2 = "0.10"
+base64 = "0.22"
+rand = "0.9"
+
+[dev-dependencies]
+tempfile = "3"
