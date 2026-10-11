@@ -1,3 +1,19 @@
+import {
+  ArrowLeft,
+  ArrowRight,
+  ChevronDown,
+  ChevronRight,
+  ChevronsDownUp,
+  ChevronsUpDown,
+  Equal,
+  EqualNot,
+  File,
+  Folder,
+  FolderSync,
+  RefreshCw,
+  TriangleAlert,
+  type LucideIcon,
+} from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   api,
@@ -27,17 +43,19 @@ interface Props {
   right: string;
   onPathsChange: (left: string, right: string) => void;
   onOpenFiles: (left: string, right: string) => void;
+  /** Opens a Folder Sync session on the same two folders. */
+  onOpenSync: (left: string, right: string) => void;
   settings?: Partial<FolderSettings>;
   onSettingsChange?: (s: FolderSettings) => void;
 }
 
-const STATUS_ICON: Record<EntryStatus, string> = {
-  same: "=",
-  different: "≠",
-  leftOnly: "◀",
-  rightOnly: "▶",
-  typeMismatch: "⚠",
-  error: "⚠",
+const STATUS_ICON: Record<EntryStatus, LucideIcon> = {
+  same: Equal,
+  different: EqualNot,
+  leftOnly: ArrowLeft,
+  rightOnly: ArrowRight,
+  typeMismatch: TriangleAlert,
+  error: TriangleAlert,
 };
 
 const DEFAULT_EXCLUDE = ".git, node_modules";
@@ -84,7 +102,7 @@ interface FlatRow {
   depth: number;
 }
 
-export function FolderCompare({ left, right, onPathsChange, onOpenFiles, settings, onSettingsChange }: Props) {
+export function FolderCompare({ left, right, onPathsChange, onOpenFiles, onOpenSync, settings, onSettingsChange }: Props) {
   const [criteria, setCriteria] = useState<CompareCriteria>(settings?.criteria ?? "sizeAndTimestamp");
   const [includeHidden, setIncludeHidden] = useState(settings?.includeHidden ?? true);
   const [excludeText, setExcludeText] = useState(settings?.exclude ?? DEFAULT_EXCLUDE);
@@ -172,14 +190,16 @@ export function FolderCompare({ left, right, onPathsChange, onOpenFiles, setting
                 toggle(e.relPath);
               }}
             >
-              {expanded.has(e.relPath) ? "▾" : "▸"}
+              {expanded.has(e.relPath) ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
             </span>
           ) : (
             <span className="chevron" />
           )}
           {meta && (
             <>
-              <span className="ficon">{e.isDir ? "📁" : "📄"}</span>
+              <span className="ficon">
+                {e.isDir ? <Folder size={14} className="ic-folder" /> : <File size={14} className="ic-file" />}
+              </span>
               {e.name}
             </>
           )}
@@ -192,6 +212,7 @@ export function FolderCompare({ left, right, onPathsChange, onOpenFiles, setting
 
   const renderRow = (i: number) => {
     const { entry: e, depth } = flat[i];
+    const StatusIcon = STATUS_ICON[e.status];
     return (
       <div
         className={`frow s-${e.status}${selected === e.relPath ? " selected" : ""}`}
@@ -200,7 +221,9 @@ export function FolderCompare({ left, right, onPathsChange, onOpenFiles, setting
         title={e.error ?? undefined}
       >
         {renderSide(e, "left", depth)}
-        <div className="fcell status">{STATUS_ICON[e.status]}</div>
+        <div className="fcell status">
+          <StatusIcon size={13} />
+        </div>
         {renderSide(e, "right", depth)}
       </div>
     );
@@ -225,8 +248,12 @@ export function FolderCompare({ left, right, onPathsChange, onOpenFiles, setting
           ))}
         </div>
         <span className="sep" />
-        <button onClick={() => result && setExpanded(allDirs(result.entries))}>Expand all</button>
-        <button onClick={() => setExpanded(new Set())}>Collapse all</button>
+        <button onClick={() => result && setExpanded(allDirs(result.entries))} title="Expand all">
+          <ChevronsUpDown size={14} /> Expand
+        </button>
+        <button onClick={() => setExpanded(new Set())} title="Collapse all">
+          <ChevronsDownUp size={14} /> Collapse
+        </button>
         <span className="sep" />
         <label>
           Compare by
@@ -252,7 +279,10 @@ export function FolderCompare({ left, right, onPathsChange, onOpenFiles, setting
           />
         </label>
         <button onClick={run} title="Refresh">
-          ⟳ Refresh
+          <RefreshCw size={14} /> Refresh
+        </button>
+        <button onClick={() => left && right && onOpenSync(left, right)} disabled={!left || !right} title="Synchronize these folders">
+          <FolderSync size={14} /> Sync…
         </button>
       </div>
 

@@ -1,3 +1,4 @@
+import { ArrowLeft, ArrowRight, GitFork, Save } from "lucide-react";
 import { useState } from "react";
 import { api, errorMessage, type SavedKind, type SavedSession } from "../lib/api";
 import { Modal } from "./Modal";
@@ -6,6 +7,8 @@ interface Props {
   kind: SavedKind;
   left: string;
   right: string;
+  base?: string;
+  output?: string;
   settings: unknown;
   /** Set when the tab was opened from (or already saved as) a session. */
   sessionId?: string;
@@ -14,7 +17,18 @@ interface Props {
   onClose: () => void;
 }
 
-export function SaveSessionDialog({ kind, left, right, settings, sessionId, defaultName, onSaved, onClose }: Props) {
+export function SaveSessionDialog({
+  kind,
+  left,
+  right,
+  base,
+  output,
+  settings,
+  sessionId,
+  defaultName,
+  onSaved,
+  onClose,
+}: Props) {
   const [name, setName] = useState(defaultName);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -24,7 +38,16 @@ export function SaveSessionDialog({ kind, left, right, settings, sessionId, defa
     setBusy(true);
     setError(null);
     try {
-      const saved = await api.saveSession({ id: asNew ? undefined : sessionId, name, kind, left, right, settings });
+      const saved = await api.saveSession({
+        id: asNew ? undefined : sessionId,
+        name,
+        kind,
+        left,
+        right,
+        base: base || undefined,
+        output: output || undefined,
+        settings,
+      });
       onSaved(saved);
       onClose();
     } catch (e) {
@@ -63,8 +86,22 @@ export function SaveSessionDialog({ kind, left, right, settings, sessionId, defa
         />
       </label>
       <div className="save-summary muted">
-        <div title={left}>◀ {left || "—"}</div>
-        <div title={right}>▶ {right || "—"}</div>
+        <div title={left}>
+          <ArrowLeft size={12} /> {left || "—"}
+        </div>
+        {base && (
+          <div title={base}>
+            <GitFork size={12} /> {base}
+          </div>
+        )}
+        <div title={right}>
+          <ArrowRight size={12} /> {right || "—"}
+        </div>
+        {output && (
+          <div title={output}>
+            <Save size={12} /> {output}
+          </div>
+        )}
       </div>
       {error && <div className="banner error">{error}</div>}
     </Modal>

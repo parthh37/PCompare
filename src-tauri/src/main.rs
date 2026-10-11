@@ -1,6 +1,12 @@
 // Hide the console window on Windows release builds.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod merge;
+mod meta;
+mod picture;
+mod sync;
+mod table;
+
 use pcompare_core::folder::{self, FolderCompareOptions, FolderCompareResult};
 use pcompare_core::hex::{self, HexChunk, HexSummary};
 use pcompare_core::session::{SavedSession, SessionInput, SessionStore};
@@ -314,6 +320,11 @@ fn main() {
             sign_in_profile,
             open_provider_console,
             remote_list,
+            // --- text compare editing + text merge (merge.rs) ---
+            // --- table compare (table.rs) ---
+            // --- picture compare (picture.rs) ---
+            // --- folder sync + folder merge (sync.rs) ---
+            // --- registry / version / mp3 (meta.rs) ---
         ])
         .run(tauri::generate_context!())
         .expect("error while running PCompare");

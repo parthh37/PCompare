@@ -1,6 +1,15 @@
 [workspace]
 resolver = "2"
-members = ["crates/pcompare-core", "crates/pcompare-remote", "src-tauri"]
+members = [
+    "crates/pcompare-core",
+    "crates/pcompare-remote",
+    "crates/pcompare-merge",
+    "crates/pcompare-table",
+    "crates/pcompare-picture",
+    "crates/pcompare-sync",
+    "crates/pcompare-meta",
+    "src-tauri",
+]
 
 [workspace.package]
 version = "0.1.0"
