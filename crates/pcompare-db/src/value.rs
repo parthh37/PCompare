@@ -139,9 +139,10 @@ pub struct ValueRules {
 /// This is the heart of Data Compare: rows that differ only in ways this
 /// function forgives are reported as identical, and no sync statement is
 /// generated for them.
-// TODO(you): this default is deliberately strict apart from numbers. Decide
-// how forgiving PCompare should be by default — see the README "Data compare
-// rules" notes and the `values_equal_*` tests below.
+///
+/// The default is deliberately strict apart from numbers (which compare by
+/// value across types): case, padding and time precision only count as equal
+/// when the user opts in through [`ValueRules`].
 pub fn values_equal(a: &Value, b: &Value, rules: &ValueRules) -> bool {
     use Value::*;
     match (a, b) {
