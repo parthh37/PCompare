@@ -1,0 +1,15 @@
+/* Per-side encoding selector in the Text Compare info bar. */
+.tc-encoding {
+  font-size: 11px;
+  padding: 0 4px;
+  height: 18px;
+  max-width: 200px;
+  margin-left: 6px;
+  vertical-align: middle;
+}
+/* One info-bar column: file facts followed by the picker. */
+.tc-side-info {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+}

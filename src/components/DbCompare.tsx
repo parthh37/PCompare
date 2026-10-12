@@ -62,6 +62,7 @@ import {
   type TableDataSummary,
 } from "../lib/dbApi";
 import { basename } from "../lib/format";
+import { matches, shortcutLabel } from "../lib/keymap";
 import { mergeApi } from "../lib/mergeApi";
 import type { CompareProps } from "../lib/sessionProps";
 import { DbConnectionDialog, describeConfig, EngineBadge, SQLITE_FILTERS } from "./DbConnectionDialog";
@@ -282,7 +283,7 @@ export function DbCompare({ left, right, onPathsChange, settings, onSettingsChan
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       // Inactive tabs stay mounted but hidden; only the visible one reacts.
-      if (e.key !== "F5" || !root.current?.offsetParent) return;
+      if (!matches(e, "database.refresh") || !root.current?.offsetParent) return;
       e.preventDefault();
       compare(mode);
     };
@@ -620,7 +621,7 @@ export function DbCompare({ left, right, onPathsChange, settings, onSettingsChan
           onNew={() => setEditing({ side: "right" })}
           onEdit={(c) => setEditing({ side: "right", connection: c })}
         />
-        <button className="primary" disabled={!ready || isBusy} onClick={() => compare(mode)} title="Compare (F5)">
+        <button className="primary" disabled={!ready || isBusy} onClick={() => compare(mode)} title={`Compare (${shortcutLabel("database.refresh")})`}>
           {isBusy ? <LoaderCircle size={14} className="db-spin" /> : <Play size={14} />} Compare
         </button>
       </div>

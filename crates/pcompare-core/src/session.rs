@@ -24,6 +24,9 @@ pub const SESSION_KINDS: &[&str] = &[
     "version",
     "mp3",
     "database",
+    // bc5:editor-patch — Text Edit (one file) and Patch Viewer
+    "edit",
+    "patch",
 ];
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -80,7 +83,8 @@ pub struct SessionStore {
 /// `taken` holds the names of all *other* sessions (the one being updated is
 /// excluded). Like Explorer, a clash gets the first free ` (n)` suffix, so a
 /// save never silently replaces another session.
-fn resolve_name_conflict(desired: &str, taken: &[&str]) -> String {
+// bc5:app-shell — shared with workspace names.
+pub(crate) fn resolve_name_conflict(desired: &str, taken: &[&str]) -> String {
     let free = |name: &str| !taken.iter().any(|t| t.eq_ignore_ascii_case(name));
     if free(desired) {
         return desired.to_owned();
@@ -188,6 +192,41 @@ impl SessionStore {
         file.sessions.retain(|s| s.id != id);
         write_json(&self.path, &file)
     }
+
+    // bc5:app-shell — "auto-save sessions on close".
+    /// Writes a closing tab's current paths and settings back into its saved
+    /// session, keeping the session's name (it may have been renamed on Home
+    /// meanwhile). Returns `None` when the session was deleted in between,
+    /// rather than resurrecting it.
+    pub fn autosave(&self, id: &str, input: SessionInput) -> Result<Option<SavedSession>> {
+        if !SESSION_KINDS.contains(&input.kind.as_str()) {
+            return Err(CoreError::Other(format!("unknown session kind `{}`", input.kind)));
+        }
+        let _g = self.guard();
+        let mut file: SessionFile = read_json(&self.path)?;
+        let Some(existing) = file.sessions.iter_mut().find(|s| s.id == id) else {
+            return Ok(None);
+        };
+        let changed = existing.kind != input.kind
+            || existing.left != input.left
+            || existing.right != input.right
+            || existing.base != input.base
+            || existing.output != input.output
+            || existing.settings != input.settings;
+        if !changed {
+            return Ok(Some(existing.clone()));
+        }
+        existing.kind = input.kind;
+        existing.left = input.left;
+        existing.right = input.right;
+        existing.base = input.base;
+        existing.output = input.output;
+        existing.settings = input.settings;
+        existing.modified_ms = now_ms();
+        let saved = existing.clone();
+        write_json(&self.path, &file)?;
+        Ok(Some(saved))
+    }
 }
 
 #[cfg(test)]
@@ -242,6 +281,32 @@ mod tests {
         same.id = Some(a.id.clone());
         assert_eq!(store.save(same).unwrap().name, "Nightly");
         assert_eq!(store.rename(&a.id, "Nightly (2)").unwrap().name, "Nightly (2) (2)");
+    }
+
+    // bc5:app-shell
+    #[test]
+    fn autosave_updates_contents_but_keeps_the_name() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = SessionStore::new(dir.path().join("s.json"));
+        let a = store.save(input("Nightly")).unwrap();
+        store.rename(&a.id, "Renamed on Home").unwrap();
+
+        let mut closing = input("stale tab title");
+        closing.right = "/new-right".into();
+        closing.settings = serde_json::json!({ "criteria": "size" });
+        let saved = store.autosave(&a.id, closing.clone()).unwrap().unwrap();
+        assert_eq!(saved.name, "Renamed on Home");
+        assert_eq!(saved.right, "/new-right");
+        assert_eq!(saved.settings["criteria"], "size");
+
+        // Unchanged contents don't bump the modified time.
+        let again = store.autosave(&a.id, closing.clone()).unwrap().unwrap();
+        assert_eq!(again.modified_ms, saved.modified_ms);
+
+        // A session deleted meanwhile is not recreated.
+        store.delete(&a.id).unwrap();
+        assert!(store.autosave(&a.id, closing).unwrap().is_none());
+        assert!(store.list().unwrap().is_empty());
     }
 
     #[test]

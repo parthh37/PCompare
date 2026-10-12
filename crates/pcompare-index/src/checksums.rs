@@ -220,6 +220,7 @@ mod tests {
             size,
             modified_ms,
             is_dir: false,
+            ..Default::default() // bc5:folder-engine
         }
     }
 

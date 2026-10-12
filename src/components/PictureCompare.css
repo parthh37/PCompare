@@ -21,7 +21,7 @@
   min-width: 52px;
 }
 .picture-compare .toolbar button.active-toggle {
-  background: rgba(91, 156, 255, 0.18);
+  background: var(--sel-bg-strong);
   border-color: var(--accent);
 }
 .picture-compare .pic-warn {
@@ -78,8 +78,8 @@
   image-rendering: pixelated;
 }
 .pic-img.checker {
-  background-color: #2a2f3a;
-  background-image: conic-gradient(#3a414e 25%, transparent 0 50%, #3a414e 0 75%, transparent 0);
+  background-color: var(--checker-a);
+  background-image: conic-gradient(var(--checker-b) 25%, transparent 0 50%, var(--checker-b) 0 75%, transparent 0);
   background-size: 16px 16px;
 }
 .pic-mask {
@@ -114,4 +114,231 @@
   border-radius: 6px;
   background: var(--accent);
   box-shadow: 0 0 0 2px var(--bg);
+}
+
+/* ---------- per-side transforms (in the info bar) ---------- */
+.pic-sides {
+  gap: 12px;
+  padding: 3px 10px;
+}
+.pic-side {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+.pic-side .fileinfo {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.pic-transform {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  flex-shrink: 0;
+}
+.pic-transform .icon-btn {
+  padding: 1px 5px;
+}
+.pic-transform select {
+  font-size: 11.5px;
+  padding: 1px 4px;
+}
+.pic-transform select.active {
+  border-color: var(--accent);
+  background: var(--sel-bg-strong);
+}
+.pic-transform .pic-num {
+  width: 52px;
+  font-size: 11.5px;
+  padding: 1px 4px;
+}
+.picture-compare .pic-side button.active-toggle,
+.picture-compare .pic-loupe button.active-toggle {
+  background: var(--sel-bg-strong);
+  border-color: var(--accent);
+}
+
+/* ---------- per-channel tolerance ---------- */
+.pic-channels {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.picture-compare .pic-chan {
+  gap: 3px;
+  font-family: var(--mono);
+  font-size: 11.5px;
+}
+.picture-compare .pic-chan .pic-num {
+  width: 52px;
+}
+.picture-compare .pic-chan-R {
+  color: #f87171;
+}
+.picture-compare .pic-chan-G {
+  color: #4ade80;
+}
+.picture-compare .pic-chan-B {
+  color: #60a5fa;
+}
+.pic-badge {
+  min-width: 16px;
+  padding: 0 4px;
+  border-radius: 8px;
+  background: var(--accent);
+  color: var(--on-accent);
+  font-size: 10.5px;
+  line-height: 16px;
+  text-align: center;
+}
+
+/* ---------- loupe ---------- */
+.pic-probe-mark {
+  position: absolute;
+  box-sizing: border-box;
+  border: 1px solid #fff;
+  outline: 1px solid #000;
+  pointer-events: none;
+  z-index: 3;
+}
+.pic-loupe {
+  position: absolute;
+  right: 14px;
+  bottom: 14px;
+  z-index: 20;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 10px 30px var(--shadow);
+  font-size: 11.5px;
+  cursor: default;
+}
+.pic-loupe-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 600;
+}
+.pic-loupe-head .icon-btn {
+  padding: 1px 5px;
+}
+.pic-loupe-match {
+  padding: 0 6px;
+  border-radius: 8px;
+  font-weight: 500;
+  font-size: 10.5px;
+  line-height: 16px;
+}
+.pic-loupe-match.same {
+  color: var(--ok);
+  background: var(--add-bg);
+}
+.pic-loupe-match.replaced {
+  color: var(--unimportant);
+  background: var(--accent-tint);
+}
+.pic-loupe-match.different {
+  color: var(--different);
+  background: var(--del-bg);
+}
+.pic-loupe-grids {
+  display: flex;
+  gap: 8px;
+}
+.pic-loupe-grid {
+  display: block;
+  border: 1px solid var(--border);
+  image-rendering: pixelated;
+}
+.pic-loupe-value {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+}
+.pic-loupe-value .mono {
+  font-family: var(--mono);
+}
+.pic-loupe-side {
+  width: 34px;
+  color: var(--muted);
+}
+.pic-loupe-empty {
+  width: 250px;
+  padding: 10px 0;
+  text-align: center;
+}
+.pic-swatch {
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  background-color: var(--checker-a);
+  background-image: conic-gradient(var(--checker-b) 25%, transparent 0 50%, var(--checker-b) 0 75%, transparent 0);
+  background-size: 8px 8px;
+  overflow: hidden;
+}
+.pic-swatch > span {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+.pic-swatch > span.none {
+  background: var(--hatch);
+}
+
+/* ---------- replaced colours dialog ---------- */
+.pic-rules-help {
+  margin: 0 0 10px;
+  font-size: 12px;
+}
+.pic-rules {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.pic-rule {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.pic-rule.disabled .pic-colorfield,
+.pic-rule.disabled label {
+  opacity: 0.5;
+}
+.pic-rule label {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--muted);
+}
+.pic-rule .pic-num {
+  width: 56px;
+}
+.pic-colorfield {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.pic-colorfield input[type="color"] {
+  width: 28px;
+  height: 24px;
+  padding: 0 2px;
+  cursor: pointer;
+}
+.pic-hex {
+  width: 92px;
+  font-family: var(--mono);
+  font-size: 12px;
+}
+.pic-hex.invalid {
+  border-color: var(--different);
 }

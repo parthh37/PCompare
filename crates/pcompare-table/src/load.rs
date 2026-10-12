@@ -49,6 +49,110 @@ pub fn detect_format(path: &Path) -> SourceFormat {
 
 /// Loads one side of a table comparison.
 pub fn load_table(path: &Path, opts: &LoadOptions) -> Result<Table> {
+    check_size(path)?;
+    let sheet = opts.sheet.unwrap_or(0);
+    let format = detect_format(path);
+    if format == SourceFormat::Workbook {
+        return load_workbook(path, sheet);
+    }
+
+    let (text, encoding) = read_text(path)?;
+    let mut table = if format == SourceFormat::Html || looks_like_html(&text) {
+        parse_html(&text, sheet).map_err(|e| in_file(path, e))?
+    } else {
+        parse_text(path, &text, opts.delimiter)?
+    };
+    table.source.encoding = Some(encoding);
+    Ok(table)
+}
+
+/// Every worksheet (workbooks) or `<table>` (HTML) of one file, for comparing
+/// all of them at once. Worksheets are read on demand; delimited text is a
+/// single unnamed table.
+pub struct TableBook {
+    pub format: SourceFormat,
+    /// Names used to pair sheets across files: sheet names, HTML captions /
+    /// ids (`None` for unnamed tables and delimited text).
+    pub names: Vec<Option<String>>,
+    /// Display labels, as in [`TableSource::sheets`] (one entry for delimited text).
+    pub labels: Vec<String>,
+    path: std::path::PathBuf,
+    inner: BookInner,
+}
+
+enum BookInner {
+    Workbook(Box<Workbook>, Vec<String>),
+    /// Already parsed; each table is handed out once.
+    Tables(Vec<Option<Table>>),
+}
+
+impl TableBook {
+    pub fn open(path: &Path, delimiter: Option<char>) -> Result<Self> {
+        check_size(path)?;
+        let book = |format, names, labels, inner| TableBook {
+            format,
+            names,
+            labels,
+            path: path.to_path_buf(),
+            inner,
+        };
+        if detect_format(path) == SourceFormat::Workbook {
+            let (workbook, sheets) = open_workbook(path)?;
+            let names = sheets.iter().cloned().map(Some).collect();
+            return Ok(book(
+                SourceFormat::Workbook,
+                names,
+                sheets.clone(),
+                BookInner::Workbook(Box::new(workbook), sheets),
+            ));
+        }
+        let (text, encoding) = read_text(path)?;
+        let tables = if detect_format(path) == SourceFormat::Html || looks_like_html(&text) {
+            parse_html_all(&text).map_err(|e| in_file(path, e))?
+        } else {
+            vec![(None, parse_text(path, &text, delimiter)?)]
+        };
+        let format = tables[0].1.source.format;
+        let labels = match format {
+            SourceFormat::Delimited => vec![file_name(path)],
+            _ => tables[0].1.source.sheets.clone(),
+        };
+        let mut names = Vec::with_capacity(tables.len());
+        let mut loaded = Vec::with_capacity(tables.len());
+        for (name, mut table) in tables {
+            table.source.encoding = Some(encoding.clone());
+            names.push(name);
+            loaded.push(Some(table));
+        }
+        Ok(book(format, names, labels, BookInner::Tables(loaded)))
+    }
+
+    pub fn len(&self) -> usize {
+        self.names.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.names.is_empty()
+    }
+
+    /// Loads sheet `i` (each HTML / delimited table can be taken once).
+    pub fn load(&mut self, i: usize) -> Result<Table> {
+        match &mut self.inner {
+            BookInner::Workbook(wb, sheets) => read_worksheet(&self.path, wb, sheets.clone(), i),
+            BookInner::Tables(tables) => tables
+                .get_mut(i)
+                .and_then(Option::take)
+                .ok_or_else(|| in_file(&self.path, format!("table {} was already read", i + 1))),
+        }
+    }
+}
+
+fn file_name(path: &Path) -> String {
+    path.file_name()
+        .map_or_else(|| path.display().to_string(), |n| n.to_string_lossy().into_owned())
+}
+
+fn check_size(path: &Path) -> Result<()> {
     let size = std::fs::metadata(path).map_err(|e| CoreError::io(path, e))?.len();
     if size > MAX_FILE_BYTES {
         return Err(CoreError::Other(format!(
@@ -57,30 +161,26 @@ pub fn load_table(path: &Path, opts: &LoadOptions) -> Result<Table> {
             MAX_FILE_BYTES >> 20
         )));
     }
-    let sheet = opts.sheet.unwrap_or(0);
-    let format = detect_format(path);
-    if format == SourceFormat::Workbook {
-        return load_workbook(path, sheet);
-    }
+    Ok(())
+}
 
+/// Reads and decodes a text (delimited / HTML) file; returns the encoding name.
+fn read_text(path: &Path) -> Result<(String, String)> {
     let bytes = std::fs::read(path).map_err(|e| CoreError::io(path, e))?;
     if textfile::is_probably_binary(&bytes) {
         return Err(in_file(path, "file looks binary, not delimited text or HTML"));
     }
     let (text, encoding, _) = textfile::decode(&bytes);
-    let mut table = if format == SourceFormat::Html || looks_like_html(&text) {
-        parse_html(&text, sheet)
-    } else {
-        let delimiter = match opts.delimiter {
-            Some(c) if c.is_ascii() => Some(c as u8),
-            Some(c) => return Err(CoreError::Other(format!("delimiter {c:?} must be an ASCII character"))),
-            None => None,
-        };
-        parse_delimited(&text, delimiter, default_delimiter(path))
-    }
-    .map_err(|e| in_file(path, e))?;
-    table.source.encoding = Some(encoding.name().to_string());
-    Ok(table)
+    Ok((text, encoding.name().to_string()))
+}
+
+fn parse_text(path: &Path, text: &str, delimiter: Option<char>) -> Result<Table> {
+    let delimiter = match delimiter {
+        Some(c) if c.is_ascii() => Some(c as u8),
+        Some(c) => return Err(CoreError::Other(format!("delimiter {c:?} must be an ASCII character"))),
+        None => None,
+    };
+    parse_delimited(text, delimiter, default_delimiter(path)).map_err(|e| in_file(path, e))
 }
 
 fn in_file(path: &Path, message: impl std::fmt::Display) -> CoreError {
@@ -238,12 +338,23 @@ pub fn parse_delimited(text: &str, delimiter: Option<u8>, fallback: u8) -> Resul
 /// Reads one worksheet. Cells left of / above the used range are padded so
 /// columns and row numbers line up with what the spreadsheet app shows.
 pub fn load_workbook(path: &Path, sheet: usize) -> Result<Table> {
-    let mut workbook = calamine::open_workbook_auto(path).map_err(|e| in_file(path, e))?;
+    let (mut workbook, names) = open_workbook(path)?;
+    let sheet = if sheet < names.len() { sheet } else { 0 };
+    read_worksheet(path, &mut workbook, names, sheet)
+}
+
+type Workbook = calamine::Sheets<std::io::BufReader<std::fs::File>>;
+
+fn open_workbook(path: &Path) -> Result<(Workbook, Vec<String>)> {
+    let workbook = calamine::open_workbook_auto(path).map_err(|e| in_file(path, e))?;
     let names = workbook.sheet_names();
     if names.is_empty() {
         return Err(in_file(path, "workbook has no worksheets"));
     }
-    let sheet = if sheet < names.len() { sheet } else { 0 };
+    Ok((workbook, names))
+}
+
+fn read_worksheet(path: &Path, workbook: &mut Workbook, names: Vec<String>, sheet: usize) -> Result<Table> {
     let range = workbook
         .worksheet_range(&names[sheet])
         .map_err(|e| in_file(path, format!("sheet \"{}\": {e}", names[sheet])))?;
@@ -301,8 +412,28 @@ pub fn parse_html(html: &str, index: usize) -> Result<Table> {
     }
     let labels = tables.iter().enumerate().map(|(i, t)| table_label(i, t)).collect();
     let index = if index < tables.len() { index } else { 0 };
+    Ok(read_html_table(&tables[index], labels, index))
+}
+
+/// Every `<table>` in the document, with its pairing name (caption or `id`).
+fn parse_html_all(html: &str) -> Result<Vec<(Option<String>, Table)>> {
+    let doc = Document::from(html);
+    let selection = doc.select("table");
+    let tables = selection.nodes();
+    if tables.is_empty() {
+        return Err(CoreError::Other("no <table> element found".into()));
+    }
+    let labels: Vec<String> = tables.iter().enumerate().map(|(i, t)| table_label(i, t)).collect();
+    Ok(tables
+        .iter()
+        .enumerate()
+        .map(|(i, t)| (table_name(t), read_html_table(t, labels.clone(), i)))
+        .collect())
+}
+
+fn read_html_table(table: &NodeRef, labels: Vec<String>, index: usize) -> Table {
     let mut builder = Builder::new();
-    for (i, tr) in table_rows(&tables[index]).iter().enumerate() {
+    for (i, tr) in table_rows(table).iter().enumerate() {
         let mut cells = Vec::new();
         for cell in tr
             .element_children()
@@ -321,7 +452,7 @@ pub fn parse_html(html: &str, index: usize) -> Result<Table> {
             break;
         }
     }
-    Ok(builder.finish(SourceFormat::Html, labels, index, None))
+    builder.finish(SourceFormat::Html, labels, index, None)
 }
 
 fn is_tag(node: &NodeRef, tag: &str) -> bool {
@@ -340,15 +471,20 @@ fn table_rows<'a>(table: &NodeRef<'a>) -> Vec<NodeRef<'a>> {
     rows
 }
 
-/// "Table 2: Caption (14 rows)" — caption, else `id`, else just the number.
-fn table_label(i: usize, table: &NodeRef) -> String {
-    let caption = table
+/// A table's caption, else its `id`.
+fn table_name(table: &NodeRef) -> Option<String> {
+    table
         .element_children()
         .into_iter()
         .find(|c| is_tag(c, "caption"))
         .map(|c| collapse_whitespace(&c.text()))
         .filter(|s| !s.is_empty())
-        .or_else(|| table.attr("id").map(|s| s.to_string()).filter(|s| !s.is_empty()));
+        .or_else(|| table.attr("id").map(|s| s.to_string()).filter(|s| !s.is_empty()))
+}
+
+/// "Table 2: Caption (14 rows)" — caption, else `id`, else just the number.
+fn table_label(i: usize, table: &NodeRef) -> String {
+    let caption = table_name(table);
     let rows = table_rows(table).len();
     let plural = if rows == 1 { "" } else { "s" };
     match caption {

@@ -44,6 +44,10 @@ export interface FolderMergeSettings {
   compare: ComparePreset;
   exclude: string;
   includeHidden: boolean;
+  /** Three-way: merge text files changed on both sides line by line. */
+  autoMergeText: boolean;
+  /** Two-way: propose the newer of two differing files instead of a conflict. */
+  takeNewer: boolean;
 }
 
 interface Props extends MergeProps<FolderMergeSettings> {
@@ -59,6 +63,8 @@ const DEFAULTS: FolderMergeSettings = {
   compare: "binary",
   exclude: DEFAULT_FOLDER_SETTINGS.exclude,
   includeHidden: true,
+  autoMergeText: true,
+  takeNewer: true,
 };
 
 const CLASS_LABEL: Record<MergeClass, string> = {
@@ -78,6 +84,18 @@ const CLASS_LABEL: Record<MergeClass, string> = {
   typeConflict: "File vs folder",
   merged: "Changes on both",
   error: "Error",
+  leftOnly: "Left only",
+  rightOnly: "Right only",
+  leftNewer: "Left newer",
+  rightNewer: "Right newer",
+  different: "Different",
+  autoMerged: "Text merged",
+};
+
+/** Two-way merges have no base, so a few classes read differently. */
+const TWO_WAY_LABEL: Partial<Record<MergeClass, string>> = {
+  unchanged: "Same",
+  merged: "Differences",
 };
 
 const ACTION_LABEL: Record<MergeAction, string> = {
@@ -86,6 +104,7 @@ const ACTION_LABEL: Record<MergeAction, string> = {
   takeBase: "Take base",
   delete: "Delete",
   skip: "Skip",
+  mergeText: "Merged automatically",
 };
 
 const TRASH_NAME = navigator.userAgent.includes("Windows") ? "Recycle Bin" : "Trash";
@@ -94,6 +113,7 @@ const isConflict = (e: FolderMergeEntry) => CONFLICT_CLASSES.has(e.class);
 
 function available(e: FolderMergeEntry): MergeAction[] {
   const out: MergeAction[] = [];
+  if (e.class === "autoMerged") out.push("mergeText");
   if (e.left) out.push("takeLeft");
   if (e.right) out.push("takeRight");
   if (e.base) out.push("takeBase");
@@ -141,12 +161,25 @@ function ancestors(rel: string): string[] {
 /** How one side's file relates to the base version, for the side columns. */
 type SideState = "same" | "changed" | "added" | "deleted" | "absent";
 
-function sideState(e: FolderMergeEntry, side: "left" | "right"): SideState {
+function sideState(e: FolderMergeEntry, side: "left" | "right", twoWay: boolean): SideState {
+  if (twoWay) {
+    // Without a base: an orphan counts as added, a differing file as changed.
+    if (!e[side]) return "absent";
+    if (!e[side === "left" ? "right" : "left"]) return "added";
+    return e.isDir || e.class === "unchanged" ? "same" : "changed";
+  }
   if (!e[side]) return e.base ? "deleted" : "absent";
   if (!e.base) return "added";
   if (e.isDir) return "same";
   const own = side === "left" ? "leftChanged" : "rightChanged";
-  const changed: MergeClass[] = [own, "bothChangedSame", "conflict", "deleteModifyConflict", "typeConflict"];
+  const changed: MergeClass[] = [
+    own,
+    "bothChangedSame",
+    "conflict",
+    "autoMerged",
+    "deleteModifyConflict",
+    "typeConflict",
+  ];
   return changed.includes(e.class) ? "changed" : "same";
 }
 
@@ -209,7 +242,8 @@ export function FolderMerge({
   const seq = useRef(0);
 
   const run = useCallback(async () => {
-    if (!left || !base || !right) return;
+    // The base is optional: without it the merge is two-way.
+    if (!left || !right) return;
     const p = COMPARE_PRESETS[cfg.compare];
     const options = toEngineOptions({
       ...DEFAULT_FOLDER_SETTINGS,
@@ -223,7 +257,10 @@ export function FolderMerge({
     setLoading(true);
     setError(null);
     try {
-      const res = await syncApi.mergeCompare(base, left, right, options);
+      const res = await syncApi.mergeCompare(base, left, right, options, {
+        autoMergeText: cfg.autoMergeText,
+        takeNewer: cfg.takeNewer,
+      });
       if (mine !== seq.current) return;
       setResult(res);
       setOverrides(new Map());
@@ -238,11 +275,14 @@ export function FolderMerge({
     } finally {
       if (mine === seq.current) setLoading(false);
     }
-  }, [left, base, right, cfg.compare, cfg.exclude, cfg.includeHidden]);
+  }, [left, base, right, cfg.compare, cfg.exclude, cfg.includeHidden, cfg.autoMergeText, cfg.takeNewer]);
 
   useEffect(() => {
     run();
   }, [run]);
+
+  const twoWay = result ? result.twoWay : !base;
+  const classLabel = (c: MergeClass) => (twoWay && TWO_WAY_LABEL[c]) || CLASS_LABEL[c];
 
   const effective = useCallback((e: FolderMergeEntry) => overrides.get(e.relPath) ?? e.action, [overrides]);
 
@@ -353,13 +393,19 @@ export function FolderMerge({
   const paths = (e: FolderMergeEntry) =>
     result && {
       left: joinPath(result.leftRoot, e.relPath),
-      base: joinPath(result.baseRoot, e.relPath),
+      base: result.twoWay ? "" : joinPath(result.baseRoot, e.relPath),
       right: joinPath(result.rightRoot, e.relPath),
       output: output ? joinPath(output, e.relPath) : "",
     };
 
+  /** Files worth a Text Merge session: conflicts, automatic merges to review, two-way differences. */
   const canTextMerge = (e: FolderMergeEntry) =>
-    !!onOpenTextMerge && !e.isDir && !!e.left && !!e.base && !!e.right && e.class === "conflict";
+    !!onOpenTextMerge &&
+    !e.isDir &&
+    !!e.left &&
+    !!e.right &&
+    ((!!e.base && (e.class === "conflict" || e.class === "autoMerged")) ||
+      (twoWay && (e.class === "different" || e.class === "leftNewer" || e.class === "rightNewer")));
 
   const open = (e: FolderMergeEntry) => {
     if (e.isDir) return toggle(e.relPath);
@@ -371,7 +417,7 @@ export function FolderMerge({
 
   const renderSide = (e: FolderMergeEntry, side: "left" | "base" | "right") => {
     const meta: EntryMeta | null = e[side];
-    const state: SideState = side === "base" ? (meta ? "same" : "absent") : sideState(e, side);
+    const state: SideState = side === "base" ? (meta ? "same" : "absent") : sideState(e, side, twoWay);
     const Icon = side === "base" ? null : STATE_ICON[state];
     const tip = meta
       ? `${meta.isDir ? "Folder" : formatSize(meta.size)}${meta.modifiedMs ? ` · ${formatTime(meta.modifiedMs)}` : ""}`
@@ -384,6 +430,15 @@ export function FolderMerge({
         {meta && (meta.isDir ? <FileIcon name="" isDir size={14} /> : <span>{formatSize(meta.size)}</span>)}
       </div>
     );
+  };
+
+  const textMergeTip = (e: FolderMergeEntry) => {
+    const t = e.textMerge;
+    if (!t) return undefined;
+    const changes = `${t.changes} change${t.changes === 1 ? "" : "s"} merged line by line`;
+    return t.conflicts
+      ? `${changes}; ${t.conflicts} conflicting region${t.conflicts === 1 ? "" : "s"} left. Open in Text Merge to resolve.`
+      : `${changes} without conflicts.`;
   };
 
   const renderRow = (i: number) => {
@@ -419,18 +474,20 @@ export function FolderMerge({
           {e.name}
         </div>
         {renderSide(e, "left")}
-        {renderSide(e, "base")}
+        {!twoWay && renderSide(e, "base")}
         {renderSide(e, "right")}
         <div className="fm-cell status">
-          <span className="fm-badge">
+          <span className="fm-badge" title={textMergeTip(e)}>
             {conflict && <TriangleAlert size={11} />}
-            {CLASS_LABEL[e.class]}
+            {e.class === "autoMerged" && <GitMerge size={11} />}
+            {classLabel(e.class)}
+            {e.textMerge && e.textMerge.conflicts > 0 && <span className="fm-textconf">· {e.textMerge.conflicts} in text</span>}
           </span>
           {e.isDir && e.conflicts > 0 && <span className="fm-count">{e.conflicts}</span>}
           {canTextMerge(e) && (
             <button
               className="icon-btn fm-resolve"
-              title="Resolve in Text Merge"
+              title={e.class === "autoMerged" ? "Review the automatic merge in Text Merge" : "Open in Text Merge"}
               onClick={(ev) => {
                 ev.stopPropagation();
                 open(e);
@@ -475,6 +532,7 @@ export function FolderMerge({
       takeBase: 0,
       delete: 0,
       skip: 0,
+      mergeText: 0,
       unresolved: 0,
     };
     if (result)
@@ -513,11 +571,11 @@ export function FolderMerge({
 
   const counts = result?.counts ?? {};
   const n = (...classes: MergeClass[]) => classes.reduce((sum, c) => sum + (counts[c] ?? 0), 0);
-  const ready = !!left && !!base && !!right;
+  const ready = !!left && !!right;
   const mergeBlocked = !result || !output || remote || loading || merging;
 
   return (
-    <div className="session folder-merge" ref={root}>
+    <div className={`session folder-merge${twoWay ? " fm-two" : ""}`} ref={root}>
       <div className="toolbar">
         <div className="seg-control">
           {(
@@ -563,6 +621,24 @@ export function FolderMerge({
             ))}
           </select>
         </label>
+        {twoWay ? (
+          <label className="check" title="Propose the newer file where the two sides differ; otherwise every difference is a conflict">
+            <input type="checkbox" checked={cfg.takeNewer} onChange={(e) => update({ takeNewer: e.target.checked })} />
+            Take newer
+          </label>
+        ) : (
+          <label
+            className="check"
+            title="Merge text files changed on both sides line by line; files without conflicting lines are merged automatically"
+          >
+            <input
+              type="checkbox"
+              checked={cfg.autoMergeText}
+              onChange={(e) => update({ autoMergeText: e.target.checked })}
+            />
+            Automatically merge text files
+          </label>
+        )}
         <label className="check">
           <input
             type="checkbox"
@@ -582,7 +658,7 @@ export function FolderMerge({
             spellCheck={false}
           />
         </label>
-        <button onClick={run} disabled={!ready || loading || merging} title="Re-scan all three folders (F5)">
+        <button onClick={run} disabled={!ready || loading || merging} title="Re-scan the folders (F5)">
           <RefreshCw size={14} /> Refresh
         </button>
         <button
@@ -617,7 +693,11 @@ export function FolderMerge({
             onSubmit={() => commit()}
             onPick={(p) => commit({ [key]: p })}
             directory
-            placeholder={`${label} folder… or remote://profile/path`}
+            placeholder={
+              key === "base"
+                ? "Common ancestor folder (optional: leave empty for a two-way merge)"
+                : `${label} folder… or remote://profile/path`
+            }
           />
         ))}
         <div className="fm-output">
@@ -644,19 +724,21 @@ export function FolderMerge({
       <div className="fm-header">
         <div>Name</div>
         <div>Left</div>
-        <div>Base</div>
+        {!twoWay && <div>Base</div>}
         <div>Right</div>
         <div>Status</div>
         <div>Action</div>
       </div>
 
       <div className="session-body">
-        {loading && <div className="overlay">Comparing three folders…</div>}
+        {loading && <div className="overlay">{base ? "Comparing three folders…" : "Comparing folders…"}</div>}
         {merging && <div className="overlay">Merging…</div>}
         {error && <div className="banner error">{error}</div>}
         {!ready && !result && (
           <div className="empty-state">
-            Choose the left and right folders and their common ancestor (base).
+            Choose the left and right folders. Add their common ancestor (base) for a 3-way merge,
+            <br />
+            or leave it empty to merge the two folders directly.
             <br />
             Pick an output folder, or merge into left or right, then press Merge.
           </div>
@@ -675,10 +757,24 @@ export function FolderMerge({
             <span className={result.conflicts ? "s-different-fg" : "muted"}>
               {result.conflicts} conflict{result.conflicts === 1 ? "" : "s"}
             </span>
-            <span className="fm-left-fg">{n("leftChanged", "leftAdded", "leftDeleted")} left changes</span>
-            <span className="fm-right-fg">{n("rightChanged", "rightAdded", "rightDeleted")} right changes</span>
-            <span className="muted">{n("bothChangedSame", "bothAddedSame", "bothDeleted")} identical changes</span>
-            <span className="muted">{n("unchanged")} unchanged</span>
+            {twoWay ? (
+              <>
+                <span className="fm-left-fg">{n("leftOnly")} left only</span>
+                <span className="fm-right-fg">{n("rightOnly")} right only</span>
+                <span className="muted">
+                  {n("leftNewer")} left newer · {n("rightNewer")} right newer
+                </span>
+                <span className="muted">{n("unchanged")} same</span>
+              </>
+            ) : (
+              <>
+                <span className="fm-left-fg">{n("leftChanged", "leftAdded", "leftDeleted")} left changes</span>
+                <span className="fm-right-fg">{n("rightChanged", "rightAdded", "rightDeleted")} right changes</span>
+                {n("autoMerged") > 0 && <span className="fm-auto-fg">{n("autoMerged")} merged automatically</span>}
+                <span className="muted">{n("bothChangedSame", "bothAddedSame", "bothDeleted")} identical changes</span>
+                <span className="muted">{n("unchanged")} unchanged</span>
+              </>
+            )}
             <span className="spacer" />
             {plan.unresolved > 0 && <span className="s-error-fg">{plan.unresolved} unresolved</span>}
             <span className="muted">{result.elapsedMs} ms</span>
@@ -710,6 +806,7 @@ export function FolderMerge({
           <ul className="fm-confirm-list">
             <li>{plan.takeLeft} files from the left</li>
             <li>{plan.takeRight} files from the right</li>
+            {plan.mergeText > 0 && <li>{plan.mergeText} text files merged automatically</li>}
             {plan.takeBase > 0 && <li>{plan.takeBase} files restored from the base</li>}
             <li>{plan.delete} files removed (if present)</li>
             <li>{plan.skip} files left untouched</li>

@@ -1,20 +1,28 @@
 // Hide the console window on Windows release builds.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod archive; // bc5:archives
+mod convert; // bc5:converters
 mod db;
+mod fileops; // bc5:file-ops
+mod folder; // bc5:folder-engine
+mod hex; // bc5:hex
 mod merge;
 mod meta;
+mod patch; // bc5:editor-patch
 mod picture;
+mod remote; // bc5:remote-write
 mod sync;
 mod table;
+mod text_compare; // bc5:text-engine
 mod watch;
+mod workspace; // bc5:app-shell
+mod cli; // bc5:reports-script
+mod report; // bc5:reports-script
 
-use pcompare_core::folder::{self, ContentMethod, ContentVerdict, FolderCompareOptions, FolderCompareResult};
-use pcompare_core::hex::{self, HexChunk, HexSummary};
 use pcompare_core::session::{SavedSession, SessionInput, SessionStore};
 use pcompare_core::text::{self, TextDiffOptions, TextDiffResult};
 use pcompare_core::textfile::{self, TextFileInfo};
-use pcompare_core::vfs::{EmptyFs, Vfs};
 use pcompare_core::PathKind;
 use pcompare_remote::profile::{KeyringSecrets, Profile, ProfileInput};
 use pcompare_remote::provider::{self, ProviderKind, ProviderSpec};
@@ -22,7 +30,6 @@ use pcompare_remote::RemoteManager;
 use serde::Serialize;
 use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
-use std::sync::Arc;
 use tauri::{AppHandle, Manager};
 use tauri_plugin_opener::OpenerExt;
 
@@ -87,7 +94,11 @@ struct TextFileCompare {
 }
 
 #[tauri::command]
-fn path_kind(path: String) -> PathKind {
+async fn path_kind(app: AppHandle, path: String) -> PathKind {
+    // bc5:archives — inside archives and snapshots, and svn: repositories
+    if pcompare_remote::is_container_path(&path) {
+        return archive::path_kind(app, path).await;
+    }
     if pcompare_remote::is_remote(&path) {
         // Remote sessions are opened explicitly; treat them as files here.
         return PathKind::File;
@@ -107,37 +118,33 @@ fn read_left_selection() -> Option<String> {
     (!s.is_empty()).then(|| s.to_owned())
 }
 
-/// Turns the command line into the paths to open. Plain paths pass through;
+/// Turns the command line into what to open. Plain paths pass through;
 /// `--compare-to <path>` pairs `path` with the remembered left side (or opens
 /// it alone when nothing was selected) and consumes the selection.
-fn resolve_launch_args(args: &[String], left_selection: Option<String>) -> Vec<String> {
-    if let Some(i) = args.iter().position(|a| a == "--compare-to") {
-        let Some(target) = args.get(i + 1) else { return Vec::new() };
-        return match left_selection {
-            Some(left) if &left != target => vec![left, target.clone()],
-            _ => vec![target.clone()],
-        };
-    }
-    args.iter().filter(|a| !a.starts_with('-')).cloned().collect()
+/// bc5:reports-script — parsed by cli.rs, so BC switches (`/fv=`, `/title1=`,
+/// `/readonly`, `/mergeoutput=`…) come along and are never taken for paths.
+fn resolve_launch_args(args: &[String], left_selection: Option<String>) -> cli::LaunchOptions {
+    cli::resolve(cli::gui_options(args), left_selection)
 }
 
-/// The paths this process was launched with, resolved once in `main` before
-/// any window exists (so the webview never sees a half-consumed selection).
-static LAUNCH_PATHS: std::sync::OnceLock<Vec<String>> = std::sync::OnceLock::new();
+/// What this process was launched with, resolved once in `main` before any
+/// window exists (so the webview never sees a half-consumed selection).
+static LAUNCH_OPTIONS: std::sync::OnceLock<cli::LaunchOptions> = std::sync::OnceLock::new();
 
-fn resolve_launch_paths(args: &[String]) -> Vec<String> {
+fn resolve_launch_paths(args: &[String]) -> cli::LaunchOptions {
     if !args.iter().any(|a| a == "--compare-to") {
         return resolve_launch_args(args, None);
     }
-    let paths = resolve_launch_args(args, read_left_selection());
+    let launch = resolve_launch_args(args, read_left_selection());
     let _ = std::fs::remove_file(left_selection_file());
-    paths
+    launch
 }
 
-/// Paths passed on the command line, e.g. `pcompare.exe left right`.
+/// The command line, e.g. `pcompare.exe left right` plus any viewer, title,
+/// read-only and merge-output switches.
 #[tauri::command]
-fn launch_args() -> Vec<String> {
-    LAUNCH_PATHS.get().cloned().unwrap_or_default()
+fn launch_args() -> cli::LaunchOptions {
+    LAUNCH_OPTIONS.get().cloned().unwrap_or_default()
 }
 
 /// The path picked with "Select Left Side for Compare", if any.
@@ -205,68 +212,7 @@ async fn compare_text_files(
     .await
 }
 
-#[tauri::command]
-async fn compare_folders(
-    app: AppHandle,
-    left: String,
-    right: String,
-    options: FolderCompareOptions,
-) -> CmdResult<FolderCompareResult> {
-    blocking(move || {
-        with_remote(&app, [&left, &right], |r| {
-            // A side with no folder chosen yet lists as empty, so the other
-            // side's contents show as soon as one folder is picked.
-            let side = |p: &str| -> pcompare_core::Result<(Arc<dyn Vfs>, String)> {
-                if p.is_empty() {
-                    Ok((Arc::new(EmptyFs), String::new()))
-                } else {
-                    r.target(p)
-                }
-            };
-            let (lfs, lpath) = side(&left)?;
-            let (rfs, rpath) = side(&right)?;
-            let cache = sync::checksum_cache(&app, [&left, &right]);
-            let mut res = folder::compare_folders_cached(
-                &*lfs,
-                &lpath,
-                &*rfs,
-                &rpath,
-                &options,
-                cache.as_ref().map(|c| c as &dyn folder::ChecksumCache),
-            )?;
-            if let Some(cache) = cache {
-                let _ = cache.flush();
-            }
-            res.left_root = left.clone();
-            res.right_root = right.clone();
-            Ok(res)
-        })
-    })
-    .await
-}
-
-/// Re-checks one file pair with a specific content method — the folder
-/// view's "Compare contents" action on a selected row.
-#[tauri::command]
-#[allow(clippy::too_many_arguments)]
-async fn compare_file_contents(
-    app: AppHandle,
-    left: String,
-    left_size: u64,
-    right: String,
-    right_size: u64,
-    method: ContentMethod,
-    rules: TextDiffOptions,
-) -> CmdResult<ContentVerdict> {
-    blocking(move || {
-        with_remote(&app, [&left, &right], |r| {
-            let (lfs, lpath) = r.target(&left)?;
-            let (rfs, rpath) = r.target(&right)?;
-            folder::compare_contents(&*lfs, &lpath, left_size, &*rfs, &rpath, right_size, method, &rules)
-        })
-    })
-    .await
-}
+// Folder Compare commands live in folder.rs. // bc5:folder-engine
 
 // ---------- auto-refresh ----------
 
@@ -281,41 +227,7 @@ fn unwatch_paths(app: AppHandle, id: String) {
     state(&app).watchers.unwatch(&id);
 }
 
-/// Local paths for a hex session; remote files are downloaded on `refresh`
-/// (opening the session) and reused for every subsequent page.
-fn hex_paths(app: &AppHandle, left: &str, right: &str, refresh: bool) -> pcompare_core::Result<(PathBuf, PathBuf)> {
-    with_remote(app, [left, right], |r| {
-        Ok((r.local_copy(left, refresh)?, r.local_copy(right, refresh)?))
-    })
-}
-
-#[tauri::command]
-async fn hex_summary(app: AppHandle, left: String, right: String) -> CmdResult<HexSummary> {
-    blocking(move || {
-        let (l, r) = hex_paths(&app, &left, &right, true)?;
-        hex::summarize(&l, &r)
-    })
-    .await
-}
-
-#[tauri::command]
-async fn hex_chunk(app: AppHandle, left: String, right: String, offset: u64, len: usize) -> CmdResult<HexChunk> {
-    let len = len.min(1 << 20); // never ship more than 1 MiB per IPC call
-    blocking(move || {
-        let (l, r) = hex_paths(&app, &left, &right, false)?;
-        hex::read_chunk(&l, &r, offset, len)
-    })
-    .await
-}
-
-#[tauri::command]
-async fn hex_next_difference(app: AppHandle, left: String, right: String, from: u64) -> CmdResult<Option<u64>> {
-    blocking(move || {
-        let (l, r) = hex_paths(&app, &left, &right, false)?;
-        hex::next_difference(&l, &r, from)
-    })
-    .await
-}
+// bc5:hex — hex_summary / hex_chunk / hex_next_difference moved to hex.rs
 
 // ---------- saved sessions ----------
 
@@ -441,13 +353,24 @@ fn main() {
         }
         return;
     }
-    let _ = LAUNCH_PATHS.set(resolve_launch_paths(args.get(1..).unwrap_or_default()));
+    // bc5:reports-script — `@script`, `/qc` and `--help` run without a window.
+    if let Some(code) = cli::run_headless(args.get(1..).unwrap_or_default()) {
+        std::process::exit(code);
+    }
+    let _ = LAUNCH_OPTIONS.set(resolve_launch_paths(args.get(1..).unwrap_or_default()));
 
     tauri::Builder::default()
+        // bc5:app-shell — must be the first plugin: a second launch hands its
+        // paths to this window and exits before creating its own.
+        .plugin(tauri_plugin_single_instance::init(|app, argv, cwd| {
+            workspace::on_second_instance(app, argv, cwd)
+        }))
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
+        // bc5:text-ui — clipboard text as a Text Compare side.
+        .plugin(tauri_plugin_clipboard_manager::init())
         .setup(|app| {
             let config_dir = app.path().app_config_dir()?;
             let data_dir = app.path().app_data_dir()?;
@@ -465,6 +388,8 @@ fn main() {
                 db_cancel: AtomicBool::new(false),
                 index: open_index(&data_dir),
             });
+            app.manage(workspace::ShellState::new(&config_dir)); // bc5:app-shell
+            remote::install_prompter(app.handle()); // bc5:remote-write
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -473,13 +398,33 @@ fn main() {
             get_left_selection,
             set_left_selection,
             compare_text_files,
-            compare_folders,
-            compare_file_contents,
+            folder::compare_folders, // bc5:folder-engine (moved to folder.rs)
+            folder::compare_file_contents,
+            // bc5:archives — archive / snapshot / svn: sides, snapshots (archive.rs)
+            archive::archive_side_info,
+            archive::snapshot_save,
+            folder::compare_folders_cancel,
             watch_paths,
             unwatch_paths,
-            hex_summary,
-            hex_chunk,
-            hex_next_difference,
+            // bc5:hex — hex compare (hex.rs)
+            hex::hex_summary,
+            hex::hex_chunk,
+            hex::hex_next_difference,
+            hex::hex_open,
+            hex::hex_close,
+            hex::hex_state,
+            hex::hex_rows,
+            hex::hex_edit,
+            hex::hex_undo,
+            hex::hex_redo,
+            hex::hex_realign,
+            hex::hex_navigate,
+            hex::hex_locate,
+            hex::hex_find,
+            hex::hex_read,
+            hex::hex_replace_all,
+            hex::hex_save,
+            hex::hex_disk_changed,
             list_sessions,
             save_session,
             rename_session,
@@ -493,6 +438,12 @@ fn main() {
             sign_in_profile,
             open_provider_console,
             remote_list,
+            // bc5:remote-write — remote browser writes + SSH sign-in prompts
+            remote::remote_mkdir,
+            remote::remote_delete,
+            remote::remote_rename,
+            remote::remote_can_rename,
+            remote::remote_auth_answer,
             // --- text compare editing + text merge (merge.rs) ---
             merge::load_text_pair,
             merge::diff_texts,
@@ -500,13 +451,16 @@ fn main() {
             merge::load_merge,
             // --- table compare (table.rs) ---
             table::compare_tables,
+            table::compare_table_sheets, // bc5:table
             // --- picture compare (picture.rs) ---
             picture::picture_load,
             picture::picture_diff,
+            picture::picture_probe, // bc5:picture-registry
             // --- folder sync + folder merge (sync.rs) ---
             sync::sync_plan,
             sync::sync_execute,
             sync::sync_cancel,
+            sync::sync_pause, // bc5:file-ops
             sync::sync_preflight,
             sync::sync_interrupted,
             sync::sync_resume,
@@ -522,6 +476,9 @@ fn main() {
             sync::folder_merge_execute,
             // --- registry / version / mp3 (meta.rs) ---
             meta::compare_registry,
+            meta::registry_save, // bc5:picture-registry
+            meta::registry_live_plan, // bc5:picture-registry
+            meta::registry_apply_live, // bc5:picture-registry
             meta::compare_versions,
             meta::compare_audio,
             // --- database compare (db.rs) ---
@@ -538,6 +495,50 @@ fn main() {
             db::db_data_script,
             db::db_cancel,
             db::db_execute_script,
+            // --- bc5:app-shell — prefs, workspaces, recent sessions (workspace.rs) ---
+            workspace::prefs_load,
+            workspace::prefs_save,
+            workspace::workspace_list,
+            workspace::workspace_save,
+            workspace::workspace_rename,
+            workspace::workspace_delete,
+            workspace::workspace_last,
+            workspace::workspace_set_last,
+            workspace::recent_list,
+            workspace::recent_add,
+            workspace::recent_remove,
+            workspace::recent_clear,
+            workspace::session_autosave,
+            // --- bc5:text-engine — Text Compare encodings, grammars, backups (text_compare.rs) ---
+            text_compare::text_load_pair,
+            text_compare::text_load,
+            text_compare::text_diff,
+            text_compare::text_save,
+            text_compare::text_encodings,
+            text_compare::text_grammars,
+            // --- bc5:editor-patch — Patch Viewer (patch.rs) ---
+            patch::patch_load,
+            patch::patch_check,
+            patch::patch_apply_file,
+            // --- bc5:converters — file format rules, external tools (convert.rs) ---
+            convert::convert_config_load,
+            convert::convert_config_save,
+            convert::convert_config_defaults,
+            convert::convert_tools_for,
+            convert::convert_launch_tool,
+            convert::convert_source_text,
+            // --- bc5:file-ops — Folder Compare file operations (fileops.rs) ---
+            fileops::fileop_start,
+            fileops::fileop_pause,
+            fileops::fileop_cancel,
+            fileops::fileop_answer,
+            // --- bc5:reports-script — text / folder / table reports (report.rs) ---
+            report::report_text,
+            report::report_folder,
+            report::report_folder_save,
+            report::report_table,
+            report::report_write,
+            report::report_open_in_browser,
         ])
         .run(tauri::generate_context!())
         .expect("error while running PCompare");
@@ -553,19 +554,19 @@ mod launch_tests {
 
     #[test]
     fn plain_paths_pass_through() {
-        assert_eq!(resolve_launch_args(&args(&["a", "-v", "b"]), None), args(&["a", "b"]));
+        assert_eq!(resolve_launch_args(&args(&["a", "-v", "b"]), None).paths, args(&["a", "b"]));
     }
 
     #[test]
     fn compare_to_pairs_with_the_selected_left() {
-        let got = resolve_launch_args(&args(&["--compare-to", "b"]), Some("a".into()));
+        let got = resolve_launch_args(&args(&["--compare-to", "b"]), Some("a".into())).paths;
         assert_eq!(got, args(&["a", "b"]));
     }
 
     #[test]
     fn compare_to_without_selection_opens_one_side() {
-        assert_eq!(resolve_launch_args(&args(&["--compare-to", "b"]), None), args(&["b"]));
-        assert_eq!(resolve_launch_args(&args(&["--compare-to", "b"]), Some("b".into())), args(&["b"]));
-        assert!(resolve_launch_args(&args(&["--compare-to"]), None).is_empty());
+        assert_eq!(resolve_launch_args(&args(&["--compare-to", "b"]), None).paths, args(&["b"]));
+        assert_eq!(resolve_launch_args(&args(&["--compare-to", "b"]), Some("b".into())).paths, args(&["b"]));
+        assert!(resolve_launch_args(&args(&["--compare-to"]), None).paths.is_empty());
     }
 }

@@ -1,18 +1,26 @@
-//! Three-way folder merge: classify every path in `left` and `right` against
-//! their common ancestor `base`, propose an action per item, then build the
-//! merged tree in an output folder from the (user-adjusted) decisions.
+//! Folder merge: classify every path in `left` and `right` against their
+//! common ancestor `base`, propose an action per item, then build the merged
+//! tree in an output folder from the (user-adjusted) decisions.
+//!
+//! The base is optional. Without it the merge is two-way: items are judged
+//! by left vs right alone (only on one side, same, newer, different). With
+//! it, text files changed on both sides are merged line by line
+//! ([`pcompare_merge`]); when that leaves no conflicts the merged text is
+//! proposed as [`MergeAction::MergeText`].
 //!
 //! The walk goes through [`Vfs`], so inputs may be remote for comparison;
 //! execution needs local folders.
 
 use std::collections::BTreeMap;
 use std::fs;
-use std::io;
+use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 use globset::{GlobBuilder, GlobSet, GlobSetBuilder};
 use pcompare_core::folder::{self, ContentMethod, EntryMeta, EntryStatus, FolderCompareOptions};
+use pcompare_core::text::TextDiffOptions;
+use pcompare_core::textfile::{self, TextFormat};
 use pcompare_core::vfs::{LocalFs, Vfs};
 use pcompare_core::{CoreError, Result};
 use rayon::prelude::*;
@@ -44,6 +52,20 @@ pub enum MergeClass {
     Merged,
     /// The item could not be read or compared.
     Error,
+    /// Two-way only: present on the left side only.
+    LeftOnly,
+    /// Two-way only: present on the right side only.
+    RightOnly,
+    /// Two-way only: the files differ and the left one is newer.
+    LeftNewer,
+    /// Two-way only: the files differ and the right one is newer.
+    RightNewer,
+    /// Two-way only: the files differ and neither is newer (or "take newer"
+    /// is off); folders: something inside differs that needs a decision.
+    Different,
+    /// A text file changed on both sides whose line-by-line merge has no
+    /// conflicts.
+    AutoMerged,
 }
 
 impl MergeClass {
@@ -55,6 +77,7 @@ impl MergeClass {
                 | MergeClass::DeleteModifyConflict
                 | MergeClass::TypeConflict
                 | MergeClass::Error
+                | MergeClass::Different
         )
     }
 }
@@ -69,6 +92,40 @@ pub enum MergeAction {
     Delete,
     /// Leave the output untouched (unresolved conflicts default to this).
     Skip,
+    /// Write the line-by-line merge of the three text versions; offered
+    /// when that merge has no conflicts ("Merged automatically").
+    MergeText,
+}
+
+/// Settings of a folder merge beyond the comparison options.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct FolderMergeOptions {
+    /// Three-way: merge text files changed on both sides line by line and
+    /// propose the result when no conflicts remain.
+    pub auto_merge_text: bool,
+    /// Two-way: propose the newer file where the sides differ; otherwise
+    /// every difference is a conflict.
+    pub take_newer: bool,
+}
+
+impl Default for FolderMergeOptions {
+    fn default() -> Self {
+        Self {
+            auto_merge_text: true,
+            take_newer: true,
+        }
+    }
+}
+
+/// How a line-by-line text merge of a file went.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TextMergeSummary {
+    /// Changes merged without user input.
+    pub changes: usize,
+    /// Conflicting regions left for the user (a Text Merge session).
+    pub conflicts: usize,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -85,6 +142,8 @@ pub struct FolderMergeEntry {
     pub right: Option<EntryMeta>,
     pub children: Vec<FolderMergeEntry>,
     pub error: Option<String>,
+    /// Set when the file was merged line by line (both sides changed text).
+    pub text_merge: Option<TextMergeSummary>,
     /// Conflicting items at or below this entry.
     pub conflicts: usize,
     /// Changed (non-unchanged) items at or below this entry.
@@ -94,6 +153,7 @@ pub struct FolderMergeEntry {
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FolderMergeResult {
+    /// Empty in a two-way merge.
     pub base_root: String,
     pub left_root: String,
     pub right_root: String,
@@ -102,6 +162,8 @@ pub struct FolderMergeResult {
     pub counts: BTreeMap<MergeClass, usize>,
     pub conflicts: usize,
     pub changes: usize,
+    /// No base folder: items were classified by left vs right alone.
+    pub two_way: bool,
     pub elapsed_ms: u128,
 }
 
@@ -111,6 +173,9 @@ const RIGHT: usize = 2;
 
 struct Ctx<'a> {
     opts: &'a FolderCompareOptions,
+    merge_opts: &'a FolderMergeOptions,
+    /// No base: `fs[BASE]` is a placeholder that is never read.
+    two_way: bool,
     exclude: GlobSet,
     include_files: GlobSet,
     exclude_files: GlobSet,
@@ -263,22 +328,136 @@ fn same_file(
     ))
 }
 
-fn classify_file(
+/// Largest file merged line by line; bigger ones stay conflicts.
+const AUTO_MERGE_MAX_BYTES: u64 = 16 << 20;
+
+/// A line-by-line merge of the three versions of a text file.
+struct TextMerged {
+    summary: TextMergeSummary,
+    /// The merged file in the left version's encoding, BOM and line-ending
+    /// style; `None` while conflicts remain or when the merged text cannot be
+    /// represented in that encoding.
+    bytes: Option<Vec<u8>>,
+}
+
+/// Merges three file versions line by line; `None` when any looks binary.
+/// Lines are compared exactly: what counts as "the same change" must not
+/// depend on the comparison's whitespace or ignore rules.
+fn merge_text_bytes(base: &[u8], left: &[u8], right: &[u8]) -> Option<TextMerged> {
+    if [base, left, right]
+        .iter()
+        .any(|b| textfile::is_probably_binary(b))
+    {
+        return None;
+    }
+    let [(b, _, _), (l, encoding, has_bom), (r, _, _)] = [base, left, right].map(textfile::decode);
+    let merged = pcompare_merge::merge_text(Some(&b), &l, &r, &TextDiffOptions::default()).ok()?;
+    let stats = &merged.merge.stats;
+    let summary = TextMergeSummary {
+        changes: stats.auto_merged(),
+        conflicts: stats.conflicts,
+    };
+    let bytes = if stats.conflicts == 0 {
+        let format = TextFormat {
+            encoding: encoding.name().to_owned(),
+            has_bom,
+            line_ending: textfile::save_line_ending(&l),
+        };
+        textfile::encode_text(&merged.text, &format).ok()
+    } else {
+        None
+    };
+    Some(TextMerged { summary, bytes })
+}
+
+fn read_all(fs: &dyn Vfs, path: &str) -> Result<Vec<u8>> {
+    let mut buf = Vec::new();
+    fs.open(path)?
+        .read_to_end(&mut buf)
+        .map_err(|e| CoreError::io(path, e))?;
+    Ok(buf)
+}
+
+/// The automatic text merge of a file changed differently on both sides,
+/// when enabled and the file is small enough.
+fn try_text_merge(
+    ctx: &Ctx,
+    paths: &Sides<String>,
+    items: &Sides<Listed>,
+) -> Result<Option<TextMerged>> {
+    if !ctx.merge_opts.auto_merge_text
+        || items
+            .iter()
+            .flatten()
+            .any(|x| x.meta.size > AUTO_MERGE_MAX_BYTES)
+    {
+        return Ok(None);
+    }
+    let read = |s: usize| read_all(ctx.fs[s], paths[s].as_deref().unwrap_or_default());
+    Ok(merge_text_bytes(&read(BASE)?, &read(LEFT)?, &read(RIGHT)?))
+}
+
+/// Left vs right only: orphans are copied across, the newer of two
+/// differing files is proposed (when enabled), anything else conflicts.
+fn classify_two_way(
     ctx: &Ctx,
     paths: &Sides<String>,
     items: &Sides<Listed>,
 ) -> Result<(MergeClass, MergeAction)> {
     use MergeAction::*;
     use MergeClass::*;
+    Ok(match (&items[LEFT], &items[RIGHT]) {
+        (Some(_), None) => (LeftOnly, TakeLeft),
+        (None, Some(_)) => (RightOnly, TakeRight),
+        (Some(_), Some(_)) if same_file(ctx, paths, items, LEFT, RIGHT)? => (Unchanged, TakeLeft),
+        (Some(l), Some(r)) => match (l.meta.modified_ms, r.meta.modified_ms) {
+            (Some(lm), Some(rm))
+                if ctx.merge_opts.take_newer
+                    && !folder::timestamps_match(Some(lm), Some(rm), ctx.opts) =>
+            {
+                if lm > rm {
+                    (LeftNewer, TakeLeft)
+                } else {
+                    (RightNewer, TakeRight)
+                }
+            }
+            _ => (Different, Skip),
+        },
+        (None, None) => unreachable!("an entry exists on at least one side"),
+    })
+}
+
+fn classify_file(
+    ctx: &Ctx,
+    paths: &Sides<String>,
+    items: &Sides<Listed>,
+) -> Result<(MergeClass, MergeAction, Option<TextMergeSummary>)> {
+    use MergeAction::*;
+    use MergeClass::*;
+    if ctx.two_way {
+        let (class, action) = classify_two_way(ctx, paths, items)?;
+        return Ok((class, action, None));
+    }
     let eq = |a, b| same_file(ctx, paths, items, a, b);
     let has = |s: usize| items[s].is_some();
-    Ok(match (has(BASE), has(LEFT), has(RIGHT)) {
+    let mut text = None;
+    let (class, action) = match (has(BASE), has(LEFT), has(RIGHT)) {
         (true, true, true) => match (eq(LEFT, BASE)?, eq(RIGHT, BASE)?) {
             (true, true) => (Unchanged, TakeLeft),
             (false, true) => (LeftChanged, TakeLeft),
             (true, false) => (RightChanged, TakeRight),
             (false, false) if eq(LEFT, RIGHT)? => (BothChangedSame, TakeLeft),
-            (false, false) => (Conflict, Skip),
+            (false, false) => match try_text_merge(ctx, paths, items)? {
+                Some(merged) => {
+                    text = Some(merged.summary);
+                    if merged.bytes.is_some() {
+                        (AutoMerged, MergeText)
+                    } else {
+                        (Conflict, Skip)
+                    }
+                }
+                None => (Conflict, Skip),
+            },
         },
         (true, true, false) if eq(LEFT, BASE)? => (RightDeleted, Delete),
         (true, false, true) if eq(RIGHT, BASE)? => (LeftDeleted, Delete),
@@ -289,17 +468,18 @@ fn classify_file(
         (false, true, false) => (LeftAdded, TakeLeft),
         (false, false, true) => (RightAdded, TakeRight),
         (false, false, false) => unreachable!("an entry exists on at least one side"),
-    })
+    };
+    Ok((class, action, text))
 }
 
 /// Which sides a (non-conflicting) change came from.
 fn change_sides(class: MergeClass) -> (bool, bool, bool) {
     use MergeClass::*;
     match class {
-        LeftChanged | LeftAdded | LeftDeleted => (true, false, false),
-        RightChanged | RightAdded | RightDeleted => (false, true, false),
+        LeftChanged | LeftAdded | LeftDeleted | LeftOnly | LeftNewer => (true, false, false),
+        RightChanged | RightAdded | RightDeleted | RightOnly | RightNewer => (false, true, false),
         BothChangedSame | BothAddedSame | BothDeleted => (false, false, true),
-        Merged => (true, true, false),
+        Merged | AutoMerged => (true, true, false),
         _ => (false, false, false),
     }
 }
@@ -344,6 +524,23 @@ fn classify_folder(
     }
 }
 
+/// Two-way folders: orphans are copied across; a folder on both sides sums
+/// up its contents.
+fn classify_folder_two_way(
+    present: (bool, bool),
+    children: &[FolderMergeEntry],
+) -> (MergeClass, MergeAction) {
+    use MergeAction::*;
+    use MergeClass::*;
+    match present {
+        (true, false) => (LeftOnly, TakeLeft),
+        (false, true) => (RightOnly, TakeRight),
+        _ if children.iter().any(|c| c.conflicts > 0) => (Different, TakeLeft),
+        _ if children.iter().any(|c| c.class != Unchanged) => (Merged, TakeLeft),
+        _ => (Unchanged, TakeLeft),
+    }
+}
+
 fn node(dirs: &Sides<String>, rel: &str, items: Sides<Listed>, ctx: &Ctx) -> FolderMergeEntry {
     let name = [LEFT, RIGHT, BASE]
         .iter()
@@ -366,6 +563,7 @@ fn node(dirs: &Sides<String>, rel: &str, items: Sides<Listed>, ctx: &Ctx) -> Fol
         right: meta(RIGHT),
         children: Vec::new(),
         error: None,
+        text_merge: None,
         conflicts: 0,
         changes: 0,
     };
@@ -390,7 +588,11 @@ fn node(dirs: &Sides<String>, rel: &str, items: Sides<Listed>, ctx: &Ctx) -> Fol
                     items[LEFT].is_some(),
                     items[RIGHT].is_some(),
                 );
-                (entry.class, entry.action) = classify_folder(present, &children);
+                (entry.class, entry.action) = if ctx.two_way {
+                    classify_folder_two_way((present.1, present.2), &children)
+                } else {
+                    classify_folder(present, &children)
+                };
                 entry.conflicts = children.iter().map(|c| c.conflicts).sum();
                 entry.changes = children.iter().map(|c| c.changes).sum();
                 // An empty folder that was itself added or deleted is a change.
@@ -403,9 +605,10 @@ fn node(dirs: &Sides<String>, rel: &str, items: Sides<Listed>, ctx: &Ctx) -> Fol
         }
     } else {
         match classify_file(ctx, &paths, &items) {
-            Ok((class, action)) => {
+            Ok((class, action, text)) => {
                 entry.class = class;
                 entry.action = action;
+                entry.text_merge = text;
                 entry.conflicts = class.is_conflict() as usize;
                 entry.changes = (class != MergeClass::Unchanged) as usize;
             }
@@ -424,12 +627,14 @@ fn tally(entries: &[FolderMergeEntry], counts: &mut BTreeMap<MergeClass, usize>)
     }
 }
 
-/// Three-way comparison of folders that may live on different file systems.
+/// Merge comparison of folders that may live on different file systems:
+/// three-way against `base`, or two-way when `base` is `None`.
 pub fn compare_merge_with(
-    base: (&dyn Vfs, &str),
+    base: Option<(&dyn Vfs, &str)>,
     left: (&dyn Vfs, &str),
     right: (&dyn Vfs, &str),
     opts: &FolderCompareOptions,
+    merge_opts: &FolderMergeOptions,
 ) -> Result<FolderMergeResult> {
     let started = Instant::now();
     // Fail fast on bad ignore-pattern regexes rather than once per file.
@@ -439,14 +644,16 @@ pub fn compare_merge_with(
     let ci = opts.ignore_name_case;
     let ctx = Ctx {
         opts,
+        merge_opts,
+        two_way: base.is_none(),
         exclude: build_globset(&opts.exclude, ci)?,
         include_files: build_globset(&opts.filters.include_files, ci)?,
         exclude_files: build_globset(&opts.filters.exclude_files, ci)?,
         exclude_folders: build_globset(&opts.filters.exclude_folders, ci)?,
-        fs: [base.0, left.0, right.0],
+        fs: [base.map_or(left.0, |b| b.0), left.0, right.0],
     };
     let roots = [
-        Some(base.1.to_owned()),
+        base.map(|b| b.1.to_owned()),
         Some(left.1.to_owned()),
         Some(right.1.to_owned()),
     ];
@@ -454,11 +661,12 @@ pub fn compare_merge_with(
     let mut counts = BTreeMap::new();
     tally(&entries, &mut counts);
     Ok(FolderMergeResult {
-        base_root: base.1.to_owned(),
+        base_root: base.map(|b| b.1.to_owned()).unwrap_or_default(),
         left_root: left.1.to_owned(),
         right_root: right.1.to_owned(),
         conflicts: entries.iter().map(|e| e.conflicts).sum(),
         changes: entries.iter().map(|e| e.changes).sum(),
+        two_way: ctx.two_way,
         entries,
         counts,
         elapsed_ms: started.elapsed().as_millis(),
@@ -467,14 +675,21 @@ pub fn compare_merge_with(
 
 /// Local-disk convenience wrapper around [`compare_merge_with`].
 pub fn compare_merge(
-    base: impl AsRef<Path>,
+    base: Option<&Path>,
     left: impl AsRef<Path>,
     right: impl AsRef<Path>,
     opts: &FolderCompareOptions,
+    merge_opts: &FolderMergeOptions,
 ) -> Result<FolderMergeResult> {
-    let [b, l, r] =
-        [base.as_ref(), left.as_ref(), right.as_ref()].map(|p| p.to_string_lossy().into_owned());
-    compare_merge_with((&LocalFs, &b), (&LocalFs, &l), (&LocalFs, &r), opts)
+    let s = |p: &Path| p.to_string_lossy().into_owned();
+    let (b, l, r) = (base.map(s), s(left.as_ref()), s(right.as_ref()));
+    compare_merge_with(
+        b.as_deref().map(|b| (&LocalFs as &dyn Vfs, b)),
+        (&LocalFs, &l),
+        (&LocalFs, &r),
+        opts,
+        merge_opts,
+    )
 }
 
 // ---------- execution ----------
@@ -603,13 +818,16 @@ type Step = (Option<MergeOutcome>, u64);
 /// Builds the merged tree in `output` from `decisions` (parents before
 /// children, as produced by [`default_decisions`]).
 ///
-/// `output` may be empty, new, or one of the inputs ("merge into left"); when
-/// it already holds the chosen version of a file nothing is written. Deleted
+/// `base` is `None` for a two-way merge. `output` may be empty, new, or one of
+/// the inputs ("merge into left"); when it already holds the chosen version of
+/// a file nothing is written. [`MergeAction::MergeText`] merges the three
+/// versions again and writes the result, failing the item if the merge now
+/// has conflicts (the files changed since the comparison). Deleted
 /// items go through `deleter`; a folder whose whole subtree is deleted is
 /// removed in one step. Items marked [`MergeAction::Skip`] are left untouched
 /// and reported. Per-item failures are reported without stopping the merge.
 pub fn execute_merge(
-    base: &Path,
+    base: Option<&Path>,
     left: &Path,
     right: &Path,
     output: &Path,
@@ -617,14 +835,20 @@ pub fn execute_merge(
     deleter: &dyn Deleter,
 ) -> Result<MergeReport> {
     let started = Instant::now();
-    let out_canon = validate_output(&[("base", base), ("left", left), ("right", right)], output)?;
+    let mut inputs = vec![("left", left), ("right", right)];
+    if let Some(base) = base {
+        inputs.insert(0, ("base", base));
+    }
+    let out_canon = validate_output(&inputs, output)?;
     fs::create_dir_all(output).map_err(|e| CoreError::io(output, e))?;
     // Inputs that *are* the output need no copying for "take that side".
-    let is_output = |p: &Path| p.canonicalize().is_ok_and(|c| c == out_canon);
-    let roots = [
-        (base, is_output(base)),
-        (left, is_output(left)),
-        (right, is_output(right)),
+    fn root<'p>(p: &'p Path, out: &Path) -> (&'p Path, bool) {
+        (p, p.canonicalize().is_ok_and(|c| c == out))
+    }
+    let roots: Roots = [
+        base.map(|b| root(b, &out_canon)),
+        Some(root(left, &out_canon)),
+        Some(root(right, &out_canon)),
     ];
 
     // Sorted view for "is every descendant deleted?" range queries: paths
@@ -681,13 +905,19 @@ pub fn execute_merge(
                 r
             }
             MergeAction::TakeLeft | MergeAction::TakeRight | MergeAction::TakeBase => {
-                let (label, (root, root_is_output)) = match d.action {
-                    MergeAction::TakeLeft => ("left", roots[LEFT]),
-                    MergeAction::TakeRight => ("right", roots[RIGHT]),
-                    _ => ("base", roots[BASE]),
+                let (label, side) = match d.action {
+                    MergeAction::TakeLeft => ("left", LEFT),
+                    MergeAction::TakeRight => ("right", RIGHT),
+                    _ => ("base", BASE),
                 };
-                take(root, root_is_output, label, d, &dst, deleter)
+                match roots[side] {
+                    Some((root, root_is_output)) => {
+                        take(root, root_is_output, label, d, &dst, deleter)
+                    }
+                    None => Err(no_base()),
+                }
             }
+            MergeAction::MergeText => write_text_merge(&roots, d, &dst, deleter),
         };
         match step {
             Ok((Some(outcome), bytes)) => {
@@ -725,6 +955,61 @@ pub fn execute_merge(
 
     report.elapsed_ms = started.elapsed().as_millis();
     Ok(report)
+}
+
+/// The input roots by side, each with whether it is the output folder.
+type Roots<'a> = [Option<(&'a Path, bool)>; 3];
+
+fn no_base() -> io::Error {
+    io::Error::other("a two-way merge has no base folder")
+}
+
+/// Merges the three versions of a text file again and writes the result.
+fn write_text_merge(
+    roots: &Roots,
+    d: &MergeDecision,
+    dst: &Path,
+    deleter: &dyn Deleter,
+) -> io::Result<Step> {
+    let read = |side: usize| -> io::Result<Vec<u8>> {
+        let (root, _) = roots[side].ok_or_else(no_base)?;
+        fs::read(fsops::resolve(root, &d.rel_path)?)
+    };
+    let (base, left, right) = (read(BASE)?, read(LEFT)?, read(RIGHT)?);
+    let merged = merge_text_bytes(&base, &left, &right)
+        .ok_or_else(|| io::Error::other("one of the versions is no longer a text file"))?;
+    let bytes = match merged.bytes {
+        Some(bytes) => bytes,
+        None if merged.summary.conflicts > 0 => {
+            return Err(io::Error::other(format!(
+                "the files changed since the comparison: merging them now leaves {} conflict(s)",
+                merged.summary.conflicts
+            )))
+        }
+        None => {
+            return Err(io::Error::other(
+                "the merged text cannot be saved in the left file's encoding",
+            ))
+        }
+    };
+    match fs::symlink_metadata(dst) {
+        Ok(m) if m.is_dir() => deleter.delete(dst)?,
+        Ok(_) if fs::read(dst)? == bytes => return Ok((None, 0)),
+        _ => {}
+    }
+    if let Some(parent) = dst.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    // Write beside the target and rename over it, so a failed write never
+    // leaves a truncated file behind.
+    let name = dst.file_name().unwrap_or_default().to_string_lossy();
+    let tmp = dst.with_file_name(format!(".{name}.pcompare-merge"));
+    let written = fs::write(&tmp, &bytes).and_then(|()| fs::rename(&tmp, dst));
+    if written.is_err() {
+        let _ = fs::remove_file(&tmp);
+    }
+    written?;
+    Ok((Some(MergeOutcome::Written), bytes.len() as u64))
 }
 
 fn delete_if_present(dst: &Path, deleter: &dyn Deleter) -> io::Result<Step> {
@@ -872,7 +1157,14 @@ mod tests {
         FolderMergeResult,
         HashMap<String, (MergeClass, MergeAction)>,
     ) {
-        let res = compare_merge(&t.base, &t.left, &t.right, &opts()).unwrap();
+        let res = compare_merge(
+            Some(t.base.as_path()),
+            &t.left,
+            &t.right,
+            &opts(),
+            &FolderMergeOptions::default(),
+        )
+        .unwrap();
         let mut map = HashMap::new();
         flatten(&res.entries, &mut map);
         (res, map)
@@ -942,12 +1234,26 @@ mod tests {
             ..opts()
         };
         // Same size and time but different content: invisible to this mode.
-        let res = compare_merge(&t.base, &t.left, &t.right, &o).unwrap();
+        let res = compare_merge(
+            Some(t.base.as_path()),
+            &t.left,
+            &t.right,
+            &o,
+            &FolderMergeOptions::default(),
+        )
+        .unwrap();
         let mut map = HashMap::new();
         flatten(&res.entries, &mut map);
         assert_eq!(map["lchg.txt"].0, MergeClass::Unchanged);
         write(&t.left, "lchg.txt", "longer");
-        let res = compare_merge(&t.base, &t.left, &t.right, &o).unwrap();
+        let res = compare_merge(
+            Some(t.base.as_path()),
+            &t.left,
+            &t.right,
+            &o,
+            &FolderMergeOptions::default(),
+        )
+        .unwrap();
         map.clear();
         flatten(&res.entries, &mut map);
         assert_eq!(map["lchg.txt"].0, MergeClass::LeftChanged);
@@ -960,7 +1266,14 @@ mod tests {
             exclude: vec!["*.txt".into()],
             ..opts()
         };
-        let res = compare_merge(&t.base, &t.left, &t.right, &o).unwrap();
+        let res = compare_merge(
+            Some(t.base.as_path()),
+            &t.left,
+            &t.right,
+            &o,
+            &FolderMergeOptions::default(),
+        )
+        .unwrap();
         let mut map = HashMap::new();
         flatten(&res.entries, &mut map);
         assert!(map.keys().all(|k| !k.ends_with(".txt")), "{:?}", map.keys());
@@ -971,7 +1284,14 @@ mod tests {
 
         let mut o = opts();
         o.filters.exclude_folders = vec!["gone".into()];
-        let res = compare_merge(&t.base, &t.left, &t.right, &o).unwrap();
+        let res = compare_merge(
+            Some(t.base.as_path()),
+            &t.left,
+            &t.right,
+            &o,
+            &FolderMergeOptions::default(),
+        )
+        .unwrap();
         map.clear();
         flatten(&res.entries, &mut map);
         assert!(!map.contains_key("gone") && map.contains_key("sub"));
@@ -983,7 +1303,7 @@ mod tests {
         let (res, _) = compare(&t);
         let out = t.dir.path().join("out");
         let report = execute_merge(
-            &t.base,
+            Some(t.base.as_path()),
             &t.left,
             &t.right,
             &out,
@@ -1045,7 +1365,7 @@ mod tests {
             .unwrap()
             .action = MergeAction::TakeRight;
         let report = execute_merge(
-            &t.base,
+            Some(t.base.as_path()),
             &t.left,
             &t.right,
             &t.left,
@@ -1089,7 +1409,7 @@ mod tests {
         let (res, _) = compare(&t);
         let decisions = default_decisions(&res);
         let report = execute_merge(
-            &t.base,
+            Some(t.base.as_path()),
             &t.left,
             &t.right,
             &t.right,
@@ -1121,7 +1441,7 @@ mod tests {
             .unwrap()
             .action = MergeAction::TakeBase;
         let report = execute_merge(
-            &t.base,
+            Some(t.base.as_path()),
             &t.left,
             &t.right,
             &t.right,
@@ -1149,7 +1469,7 @@ mod tests {
             .action = MergeAction::TakeRight;
         let out = t.dir.path().join("out");
         execute_merge(
-            &t.base,
+            Some(t.base.as_path()),
             &t.left,
             &t.right,
             &out,
@@ -1160,7 +1480,7 @@ mod tests {
         assert_eq!(read(&out, "clash/inner.txt").as_deref(), Some("dir"));
         // And into left, where a file stands in the way.
         execute_merge(
-            &t.base,
+            Some(t.base.as_path()),
             &t.left,
             &t.right,
             &t.left,
@@ -1188,7 +1508,7 @@ mod tests {
         ];
         let out = t.dir.path().join("out");
         let report = execute_merge(
-            &t.base,
+            Some(t.base.as_path()),
             &t.left,
             &t.right,
             &out,
@@ -1204,16 +1524,309 @@ mod tests {
             .contains("right folder has no"));
     }
 
+    fn flat_map(res: &FolderMergeResult) -> HashMap<String, (MergeClass, MergeAction)> {
+        let mut map = HashMap::new();
+        flatten(&res.entries, &mut map);
+        map
+    }
+
+    fn touch(root: &Path, rel: &str, unix: i64) {
+        filetime::set_file_mtime(root.join(rel), FileTime::from_unix_time(unix, 0)).unwrap();
+    }
+
+    /// Left and right folders without a base.
+    fn two_way_trees() -> (tempfile::TempDir, PathBuf, PathBuf) {
+        let dir = tempfile::tempdir().unwrap();
+        let [left, right] = ["left", "right"].map(|n| dir.path().join(n));
+        for (rel, l, r) in [
+            ("same.txt", Some("s"), Some("s")),
+            ("lonly.txt", Some("L"), None),
+            ("ronly.txt", None, Some("R")),
+            ("lnewer.txt", Some("new"), Some("old")),
+            ("rnewer.txt", Some("old"), Some("new")),
+            ("differ.txt", Some("one"), Some("two")),
+            ("ldir/x.txt", Some("x"), None),
+            ("sub/a.txt", Some("a"), Some("a")),
+            ("sub/b.txt", None, Some("b")),
+            ("cdir/c.txt", Some("c1"), Some("c2")),
+        ] {
+            for (root, body) in [(&left, l), (&right, r)] {
+                if let Some(body) = body {
+                    write(root, rel, body);
+                }
+            }
+        }
+        touch(&left, "lnewer.txt", 1_700_000_000);
+        touch(&right, "rnewer.txt", 1_700_000_000);
+        (dir, left, right)
+    }
+
+    #[test]
+    fn two_way_classification() {
+        use MergeAction::*;
+        use MergeClass::*;
+        let (_dir, left, right) = two_way_trees();
+        let res =
+            compare_merge(None, &left, &right, &opts(), &FolderMergeOptions::default()).unwrap();
+        assert!(res.two_way);
+        assert_eq!(res.base_root, "");
+        let map = flat_map(&res);
+        for (rel, class, action) in [
+            ("same.txt", Unchanged, TakeLeft),
+            ("lonly.txt", LeftOnly, TakeLeft),
+            ("ronly.txt", RightOnly, TakeRight),
+            ("lnewer.txt", LeftNewer, TakeLeft),
+            ("rnewer.txt", RightNewer, TakeRight),
+            ("differ.txt", Different, Skip),
+            ("ldir", LeftOnly, TakeLeft),
+            ("ldir/x.txt", LeftOnly, TakeLeft),
+            ("sub", Merged, TakeLeft),
+            ("sub/a.txt", Unchanged, TakeLeft),
+            ("sub/b.txt", RightOnly, TakeRight),
+            ("cdir", Different, TakeLeft),
+            ("cdir/c.txt", Different, Skip),
+        ] {
+            assert_eq!(map.get(rel), Some(&(class, action)), "{rel}");
+        }
+        assert_eq!(res.conflicts, 2);
+        assert_eq!(res.counts[&LeftOnly], 2);
+
+        // Without "take newer" every difference needs a decision.
+        let strict = FolderMergeOptions {
+            take_newer: false,
+            ..Default::default()
+        };
+        let res = compare_merge(None, &left, &right, &opts(), &strict).unwrap();
+        let map = flat_map(&res);
+        assert_eq!(map["lnewer.txt"], (Different, Skip));
+        assert_eq!(map["rnewer.txt"], (Different, Skip));
+        assert_eq!(res.conflicts, 4);
+    }
+
+    #[test]
+    fn two_way_executes_without_base() {
+        let (dir, left, right) = two_way_trees();
+        let res =
+            compare_merge(None, &left, &right, &opts(), &FolderMergeOptions::default()).unwrap();
+        let mut decisions = default_decisions(&res);
+        decisions
+            .iter_mut()
+            .find(|d| d.rel_path == "differ.txt")
+            .unwrap()
+            .action = MergeAction::TakeRight;
+        let out = dir.path().join("out");
+        let report =
+            execute_merge(None, &left, &right, &out, &decisions, &PermanentDeleter).unwrap();
+        assert_eq!(report.failed, 0, "{:?}", report.results);
+        for (rel, body) in [
+            ("same.txt", "s"),
+            ("lonly.txt", "L"),
+            ("ronly.txt", "R"),
+            ("lnewer.txt", "new"),
+            ("rnewer.txt", "new"),
+            ("differ.txt", "two"),
+            ("ldir/x.txt", "x"),
+            ("sub/b.txt", "b"),
+        ] {
+            assert_eq!(read(&out, rel).as_deref(), Some(body), "{rel}");
+        }
+        assert!(
+            !out.join("cdir/c.txt").exists(),
+            "unresolved conflicts are skipped"
+        );
+
+        // Merging into left copies the right side's contributions only.
+        let report =
+            execute_merge(None, &left, &right, &left, &decisions, &PermanentDeleter).unwrap();
+        assert_eq!(report.failed, 0, "{:?}", report.results);
+        assert_eq!(read(&left, "ronly.txt").as_deref(), Some("R"));
+        assert_eq!(read(&left, "rnewer.txt").as_deref(), Some("new"));
+        assert_eq!(read(&left, "cdir/c.txt").as_deref(), Some("c1"));
+
+        // There is no base to take from.
+        let base_take = [MergeDecision {
+            rel_path: "same.txt".into(),
+            is_dir: false,
+            action: MergeAction::TakeBase,
+        }];
+        let report =
+            execute_merge(None, &left, &right, &out, &base_take, &PermanentDeleter).unwrap();
+        assert_eq!(report.failed, 1);
+        assert!(report.results[0]
+            .error
+            .as_deref()
+            .unwrap()
+            .contains("no base"));
+    }
+
+    /// Base, left and right trees holding text files changed on both sides.
+    fn text_trees() -> Trees {
+        let dir = tempfile::tempdir().unwrap();
+        let [base, left, right] = ["base", "left", "right"].map(|n| dir.path().join(n));
+        for (rel, b, l, r) in [
+            ("clean.txt", "a\nb\nc\nd\n", "A\nb\nc\nd\n", "a\nb\nc\nD\n"),
+            ("clash.txt", "a\nb\n", "left\nb\n", "right\nb\n"),
+            ("crlf.txt", "a\nb\n", "A\r\nb\r\n", "a\nB\n"),
+            ("bin.dat", "a\0b\nc\n", "A\0b\nc\n", "a\0b\nC\n"),
+            ("deep/t.txt", "1\n2\n3\n", "one\n2\n3\n", "1\n2\nthree\n"),
+        ] {
+            for (root, body) in [(&base, b), (&left, l), (&right, r)] {
+                write(root, rel, body);
+            }
+        }
+        Trees {
+            dir,
+            base,
+            left,
+            right,
+        }
+    }
+
+    fn find<'a>(entries: &'a [FolderMergeEntry], rel: &str) -> Option<&'a FolderMergeEntry> {
+        entries.iter().find_map(|e| {
+            (e.rel_path == rel)
+                .then_some(e)
+                .or_else(|| find(&e.children, rel))
+        })
+    }
+
+    fn text_entry<'a>(entries: &'a [FolderMergeEntry], rel: &str) -> &'a FolderMergeEntry {
+        find(entries, rel).unwrap_or_else(|| panic!("no entry {rel}"))
+    }
+
+    #[test]
+    fn auto_merges_text_changed_on_both_sides() {
+        use MergeAction::*;
+        use MergeClass::*;
+        let t = text_trees();
+        let res = compare_merge(
+            Some(t.base.as_path()),
+            &t.left,
+            &t.right,
+            &opts(),
+            &FolderMergeOptions::default(),
+        )
+        .unwrap();
+        let map = flat_map(&res);
+        assert_eq!(map["clean.txt"], (AutoMerged, MergeText));
+        assert_eq!(map["crlf.txt"], (AutoMerged, MergeText));
+        assert_eq!(map["deep/t.txt"], (AutoMerged, MergeText));
+        assert_eq!(map["deep"], (Merged, TakeLeft));
+        assert_eq!(map["clash.txt"], (Conflict, Skip));
+        assert_eq!(
+            map["bin.dat"],
+            (Conflict, Skip),
+            "binary files are not merged"
+        );
+        assert_eq!(res.conflicts, 2);
+        assert_eq!(res.counts[&AutoMerged], 3);
+        let summary = |rel| text_entry(&res.entries, rel).text_merge;
+        assert_eq!(
+            summary("clean.txt"),
+            Some(TextMergeSummary {
+                changes: 2,
+                conflicts: 0
+            })
+        );
+        assert_eq!(summary("clash.txt").map(|s| s.conflicts), Some(1));
+        assert_eq!(summary("bin.dat"), None);
+
+        let out = t.dir.path().join("out");
+        let report = execute_merge(
+            Some(t.base.as_path()),
+            &t.left,
+            &t.right,
+            &out,
+            &default_decisions(&res),
+            &PermanentDeleter,
+        )
+        .unwrap();
+        assert_eq!(report.failed, 0, "{:?}", report.results);
+        assert_eq!(read(&out, "clean.txt").as_deref(), Some("A\nb\nc\nD\n"));
+        assert_eq!(read(&out, "deep/t.txt").as_deref(), Some("one\n2\nthree\n"));
+        // The left file's line endings are kept.
+        assert_eq!(read(&out, "crlf.txt").as_deref(), Some("A\r\nB\r\n"));
+        assert!(!out.join("clash.txt").exists());
+
+        // In place into left: written once, then already up to date.
+        let decisions = default_decisions(&res);
+        let base = Some(t.base.as_path());
+        let first = execute_merge(
+            base,
+            &t.left,
+            &t.right,
+            &t.left,
+            &decisions,
+            &PermanentDeleter,
+        )
+        .unwrap();
+        assert_eq!(read(&t.left, "clean.txt").as_deref(), Some("A\nb\nc\nD\n"));
+        assert!(first.written >= 3, "{:?}", first.results);
+    }
+
+    #[test]
+    fn auto_merge_can_be_turned_off_and_rechecks_on_execute() {
+        let t = text_trees();
+        let base = Some(t.base.as_path());
+        let off = FolderMergeOptions {
+            auto_merge_text: false,
+            ..Default::default()
+        };
+        let res = compare_merge(base, &t.left, &t.right, &opts(), &off).unwrap();
+        assert_eq!(
+            flat_map(&res)["clean.txt"],
+            (MergeClass::Conflict, MergeAction::Skip)
+        );
+        assert_eq!(text_entry(&res.entries, "clean.txt").text_merge, None);
+
+        // The right file changes after the comparison so that it now conflicts.
+        let res = compare_merge(
+            base,
+            &t.left,
+            &t.right,
+            &opts(),
+            &FolderMergeOptions::default(),
+        )
+        .unwrap();
+        write(&t.right, "clean.txt", "X\nb\nc\nd\n");
+        let out = t.dir.path().join("out");
+        let report = execute_merge(
+            base,
+            &t.left,
+            &t.right,
+            &out,
+            &default_decisions(&res),
+            &PermanentDeleter,
+        )
+        .unwrap();
+        let failed: Vec<_> = report
+            .results
+            .iter()
+            .filter(|r| r.outcome == MergeOutcome::Failed)
+            .collect();
+        assert_eq!(failed.len(), 1, "{:?}", report.results);
+        assert_eq!(failed[0].rel_path, "clean.txt");
+        assert!(failed[0].error.as_deref().unwrap().contains("1 conflict"));
+        assert!(!out.join("clean.txt").exists());
+    }
+
     #[test]
     fn rejects_overlapping_output() {
         let t = trees();
         let inside = t.left.join("merged");
-        let err =
-            execute_merge(&t.base, &t.left, &t.right, &inside, &[], &PermanentDeleter).unwrap_err();
+        let err = execute_merge(
+            Some(t.base.as_path()),
+            &t.left,
+            &t.right,
+            &inside,
+            &[],
+            &PermanentDeleter,
+        )
+        .unwrap_err();
         assert!(err.to_string().contains("inside the left folder"), "{err}");
         assert!(!inside.exists());
         let err = execute_merge(
-            &t.base,
+            Some(t.base.as_path()),
             &t.left,
             &t.right,
             t.dir.path(),
@@ -1226,7 +1839,7 @@ mod tests {
             "{err}"
         );
         let err = execute_merge(
-            &t.base,
+            Some(t.base.as_path()),
             &t.left,
             &t.right,
             Path::new(""),

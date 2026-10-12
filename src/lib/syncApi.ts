@@ -39,6 +39,8 @@ export interface SyncOp {
   reason: string;
   /** The target as the preview saw it; the executor refuses to touch it if it changed since. */
   dstBefore: Snap | null;
+  /** bc5:file-ops — the left side's own path when alignment paired differently named items. */
+  leftRelPath?: string;
 }
 
 export interface SyncSkip {
@@ -61,7 +63,7 @@ export interface SyncSummary {
   skipped: number;
 }
 
-export type WarningKind = "emptySide" | "massDeletion";
+export type WarningKind = "emptySide" | "massDeletion" | "remotePermanent"; // bc5:remote-write
 
 /** Something about a plan the user must acknowledge before running it. */
 export interface PlanWarning {
@@ -102,6 +104,10 @@ export interface ExecOptions {
   /** Refuse to overwrite/delete targets that changed since the preview. */
   checkDrift: boolean;
   disposal: Disposal;
+  /** bc5:file-ops — Windows: copy NTFS owners and ACLs along (best effort). */
+  copyAcls?: boolean;
+  /** bc5:file-ops — Windows: carry DOS 8.3 short names over (needs administrator rights). */
+  copyShortNames?: boolean;
 }
 
 export const DEFAULT_EXEC_OPTIONS: ExecOptions = {
@@ -155,7 +161,7 @@ export const FAILURE_LABELS: Record<FailureKind, string> = {
   other: "Error",
 };
 
-export type ExecPhase = "running" | "retrying" | "deferred" | "finished";
+export type ExecPhase = "running" | "retrying" | "deferred" | "paused" | "finished"; // bc5:file-ops — paused
 
 export interface SyncProgress {
   done: number;
@@ -283,7 +289,7 @@ export interface IndexStats {
   jobs: number;
 }
 
-// ---------- 3-way folder merge ----------
+// ---------- folder merge (3-way, or 2-way without a base) ----------
 export type MergeClass =
   | "unchanged"
   | "leftChanged"
@@ -300,9 +306,32 @@ export type MergeClass =
   | "deleteModifyConflict"
   | "typeConflict"
   | "merged"
-  | "error";
+  | "error"
+  // Two-way merges (no base).
+  | "leftOnly"
+  | "rightOnly"
+  | "leftNewer"
+  | "rightNewer"
+  | "different"
+  /** A text file changed on both sides that merged line by line without conflicts. */
+  | "autoMerged";
 
-export type MergeAction = "takeLeft" | "takeRight" | "takeBase" | "delete" | "skip";
+/** `mergeText` writes the automatic line-by-line merge ("Merged automatically"). */
+export type MergeAction = "takeLeft" | "takeRight" | "takeBase" | "delete" | "skip" | "mergeText";
+
+/** Settings of a folder merge beyond the comparison options. */
+export interface FolderMergeOptions {
+  /** Three-way: merge text files changed on both sides line by line. */
+  autoMergeText: boolean;
+  /** Two-way: propose the newer file where the sides differ (else they conflict). */
+  takeNewer: boolean;
+}
+
+/** How a line-by-line merge of a text file changed on both sides went. */
+export interface TextMergeSummary {
+  changes: number;
+  conflicts: number;
+}
 
 export interface FolderMergeEntry {
   name: string;
@@ -316,11 +345,14 @@ export interface FolderMergeEntry {
   right: EntryMeta | null;
   children: FolderMergeEntry[];
   error: string | null;
+  /** Set for text files changed on both sides that were merged line by line. */
+  textMerge: TextMergeSummary | null;
   conflicts: number;
   changes: number;
 }
 
 export interface FolderMergeResult {
+  /** Empty in a two-way merge. */
   baseRoot: string;
   leftRoot: string;
   rightRoot: string;
@@ -328,6 +360,8 @@ export interface FolderMergeResult {
   counts: Partial<Record<MergeClass, number>>;
   conflicts: number;
   changes: number;
+  /** No base folder: items were classified by left vs right alone. */
+  twoWay: boolean;
   elapsedMs: number;
 }
 
@@ -386,6 +420,8 @@ export const syncApi = {
     return invoke<SyncRun>("sync_execute", { ...rest, onProgress: channel });
   },
   cancel: (runKey: string) => invoke<void>("sync_cancel", { runKey }),
+  /** bc5:file-ops — holds (or resumes) a running sync between files and inside large copies. */
+  pause: (runKey: string, paused: boolean) => invoke<void>("sync_pause", { runKey, paused }),
 
   /** The latest interrupted job for this pair (the app crashed or was killed mid-sync). */
   interrupted: (left: string, right: string) => invoke<JobSummary | null>("sync_interrupted", { left, right }),
@@ -415,8 +451,14 @@ export const syncApi = {
   indexStats: () => invoke<IndexStats>("index_stats"),
   clearChecksums: () => invoke<number>("index_clear_checksums"),
 
-  mergeCompare: (base: string, left: string, right: string, options: FolderCompareOptions) =>
-    invoke<FolderMergeResult>("folder_merge_compare", { base, left, right, options }),
+  /** An empty `base` runs a two-way merge. */
+  mergeCompare: (
+    base: string,
+    left: string,
+    right: string,
+    options: FolderCompareOptions,
+    mergeOptions: FolderMergeOptions,
+  ) => invoke<FolderMergeResult>("folder_merge_compare", { base, left, right, options, mergeOptions }),
   mergeExecute: (base: string, left: string, right: string, output: string, decisions: MergeDecision[]) =>
     invoke<MergeReport>("folder_merge_execute", { base, left, right, output, decisions }),
 };
@@ -428,4 +470,5 @@ export const CONFLICT_CLASSES: ReadonlySet<MergeClass> = new Set([
   "deleteModifyConflict",
   "typeConflict",
   "error",
+  "different",
 ]);

@@ -14,6 +14,7 @@
 //! Every attempt and outcome is reported to a [`Journal`] so an interrupted
 //! run can be resumed or rolled back.
 
+use std::collections::HashMap;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -26,6 +27,7 @@ use crate::baseline::Snap;
 use crate::failure::{FailureKind, LockHolder, OpError};
 use crate::fsops::{self, Deleter};
 use crate::journal::Journal;
+use crate::remote::{Partial, Root}; // bc5:remote-write
 use crate::sync::{Direction, OpKind, SyncOp};
 
 /// What to do with a file that is still locked after all retries.
@@ -69,6 +71,11 @@ pub struct ExecOptions {
     /// [`Deleter`] it is given; callers build it with [`Disposal::deleter`].
     /// Stored with the job so a rollback knows where to look.
     pub disposal: Disposal,
+    /// Copy NTFS owners and access control lists along with local files and
+    /// folders (Windows; best effort, see [`fsops::copy_security`]) (bc5:file-ops).
+    pub copy_acls: bool,
+    /// Carry DOS 8.3 short names over (Windows; needs administrator rights).
+    pub copy_short_names: bool,
 }
 
 /// What happens to deleted items and to the old versions of replaced files.
@@ -108,6 +115,8 @@ impl Default for ExecOptions {
             verify: false,
             check_drift: true,
             disposal: Disposal::Trash,
+            copy_acls: false,
+            copy_short_names: false,
         }
     }
 }
@@ -121,6 +130,8 @@ pub enum Phase {
     Retrying,
     /// Working through operations deferred because their files were locked.
     Deferred,
+    /// Held by the user; continues where it stopped (bc5:file-ops).
+    Paused,
     Finished,
 }
 
@@ -237,7 +248,22 @@ fn pause(d: Duration, cancel: &AtomicBool) -> bool {
     !cancel.load(Ordering::Relaxed)
 }
 
-fn side_label(dir: Direction) -> &'static str {
+/// Blocks while `pause` is set (bc5:file-ops). `on_change(true)` is called
+/// when the hold starts and `on_change(false)` when it ends. Returns false
+/// if the run was cancelled meanwhile.
+pub(crate) fn hold(pause: &AtomicBool, cancel: &AtomicBool, mut on_change: impl FnMut(bool)) -> bool {
+    if !pause.load(Ordering::Relaxed) {
+        return !cancel.load(Ordering::Relaxed);
+    }
+    on_change(true);
+    while pause.load(Ordering::Relaxed) && !cancel.load(Ordering::Relaxed) {
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    on_change(false);
+    !cancel.load(Ordering::Relaxed)
+}
+
+pub(crate) fn side_label(dir: Direction) -> &'static str {
     match dir {
         Direction::ToRight => "right",
         Direction::ToLeft => "left",
@@ -246,31 +272,36 @@ fn side_label(dir: Direction) -> &'static str {
 
 /// What a successful operation produced.
 #[derive(Default)]
-struct Done {
-    bytes: u64,
-    backup: Option<PathBuf>,
-    written: Option<Snap>,
+pub(crate) struct Done {
+    pub(crate) bytes: u64,
+    pub(crate) backup: Option<PathBuf>,
+    pub(crate) written: Option<Snap>,
     /// Succeeded, but with a caveat worth showing (e.g. the old version
     /// couldn't go to the Trash and was kept next to the file instead).
-    note: Option<String>,
+    pub(crate) note: Option<String>,
 }
 
-struct Runner<'a> {
-    left: &'a Path,
-    right: &'a Path,
-    opts: &'a ExecOptions,
-    deleter: &'a dyn Deleter,
-    journal: &'a mut dyn Journal,
-    cancel: &'a AtomicBool,
-    progress: &'a mut dyn FnMut(&ExecProgress),
-    state: ExecProgress,
-    last_tick: Option<Instant>,
+pub(crate) struct Runner<'a> {
+    pub(crate) left: Root<'a>,
+    pub(crate) right: Root<'a>,
+    pub(crate) opts: &'a ExecOptions,
+    pub(crate) deleter: &'a dyn Deleter,
+    pub(crate) journal: &'a mut dyn Journal,
+    pub(crate) cancel: &'a AtomicBool,
+    /// Set while the user holds the run (bc5:file-ops).
+    pub(crate) pause: &'a AtomicBool,
+    pub(crate) progress: &'a mut dyn FnMut(&ExecProgress),
+    pub(crate) state: ExecProgress,
+    pub(crate) last_tick: Option<Instant>,
+    /// Remote transfers cut short by a network failure, kept so the retry
+    /// continues instead of starting over (bc5:remote-write).
+    pub(crate) partials: HashMap<u32, Partial<'a>>,
 }
 
 /// Minimum spacing between progress callbacks while bytes are flowing.
 const TICK: Duration = Duration::from_millis(100);
 
-impl Runner<'_> {
+impl<'a> Runner<'a> {
     fn emit(&mut self) {
         self.last_tick = Some(Instant::now());
         (self.progress)(&self.state);
@@ -278,6 +309,21 @@ impl Runner<'_> {
 
     fn cancelled(&self) -> bool {
         self.cancel.load(Ordering::Relaxed)
+    }
+
+    /// Waits out a pause between operations; false if cancelled meanwhile.
+    fn hold(&mut self) -> bool {
+        let (pause, cancel) = (self.pause, self.cancel);
+        let mut phase = self.state.phase;
+        hold(pause, cancel, |paused| {
+            if paused {
+                phase = self.state.phase;
+                self.state.phase = Phase::Paused;
+            } else {
+                self.state.phase = phase;
+            }
+            self.emit();
+        })
     }
 
     /// Runs one op with retries. `Err` carries the last failure.
@@ -305,40 +351,108 @@ impl Runner<'_> {
                         return (Err(OpError::new(FailureKind::Cancelled, "cancelled")), attempt);
                     }
                 }
-                other => return (other, attempt),
+                other => {
+                    // Out of retries (or done): a kept partial transfer is no use now.
+                    self.discard_partial(op.id);
+                    return (other, attempt);
+                }
             }
         }
     }
 
-    fn roots(&self, dir: Direction) -> (&Path, &Path) {
+    pub(crate) fn roots(&self, dir: Direction) -> (Root<'a>, Root<'a>) {
         match dir {
             Direction::ToRight => (self.left, self.right),
             Direction::ToLeft => (self.right, self.left),
         }
     }
 
+    /// Calls `f` with a byte counter that drives progress and cancellation.
+    /// Counted bytes are divided by `share` (a transfer that moves the data
+    /// twice reports each half), starting from `already` bytes.
+    pub(crate) fn with_bytes<T>(
+        &mut self,
+        already: u64,
+        share: u64,
+        f: impl FnOnce(&mut dyn FnMut(u64) -> io::Result<()>) -> T,
+    ) -> T {
+        let base = self.state.bytes_done;
+        let mut written = already;
+        let cancel = self.cancel;
+        let pause = self.pause;
+        let result = {
+            let state = &mut self.state;
+            let progress = &mut *self.progress;
+            let last_tick = &mut self.last_tick;
+            let mut on_bytes = |n: u64| {
+                // A pause holds a large copy mid-file (bc5:file-ops).
+                let mut before = state.phase;
+                let held = hold(pause, cancel, |paused| {
+                    if paused {
+                        before = state.phase;
+                        state.phase = Phase::Paused;
+                    } else {
+                        state.phase = before;
+                    }
+                    progress(state);
+                });
+                if !held {
+                    return Err(io::Error::new(io::ErrorKind::Interrupted, "cancelled"));
+                }
+                written += n / share.max(1);
+                if last_tick.is_none_or(|t| t.elapsed() >= TICK) {
+                    *last_tick = Some(Instant::now());
+                    state.bytes_done = base + written;
+                    progress(state);
+                }
+                Ok(())
+            };
+            f(&mut on_bytes)
+        };
+        self.state.bytes_done = base;
+        result
+    }
+
     fn run_once(&mut self, op: &SyncOp) -> Result<Done, OpError> {
         let (src_root, dst_root) = self.roots(op.direction);
+        let (Root::Local(src_root), Root::Local(dst_root)) = (src_root, dst_root) else {
+            return self.run_once_remote(op, src_root, dst_root);
+        };
         let (src_root, dst_root) = (src_root.to_path_buf(), dst_root.to_path_buf());
-        let dst = fsops::resolve(&dst_root, &op.rel_path)?;
+        // bc5:file-ops — aligned pairs have a different name on the left.
+        let dst = fsops::resolve(&dst_root, op.dst_rel())?;
         match op.kind {
             OpKind::Mkdir => {
                 if dst.is_file() {
                     return Err(OpError::new(FailureKind::TypeClash, "a file with this name exists at the destination"));
                 }
                 fs::create_dir_all(&dst).map_err(|e| OpError::io(&dst, e))?;
-                Ok(Done::default())
+                let src = fsops::resolve(&src_root, op.src_rel())?;
+                Ok(self.with_extras(&src, &dst, Done::default()))
             }
             OpKind::Delete => self.delete(op, &dst),
             OpKind::Copy => {
-                let src = fsops::resolve(&src_root, &op.rel_path)?;
-                self.copy(op, &src, &dst)
+                let src = fsops::resolve(&src_root, op.src_rel())?;
+                let done = self.copy(op, &src, &dst)?;
+                Ok(self.with_extras(&src, &dst, done))
             }
         }
     }
 
+    /// Copies ACLs / short names onto a local `dst` as configured, noting
+    /// what couldn't be copied (bc5:file-ops).
+    fn with_extras(&self, src: &Path, dst: &Path, mut done: Done) -> Done {
+        let notes = fsops::copy_extras(src, dst, self.opts.copy_acls, self.opts.copy_short_names);
+        if !notes.is_empty() {
+            let mut all: Vec<String> = done.note.take().into_iter().collect();
+            all.extend(notes);
+            done.note = Some(all.join("; "));
+        }
+        done
+    }
+
     /// Refuses to touch a target that no longer matches the preview.
-    fn check_drift(&self, op: &SyncOp, dst: &Path, now: Option<Snap>) -> Result<(), OpError> {
+    pub(crate) fn check_drift(&self, op: &SyncOp, dst: &Path, now: Option<Snap>) -> Result<(), OpError> {
         if !self.opts.check_drift || op.is_dir {
             return Ok(());
         }
@@ -364,7 +478,7 @@ impl Runner<'_> {
         })
     }
 
-    fn delete(&mut self, op: &SyncOp, dst: &Path) -> Result<Done, OpError> {
+    pub(crate) fn delete(&mut self, op: &SyncOp, dst: &Path) -> Result<Done, OpError> {
         let now = fsops::snap(dst).map_err(|e| OpError::io(dst, e))?;
         let Some(now) = now else {
             return Ok(Done::default()); // already gone
@@ -372,7 +486,7 @@ impl Runner<'_> {
         self.check_drift(op, dst, Some(now))?;
         let backup = self
             .deleter
-            .retire(dst, side_label(op.direction), &op.rel_path)
+            .retire(dst, side_label(op.direction), op.dst_rel())
             .map_err(|e| OpError::io(dst, e))?;
         Ok(Done {
             backup,
@@ -391,30 +505,14 @@ impl Runner<'_> {
         }
 
         // Stream the data into a temp sibling, reporting bytes as they flow.
-        let base = self.state.bytes_done;
-        let mut written = 0u64;
-        let cancel = self.cancel;
-        let temp = {
-            let state = &mut self.state;
-            let progress = &mut *self.progress;
-            let last_tick = &mut self.last_tick;
-            let mut on_bytes = |n: u64| {
-                if cancel.load(Ordering::Relaxed) {
-                    return Err(io::Error::new(io::ErrorKind::Interrupted, "cancelled"));
-                }
-                written += n;
-                if last_tick.is_none_or(|t| t.elapsed() >= TICK) {
-                    *last_tick = Some(Instant::now());
-                    state.bytes_done = base + written;
-                    progress(state);
-                }
-                Ok(())
-            };
-            fsops::copy_to_temp(src, dst, self.opts.verify, &mut on_bytes)
-        };
-        self.state.bytes_done = base;
-        let temp = temp?;
+        let verify = self.opts.verify;
+        let temp = self.with_bytes(0, 1, |on_bytes| fsops::copy_to_temp(src, dst, verify, on_bytes))?;
+        self.install(op, dst, now, temp)
+    }
 
+    /// Puts a finished temp copy in place of `dst` (whose state before the
+    /// copy was `now`), disposing of the version it replaces.
+    pub(crate) fn install(&mut self, op: &SyncOp, dst: &Path, now: Option<Snap>, temp: fsops::TempCopy) -> Result<Done, OpError> {
         // Nothing there: one atomic rename and we're done.
         if now.is_none() {
             if let Err(e) = fs::rename(&temp.tmp, dst) {
@@ -445,7 +543,7 @@ impl Runner<'_> {
                 ),
             });
         }
-        let (backup, note) = match self.deleter.retire(&staged, side_label(op.direction), &op.rel_path) {
+        let (backup, note) = match self.deleter.retire(&staged, side_label(op.direction), op.dst_rel()) {
             Ok(b) => (b, None),
             Err(e) => (
                 Some(staged.clone()),
@@ -533,6 +631,43 @@ pub fn execute(
     cancel: &AtomicBool,
     progress: &mut dyn FnMut(&ExecProgress),
 ) -> ExecReport {
+    execute_on(Root::Local(left), Root::Local(right), ops, opts, deleter, journal, cancel, progress)
+}
+
+/// [`execute`] where either side may be a remote folder (see
+/// [`crate::remote`]). `deleter` disposes of items on local sides only;
+/// remote deletions are permanent.
+#[allow(clippy::too_many_arguments)]
+pub fn execute_on(
+    left: Root,
+    right: Root,
+    ops: &[SyncOp],
+    opts: &ExecOptions,
+    deleter: &dyn Deleter,
+    journal: &mut dyn Journal,
+    cancel: &AtomicBool,
+    progress: &mut dyn FnMut(&ExecProgress),
+) -> ExecReport {
+    let never = AtomicBool::new(false);
+    execute_ctl(left, right, ops, opts, deleter, journal, cancel, &never, progress)
+}
+
+/// [`execute_on`] that can also be paused: while `pause` is set the run
+/// holds between operations and inside large copies, reporting
+/// [`Phase::Paused`], and continues where it stopped once it is cleared
+/// (bc5:file-ops).
+#[allow(clippy::too_many_arguments)]
+pub fn execute_ctl(
+    left: Root,
+    right: Root,
+    ops: &[SyncOp],
+    opts: &ExecOptions,
+    deleter: &dyn Deleter,
+    journal: &mut dyn Journal,
+    cancel: &AtomicBool,
+    pause: &AtomicBool,
+    progress: &mut dyn FnMut(&ExecProgress),
+) -> ExecReport {
     let started = Instant::now();
     let mut report = ExecReport::default();
     let mut r = Runner {
@@ -542,6 +677,7 @@ pub fn execute(
         deleter,
         journal,
         cancel,
+        pause,
         progress,
         state: ExecProgress {
             total: ops.len(),
@@ -549,6 +685,7 @@ pub fn execute(
             ..Default::default()
         },
         last_tick: None,
+        partials: HashMap::new(),
     };
 
     let mut deferred: Vec<(&SyncOp, OpError, u32)> = Vec::new();
@@ -557,7 +694,7 @@ pub fn execute(
         let op = &ops[next];
         r.state.current = Some(op.rel_path.clone());
         r.emit();
-        if r.cancelled() {
+        if r.cancelled() || !r.hold() {
             break;
         }
         next += 1;
@@ -598,6 +735,10 @@ pub fn execute(
         }
         r.state.current = Some(op.rel_path.clone());
         r.emit();
+        if !r.hold() {
+            r.record(&mut report, op, Err(first_error), first_attempts, true);
+            continue;
+        }
         let (outcome, attempts) = r.run_with_retries(op);
         r.record(&mut report, op, outcome, first_attempts + attempts, true);
     }
@@ -653,35 +794,43 @@ pub fn preflight(left: &Path, right: &Path, ops: &[SyncOp]) -> Vec<PreflightIssu
 
     for (name, root, dir) in [("left", left, Direction::ToLeft), ("right", right, Direction::ToRight)] {
         let incoming: Vec<&SyncOp> = ops.iter().filter(|o| o.direction == dir).collect();
-        if incoming.is_empty() {
-            continue;
-        }
-        let probe = root.join(format!(".pcompare-probe-{}", std::process::id()));
-        match fs::File::create(&probe) {
-            Ok(_) => {
-                let _ = fs::remove_file(&probe);
-            }
-            Err(e) => block(&mut issues, format!("Can't write to the {name} folder: {e}.")),
-        }
-        let need: u64 = incoming.iter().filter(|o| o.kind == OpKind::Copy).map(|o| o.size).sum();
-        if need == 0 {
-            continue;
-        }
-        if let Ok(free) = fs4::available_space(root) {
-            if need.saturating_add(SPACE_MARGIN) > free {
-                issues.push(PreflightIssue {
-                    blocking: false,
-                    message: format!(
-                        "The {name} side may run out of space: {} to copy, {} free. \
-                         The sync stops safely if the disk fills up.",
-                        human_bytes(need),
-                        human_bytes(free)
-                    ),
-                });
-            }
-        }
+        local_side_issues(name, root, &incoming, &mut issues);
     }
     issues
+}
+
+/// Write access and free space of a local side about to receive `incoming`.
+pub(crate) fn local_side_issues(name: &str, root: &Path, incoming: &[&SyncOp], issues: &mut Vec<PreflightIssue>) {
+    if incoming.is_empty() {
+        return;
+    }
+    let probe = root.join(format!(".pcompare-probe-{}", std::process::id()));
+    match fs::File::create(&probe) {
+        Ok(_) => {
+            let _ = fs::remove_file(&probe);
+        }
+        Err(e) => issues.push(PreflightIssue {
+            blocking: true,
+            message: format!("Can't write to the {name} folder: {e}."),
+        }),
+    }
+    let need: u64 = incoming.iter().filter(|o| o.kind == OpKind::Copy).map(|o| o.size).sum();
+    if need == 0 {
+        return;
+    }
+    if let Ok(free) = fs4::available_space(root) {
+        if need.saturating_add(SPACE_MARGIN) > free {
+            issues.push(PreflightIssue {
+                blocking: false,
+                message: format!(
+                    "The {name} side may run out of space: {} to copy, {} free. \
+                     The sync stops safely if the disk fills up.",
+                    human_bytes(need),
+                    human_bytes(free)
+                ),
+            });
+        }
+    }
 }
 
 fn human_bytes(n: u64) -> String {
@@ -724,7 +873,7 @@ pub fn recover_op(left: &Path, right: &Path, op: &SyncOp, staged: Option<&Path>,
         Direction::ToRight => right,
         Direction::ToLeft => left,
     };
-    let Ok(dst) = fsops::resolve(root, &op.rel_path) else {
+    let Ok(dst) = fsops::resolve(root, op.dst_rel()) else {
         return Recovery::Clean;
     };
     fsops::remove_stale_temps(&dst);
@@ -739,7 +888,7 @@ pub fn recover_op(left: &Path, right: &Path, op: &SyncOp, staged: Option<&Path>,
             },
         };
     }
-    match deleter.retire(staged, side_label(op.direction), &op.rel_path) {
+    match deleter.retire(staged, side_label(op.direction), op.dst_rel()) {
         Ok(backup) => Recovery::Completed {
             backup: backup.map(|p| p.to_string_lossy().into_owned()),
         },
@@ -788,13 +937,13 @@ pub fn rollback(left: &Path, right: &Path, items: &[RollbackItem], deleter: &dyn
         .collect()
 }
 
-fn undo_one(left: &Path, right: &Path, it: &RollbackItem, deleter: &dyn Deleter) -> Result<(), String> {
+pub(crate) fn undo_one(left: &Path, right: &Path, it: &RollbackItem, deleter: &dyn Deleter) -> Result<(), String> {
     let op = &it.op;
     let root = match op.direction {
         Direction::ToRight => right,
         Direction::ToLeft => left,
     };
-    let dst = fsops::resolve(root, &op.rel_path).map_err(|e| e.to_string())?;
+    let dst = fsops::resolve(root, op.dst_rel()).map_err(|e| e.to_string())?;
     let backup = it.result.backup.as_deref().map(Path::new).filter(|p| fs::symlink_metadata(p).is_ok());
     let unrecoverable = || "the previous version went to the Recycle Bin / Trash; restore it from there".to_string();
     match op.kind {
@@ -1185,6 +1334,7 @@ mod tests {
             overwrite: true,
             reason: String::new(),
             dst_before: None,
+            left_rel_path: None,
         };
         // Crash after staging, before the new file was renamed in.
         let dst = p.right.join("a.txt");
@@ -1216,6 +1366,7 @@ mod tests {
             overwrite: false,
             reason: String::new(),
             dst_before: None,
+            left_rel_path: None,
         };
         assert!(preflight(&p.left, &p.right, std::slice::from_ref(&copy)).is_empty());
         let nested = p.left.join("docs");
@@ -1225,6 +1376,53 @@ mod tests {
         let huge = SyncOp { size: u64::MAX / 2, ..copy };
         let issues = preflight(&p.left, &p.right, &[huge]);
         assert!(issues.iter().any(|i| !i.blocking && i.message.contains("space")), "{issues:?}");
+    }
+
+    #[test]
+    fn pause_holds_the_run_until_resumed() {
+        // bc5:file-ops — Pause / Resume in the sync progress panel.
+        let (p, plan) = mirror_with_two_deletes();
+        let pause = std::sync::Arc::new(AtomicBool::new(true));
+        let release = {
+            let pause = pause.clone();
+            std::thread::spawn(move || {
+                std::thread::sleep(Duration::from_millis(150));
+                pause.store(false, Ordering::Relaxed);
+            })
+        };
+        let started = Instant::now();
+        let mut phases = Vec::new();
+        let r = execute_ctl(
+            Root::Local(&p.left),
+            Root::Local(&p.right),
+            &plan.ops,
+            &fast(),
+            &PermanentDeleter,
+            &mut NullJournal,
+            &AtomicBool::new(false),
+            &pause,
+            &mut |s| phases.push(s.phase),
+        );
+        release.join().unwrap();
+        assert!(started.elapsed() >= Duration::from_millis(150));
+        assert_eq!((r.succeeded, r.failed), (2, 0));
+        assert!(phases.contains(&Phase::Paused), "{phases:?}");
+
+        // Cancelling a paused run stops it without running anything.
+        let (p, plan) = mirror_with_two_deletes();
+        let r = execute_ctl(
+            Root::Local(&p.left),
+            Root::Local(&p.right),
+            &plan.ops,
+            &fast(),
+            &PermanentDeleter,
+            &mut NullJournal,
+            &AtomicBool::new(true),
+            &AtomicBool::new(true),
+            &mut |_| {},
+        );
+        assert!(r.cancelled);
+        assert_eq!(r.not_run.len(), 2);
     }
 
     #[test]

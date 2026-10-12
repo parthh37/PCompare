@@ -10,6 +10,10 @@ members = [
     "crates/pcompare-meta",
     "crates/pcompare-index",
     "crates/pcompare-db",
+    "crates/pcompare-convert", # bc5:converters
+    "crates/pcompare-report", # bc5:reports-script
+    "crates/pcompare-script", # bc5:reports-script
+    "crates/pcompare-archive", # bc5:archives
     "src-tauri",
 ]
 

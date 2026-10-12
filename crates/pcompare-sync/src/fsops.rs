@@ -207,11 +207,11 @@ pub fn resolve(root: &Path, rel: &str) -> io::Result<PathBuf> {
     Ok(out)
 }
 
-static TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
+pub(crate) static TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 /// Marker in the names of temp and staged files, so leftovers from a crash
 /// can be recognized (and are hidden on Unix thanks to the leading dot).
-const MARKER: &str = ".pcompare-";
+pub(crate) const MARKER: &str = ".pcompare-";
 
 fn sibling(dst: &Path, ext: &str) -> PathBuf {
     let name = dst
@@ -222,7 +222,7 @@ fn sibling(dst: &Path, ext: &str) -> PathBuf {
     dst.with_file_name(format!(".{name}{MARKER}{}-{n}.{ext}", std::process::id()))
 }
 
-fn temp_sibling(dst: &Path) -> PathBuf {
+pub(crate) fn temp_sibling(dst: &Path) -> PathBuf {
     sibling(dst, "tmp")
 }
 
@@ -235,7 +235,7 @@ pub fn snap(path: &Path) -> io::Result<Option<Snap>> {
     }
 }
 
-fn snap_of(m: &fs::Metadata) -> Snap {
+pub(crate) fn snap_of(m: &fs::Metadata) -> Snap {
     let modified_ms = m
         .modified()
         .ok()
@@ -505,6 +505,271 @@ pub fn same_contents(a: &Path, b: &Path) -> io::Result<bool> {
         return Ok(false);
     }
     pcompare_core::folder::files_equal(a, b).map_err(|e| io::Error::other(e.to_string()))
+}
+
+// ---------- attributes, NTFS security and short names (bc5:file-ops) ----------
+
+/// Attribute bits to switch on and off. DOS bits ([`pcompare_core::folder::attr`])
+/// apply on Windows; on Unix only read-only maps (onto the write bits), and
+/// the `mode_*` masks change permission bits directly.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct AttrChange {
+    pub set: u32,
+    pub clear: u32,
+    pub mode_set: u32,
+    pub mode_clear: u32,
+}
+
+impl AttrChange {
+    pub fn is_empty(&self) -> bool {
+        self.set == 0 && self.clear == 0 && self.mode_set == 0 && self.mode_clear == 0
+    }
+}
+
+/// Applies `change` to a local file or folder (not following links).
+pub fn set_attributes(path: &Path, change: &AttrChange) -> io::Result<()> {
+    #[cfg(windows)]
+    {
+        win::set_attributes(path, change)
+    }
+    #[cfg(not(windows))]
+    {
+        use pcompare_core::folder::attr;
+        let meta = fs::symlink_metadata(path)?;
+        if meta.file_type().is_symlink() {
+            return Ok(()); // Unix links carry no permissions of their own
+        }
+        let mut perms = meta.permissions();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut mode = perms.mode() & 0o7777;
+            mode = (mode | change.mode_set) & !change.mode_clear;
+            if change.set & attr::READONLY != 0 {
+                mode &= !0o222;
+            } else if change.clear & attr::READONLY != 0 && mode & 0o222 == 0 {
+                mode |= 0o200;
+            }
+            perms.set_mode(mode);
+        }
+        #[cfg(not(unix))]
+        if change.set & attr::READONLY != 0 {
+            perms.set_readonly(true);
+        }
+        fs::set_permissions(path, perms)
+    }
+}
+
+/// Copies the owner, group and access control list of `src` onto `dst`
+/// (Windows NTFS). Best effort: setting another account as owner needs the
+/// restore privilege (an elevated process), so without it only the ACL is
+/// copied and the returned note says so. Elsewhere this does nothing.
+pub fn copy_security(src: &Path, dst: &Path) -> io::Result<Option<String>> {
+    #[cfg(windows)]
+    {
+        win::copy_security(src, dst)
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = (src, dst);
+        Ok(None)
+    }
+}
+
+/// Gives `dst` the DOS 8.3 short name `src` has, when it differs from the
+/// one Windows generated (old installers and scripts may refer to files by
+/// it). Needs the restore privilege; best effort. Elsewhere this does nothing.
+pub fn copy_short_name(src: &Path, dst: &Path) -> io::Result<()> {
+    #[cfg(windows)]
+    {
+        win::copy_short_name(src, dst)
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = (src, dst);
+        Ok(())
+    }
+}
+
+/// Copies whichever of ACLs and short names are asked for, after `dst` was
+/// written from `src`. Returns notes about anything that couldn't be copied;
+/// the data copy itself has succeeded either way.
+pub fn copy_extras(src: &Path, dst: &Path, acls: bool, short_names: bool) -> Vec<String> {
+    let mut notes = Vec::new();
+    if acls {
+        match copy_security(src, dst) {
+            Ok(Some(note)) => notes.push(note),
+            Ok(None) => {}
+            Err(e) => notes.push(format!("permissions (ACL) not copied: {e}")),
+        }
+    }
+    if short_names {
+        if let Err(e) = copy_short_name(src, dst) {
+            notes.push(format!("short (8.3) name not copied: {e}"));
+        }
+    }
+    notes
+}
+
+#[cfg(windows)]
+mod win {
+    use std::ffi::OsString;
+    use std::io;
+    use std::os::windows::ffi::{OsStrExt, OsStringExt};
+    use std::path::{Path, PathBuf};
+    use std::ptr::{null, null_mut};
+    use std::sync::Once;
+
+    use windows_sys::Win32::Foundation::{CloseHandle, GENERIC_WRITE, HANDLE, INVALID_HANDLE_VALUE, LUID};
+    use windows_sys::Win32::Security::{
+        AdjustTokenPrivileges, GetFileSecurityW, LookupPrivilegeValueW, SetFileSecurityW,
+        DACL_SECURITY_INFORMATION, GROUP_SECURITY_INFORMATION, LUID_AND_ATTRIBUTES,
+        OWNER_SECURITY_INFORMATION, SE_BACKUP_NAME, SE_PRIVILEGE_ENABLED, SE_RESTORE_NAME,
+        TOKEN_ADJUST_PRIVILEGES, TOKEN_PRIVILEGES, TOKEN_QUERY,
+    };
+    use windows_sys::Win32::Storage::FileSystem::{
+        CreateFileW, GetFileAttributesW, GetShortPathNameW, SetFileAttributesW, SetFileShortNameW, DELETE,
+        FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT, FILE_SHARE_DELETE, FILE_SHARE_READ,
+        FILE_SHARE_WRITE, INVALID_FILE_ATTRIBUTES, OPEN_EXISTING,
+    };
+    use windows_sys::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
+
+    use super::AttrChange;
+    use pcompare_core::folder::attr;
+
+    fn wide(p: &Path) -> Vec<u16> {
+        p.as_os_str().encode_wide().chain(Some(0)).collect()
+    }
+
+    /// Enables the backup and restore privileges once, if the account holds
+    /// them (administrators do, in an elevated process). Without them the
+    /// calls below still work for what the user may change anyway.
+    fn enable_privileges() {
+        static ONCE: Once = Once::new();
+        ONCE.call_once(|| unsafe {
+            let mut token: HANDLE = null_mut();
+            if OpenProcessToken(GetCurrentProcess(), TOKEN_ADJUST_PRIVILEGES | TOKEN_QUERY, &mut token) == 0 {
+                return;
+            }
+            for name in [SE_RESTORE_NAME, SE_BACKUP_NAME] {
+                let mut luid = LUID { LowPart: 0, HighPart: 0 };
+                if LookupPrivilegeValueW(null(), name, &mut luid) == 0 {
+                    continue;
+                }
+                let tp = TOKEN_PRIVILEGES {
+                    PrivilegeCount: 1,
+                    Privileges: [LUID_AND_ATTRIBUTES { Luid: luid, Attributes: SE_PRIVILEGE_ENABLED }],
+                };
+                // Fails quietly (ERROR_NOT_ALL_ASSIGNED) when the privilege isn't held.
+                AdjustTokenPrivileges(token, 0, &tp, 0, null_mut(), null_mut());
+            }
+            CloseHandle(token);
+        });
+    }
+
+    pub fn set_attributes(path: &Path, change: &AttrChange) -> io::Result<()> {
+        let w = wide(path);
+        let old = unsafe { GetFileAttributesW(w.as_ptr()) };
+        if old == INVALID_FILE_ATTRIBUTES {
+            return Err(io::Error::last_os_error());
+        }
+        let dos = attr::DOS_MASK;
+        let new = (old | (change.set & dos)) & !(change.clear & dos);
+        if new == old {
+            return Ok(());
+        }
+        if unsafe { SetFileAttributesW(w.as_ptr(), new) } == 0 {
+            return Err(io::Error::last_os_error());
+        }
+        Ok(())
+    }
+
+    /// A self-relative security descriptor, 8-byte aligned.
+    fn read_security(path: &[u16], info: u32) -> io::Result<Vec<u64>> {
+        let mut need = 0u32;
+        unsafe { GetFileSecurityW(path.as_ptr(), info, null_mut(), 0, &mut need) };
+        if need == 0 {
+            return Err(io::Error::last_os_error());
+        }
+        let mut buf = vec![0u64; (need as usize).div_ceil(8)];
+        let len = (buf.len() * 8) as u32;
+        if unsafe { GetFileSecurityW(path.as_ptr(), info, buf.as_mut_ptr().cast(), len, &mut need) } == 0 {
+            return Err(io::Error::last_os_error());
+        }
+        Ok(buf)
+    }
+
+    pub fn copy_security(src: &Path, dst: &Path) -> io::Result<Option<String>> {
+        enable_privileges();
+        let (s, d) = (wide(src), wide(dst));
+        let full = OWNER_SECURITY_INFORMATION | GROUP_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION;
+        let mut sd = read_security(&s, full)?;
+        if unsafe { SetFileSecurityW(d.as_ptr(), full, sd.as_mut_ptr().cast()) } != 0 {
+            return Ok(None);
+        }
+        let owner_err = io::Error::last_os_error();
+        // Taking over another account's ownership needs the restore privilege;
+        // the access rules themselves can still be copied.
+        if unsafe { SetFileSecurityW(d.as_ptr(), DACL_SECURITY_INFORMATION, sd.as_mut_ptr().cast()) } != 0 {
+            return Ok(Some(format!(
+                "permissions copied, but not the owner ({owner_err}); run PCompare as administrator to copy owners"
+            )));
+        }
+        Err(io::Error::last_os_error())
+    }
+
+    /// The 8.3 alias of `p`'s last component, `None` when it has none of its
+    /// own (8.3 names disabled, or the long name already fits 8.3).
+    fn short_name(p: &Path) -> io::Result<Option<String>> {
+        let w = wide(p);
+        let n = unsafe { GetShortPathNameW(w.as_ptr(), null_mut(), 0) };
+        if n == 0 {
+            return Err(io::Error::last_os_error());
+        }
+        let mut buf = vec![0u16; n as usize];
+        let n = unsafe { GetShortPathNameW(w.as_ptr(), buf.as_mut_ptr(), buf.len() as u32) };
+        if n == 0 {
+            return Err(io::Error::last_os_error());
+        }
+        let short = PathBuf::from(OsString::from_wide(&buf[..n as usize]));
+        let name = short.file_name().map(|n| n.to_string_lossy().into_owned());
+        let long = p.file_name().map(|n| n.to_string_lossy().into_owned());
+        Ok(name.filter(|s| Some(s.to_uppercase()) != long.as_ref().map(|l| l.to_uppercase())))
+    }
+
+    pub fn copy_short_name(src: &Path, dst: &Path) -> io::Result<()> {
+        let Some(want) = short_name(src)? else {
+            return Ok(());
+        };
+        if short_name(dst)?.is_some_and(|have| have.eq_ignore_ascii_case(&want)) {
+            return Ok(());
+        }
+        enable_privileges();
+        let d = wide(dst);
+        let handle = unsafe {
+            CreateFileW(
+                d.as_ptr(),
+                GENERIC_WRITE | DELETE,
+                FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                null(),
+                OPEN_EXISTING,
+                FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT,
+                null_mut(),
+            )
+        };
+        if handle == INVALID_HANDLE_VALUE {
+            return Err(io::Error::last_os_error());
+        }
+        let name: Vec<u16> = std::ffi::OsStr::new(&want).encode_wide().chain(Some(0)).collect();
+        let ok = unsafe { SetFileShortNameW(handle, name.as_ptr()) };
+        let err = io::Error::last_os_error();
+        unsafe { CloseHandle(handle) };
+        if ok == 0 {
+            return Err(err);
+        }
+        Ok(())
+    }
 }
 
 #[cfg(test)]

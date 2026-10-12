@@ -22,11 +22,90 @@
   --ok: #6fcf97;
   --hatch: repeating-linear-gradient(135deg, transparent 0 5px, rgba(255, 255, 255, 0.035) 5px 10px);
 
+  /* bc5:app-shell — theme tokens (overridden by [data-theme="light"] below) */
+  --ui-font-size: 13px;
+  --editor-font-size: 13px;
+  --btn-hover-border: #3b4558;
+  --btn-hover-bg: #283041;
+  --on-accent: #fff;
+  --row-hover: rgba(255, 255, 255, 0.03);
+  --tool-hover: rgba(255, 255, 255, 0.06);
+  --hairline: rgba(255, 255, 255, 0.04);
+  --sel-bg: rgba(91, 156, 255, 0.16);
+  --sel-bg-strong: rgba(91, 156, 255, 0.18);
+  --accent-tint: rgba(91, 156, 255, 0.12);
+  --accent-border: rgba(91, 156, 255, 0.35);
+  --accent-border-strong: rgba(91, 156, 255, 0.55);
+  --faint: #566074;
+  --danger-text: #ffb4b4;
+  --chg-fg: #f5b14c;
+  --del-fg: #f87171;
+  --add-fg: #4ade80;
+  --key-fg: #c9d6ff;
+  --left-fg: #8fb8ff;
+  --comment-fg: #6f7c93;
+  --checker-a: #2a2f3a;
+  --checker-b: #3a414e;
+  --overlay-bg: rgba(20, 23, 29, 0.6);
+  --backdrop: rgba(0, 0, 0, 0.5);
+  --shadow: rgba(0, 0, 0, 0.45);
+  --shadow-strong: rgba(0, 0, 0, 0.55);
+
   color-scheme: dark;
   font-family: var(--ui);
-  font-size: 13px;
+  font-size: var(--ui-font-size);
   color: var(--text);
   background: var(--bg);
+}
+
+/* bc5:app-shell — light theme: Settings → Appearance (Light, or System when the OS is light). */
+:root[data-theme="light"] {
+  --bg: #f4f6f9;
+  --panel: #ffffff;
+  --panel-2: #eceff4;
+  --border: #d3d9e2;
+  --text: #1d2330;
+  --muted: #5e697b;
+  --accent: #2f6fde;
+
+  --chg-bg: rgba(245, 158, 11, 0.16);
+  --del-bg: rgba(239, 68, 68, 0.13);
+  --del-mark: rgba(239, 68, 68, 0.34);
+  --add-bg: rgba(34, 197, 94, 0.15);
+  --add-mark: rgba(34, 197, 94, 0.36);
+  --unimportant: #4a6fa5;
+  --orphan: #8b3fd0;
+  --different: #d0383b;
+  --warn: #b35f0c;
+  --ok: #1d8049;
+  --hatch: repeating-linear-gradient(135deg, transparent 0 5px, rgba(0, 0, 0, 0.045) 5px 10px);
+
+  --btn-hover-border: #b6c0cf;
+  --btn-hover-bg: #e2e7ee;
+  --row-hover: rgba(0, 0, 0, 0.035);
+  --tool-hover: rgba(0, 0, 0, 0.06);
+  --hairline: rgba(0, 0, 0, 0.07);
+  --sel-bg: rgba(47, 111, 222, 0.14);
+  --sel-bg-strong: rgba(47, 111, 222, 0.18);
+  --accent-tint: rgba(47, 111, 222, 0.08);
+  --accent-border: rgba(47, 111, 222, 0.35);
+  --accent-border-strong: rgba(47, 111, 222, 0.55);
+  --faint: #9aa3b2;
+  --danger-text: #b42318;
+  --chg-fg: #b45309;
+  --del-fg: #dc2626;
+  --add-fg: #15803d;
+  --key-fg: #2b4fa8;
+  --left-fg: #2563c9;
+  --comment-fg: #7b8597;
+  --checker-a: #e7eaef;
+  --checker-b: #d2d7df;
+  --overlay-bg: rgba(244, 246, 249, 0.7);
+  --backdrop: rgba(15, 20, 30, 0.35);
+  --shadow: rgba(16, 24, 40, 0.16);
+  --shadow-strong: rgba(16, 24, 40, 0.24);
+
+  color-scheme: light;
 }
 
 * {
@@ -53,8 +132,8 @@ button {
   cursor: pointer;
 }
 button:hover:not(:disabled) {
-  border-color: #3b4558;
-  background: #283041;
+  border-color: var(--btn-hover-border);
+  background: var(--btn-hover-bg);
 }
 button:disabled {
   opacity: 0.45;
@@ -63,7 +142,7 @@ button:disabled {
 button.primary {
   background: var(--accent);
   border-color: var(--accent);
-  color: #fff;
+  color: var(--on-accent);
 }
 input,
 select {
@@ -146,6 +225,22 @@ select:focus {
 .tabpanel[hidden] {
   display: none;
 }
+/* bc5:app-shell — sessions plus the docked help panel */
+.workarea {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+}
+.workarea > .tabpanel {
+  min-width: 0;
+}
+.tab-action.help-toggle {
+  padding: 3px 6px;
+}
+.tab-action.help-toggle.active {
+  border-color: var(--accent);
+  color: var(--accent);
+}
 
 /* ---------- session chrome ---------- */
 .session {
@@ -194,7 +289,7 @@ select:focus {
   border-radius: 0 5px 5px 0;
 }
 .seg-control button.active {
-  background: rgba(91, 156, 255, 0.18);
+  background: var(--sel-bg-strong);
   border-color: var(--accent);
   position: relative;
 }
@@ -252,6 +347,10 @@ select:focus {
   gap: 6px;
   color: var(--muted);
 }
+.live-progress button {
+  padding: 0 8px;
+  font-size: 11px;
+}
 .spinner {
   width: 10px;
   height: 10px;
@@ -270,7 +369,7 @@ select:focus {
   inset: 0;
   display: grid;
   place-items: center;
-  background: rgba(20, 23, 29, 0.6);
+  background: var(--overlay-bg);
   z-index: 5;
   font-size: 14px;
 }
@@ -338,14 +437,14 @@ select:focus {
   grid-template-columns: 52px 1fr 6px 52px 1fr;
   height: 100%;
   font-family: var(--mono);
-  font-size: 13px;
+  font-size: var(--editor-font-size);
   line-height: 20px;
   tab-size: 4;
 }
 .trow .ln {
   text-align: right;
   padding-right: 8px;
-  color: #566074;
+  color: var(--faint);
   user-select: none;
   background: var(--panel);
 }
@@ -409,13 +508,13 @@ select:focus {
   border-block: 1px solid var(--border);
 }
 .k-changed-fg {
-  color: #f5b14c;
+  color: var(--chg-fg);
 }
 .k-leftOnly-fg {
-  color: #f87171;
+  color: var(--del-fg);
 }
 .k-rightOnly-fg {
-  color: #4ade80;
+  color: var(--add-fg);
 }
 .k-unimportant-fg {
   color: var(--unimportant);
@@ -444,10 +543,10 @@ select:focus {
   user-select: none;
 }
 .frow:hover {
-  background: rgba(255, 255, 255, 0.03);
+  background: var(--row-hover);
 }
 .frow.selected {
-  background: rgba(91, 156, 255, 0.16);
+  background: var(--sel-bg);
 }
 .fcell {
   padding: 0 6px;
@@ -519,18 +618,18 @@ select:focus {
   align-items: center;
   height: 100%;
   font-family: var(--mono);
-  font-size: 12.5px;
+  font-size: calc(var(--editor-font-size) - 0.5px);
   gap: 14px;
   padding-left: 10px;
 }
 .hrow.loading {
-  color: #566074;
+  color: var(--faint);
 }
 .hrow.differs .hoff {
   color: var(--different);
 }
 .hoff {
-  color: #566074;
+  color: var(--faint);
   width: 72px;
 }
 .hbytes {
@@ -634,7 +733,7 @@ button.link:hover:not(:disabled) {
 button.danger {
   background: rgba(239, 68, 68, 0.18);
   border-color: rgba(239, 68, 68, 0.55);
-  color: #ffb4b4;
+  color: var(--danger-text);
 }
 .banner.ok {
   margin: 8px 0;
@@ -648,8 +747,8 @@ button.danger {
   margin: 8px 0;
   padding: 6px 10px;
   border-radius: 5px;
-  background: rgba(91, 156, 255, 0.1);
-  border: 1px solid rgba(91, 156, 255, 0.35);
+  background: var(--accent-tint);
+  border: 1px solid var(--accent-border);
 }
 code,
 kbd {
@@ -682,7 +781,7 @@ kbd {
   border: 1px solid var(--border);
   border-radius: 6px;
   padding: 7px 14px;
-  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.45);
+  box-shadow: 0 6px 24px var(--shadow);
   z-index: 60;
 }
 
@@ -718,7 +817,7 @@ kbd {
 .modal-backdrop {
   position: fixed;
   inset: 0;
-  background: rgba(0, 0, 0, 0.5);
+  background: var(--backdrop);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -732,7 +831,7 @@ kbd {
   background: var(--panel);
   border: 1px solid var(--border);
   border-radius: 9px;
-  box-shadow: 0 18px 60px rgba(0, 0, 0, 0.55);
+  box-shadow: 0 18px 60px var(--shadow-strong);
 }
 .modal.wide {
   width: min(720px, 94vw);
@@ -805,7 +904,7 @@ kbd {
   background: var(--panel-2);
 }
 .rb-row.selected {
-  background: rgba(91, 156, 255, 0.2);
+  background: var(--sel-bg-strong);
 }
 
 /* ---------- connection profiles ---------- */
@@ -978,7 +1077,7 @@ kbd {
 }
 .toolbar select.active {
   border-color: var(--accent);
-  background: rgba(91, 156, 255, 0.18);
+  background: var(--sel-bg-strong);
 }
 .toolbar .name-filter {
   width: 140px;
@@ -1016,7 +1115,7 @@ textarea:focus {
   background: var(--panel-2);
   border: 1px solid var(--border);
   border-radius: 7px;
-  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+  box-shadow: 0 10px 30px var(--shadow-strong);
   display: flex;
   flex-direction: column;
 }
@@ -1028,7 +1127,7 @@ textarea:focus {
   border-radius: 4px;
 }
 .ctx-menu button:hover:not(:disabled) {
-  background: rgba(91, 156, 255, 0.18);
+  background: var(--sel-bg-strong);
 }
 .ctx-menu hr {
   border: none;
@@ -1102,8 +1201,8 @@ textarea:focus {
   align-items: center;
   gap: 10px;
   padding: 6px 12px;
-  background: rgba(91, 156, 255, 0.12);
-  border-bottom: 1px solid rgba(91, 156, 255, 0.35);
+  background: var(--accent-tint);
+  border-bottom: 1px solid var(--accent-border);
 }
 .update-banner label.check {
   display: flex;
@@ -1238,12 +1337,12 @@ button,
   color: var(--text);
 }
 .tool-btn:hover:not(:disabled) {
-  background: rgba(255, 255, 255, 0.06);
+  background: var(--tool-hover);
   border-color: var(--border);
 }
 .tool-btn.active {
-  background: rgba(91, 156, 255, 0.18);
-  border-color: rgba(91, 156, 255, 0.55);
+  background: var(--sel-bg-strong);
+  border-color: var(--accent-border-strong);
 }
 .tool-btn:disabled {
   opacity: 0.4;
@@ -1293,9 +1392,9 @@ button,
   margin-right: 6px;
   padding: 2px 4px 2px 7px;
   font-size: 12px;
-  border: 1px solid rgba(91, 156, 255, 0.5);
+  border: 1px solid var(--accent-border-strong);
   border-radius: 999px;
-  background: rgba(91, 156, 255, 0.12);
+  background: var(--accent-tint);
   max-width: 260px;
   white-space: nowrap;
   overflow: hidden;

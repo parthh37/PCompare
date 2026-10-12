@@ -1,0 +1,12 @@
+/* Text Compare note for converted / read-only sides (ConversionBanner.tsx). */
+.banner.info.conversion-banner {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 6px 10px;
+  padding: 4px 10px;
+  font-size: 12px;
+}
+.conversion-banner > span {
+  margin-right: auto;
+}
