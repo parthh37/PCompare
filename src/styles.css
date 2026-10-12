@@ -544,7 +544,7 @@ select:focus {
 /* ---------- home ---------- */
 .home {
   margin: auto;
-  max-width: 880px;
+  max-width: 1040px;
   padding: 40px;
   width: 100%;
 }
@@ -578,9 +578,6 @@ select:focus {
 }
 .card:hover {
   border-color: var(--accent) !important;
-}
-.card-icon {
-  font-size: 26px;
 }
 .card-title {
   font-size: 15px;
@@ -892,7 +889,6 @@ kbd {
   width: 220px;
 }
 .saved-list {
-  max-width: 900px;
   border: 1px solid var(--border);
   border-radius: 8px;
   overflow: hidden;
@@ -909,9 +905,6 @@ kbd {
 }
 .saved-row:hover {
   background: var(--panel-2);
-}
-.saved-icon {
-  font-size: 18px;
 }
 .saved-main {
   flex: 1;
@@ -1106,4 +1099,84 @@ textarea:focus {
 .update-banner progress {
   flex: 1;
   max-width: 260px;
+}
+
+/* ---------- icons ---------- */
+svg.lucide {
+  flex-shrink: 0;
+  vertical-align: -2px;
+}
+button,
+.tab-action,
+.toolbar label {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+.icon-btn {
+  justify-content: center;
+}
+.session-tile {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  border: 1px solid;
+  border-radius: 8px;
+}
+.inline-icon {
+  margin-right: 3px;
+}
+.ic-folder {
+  color: #fbbf24;
+}
+.ic-file {
+  color: var(--muted);
+}
+.rb-name {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.fcell.status {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.chevron {
+  display: inline-flex;
+  align-items: center;
+}
+.ficon {
+  display: inline-flex;
+  align-items: center;
+}
+.badge {
+  margin-left: 6px;
+  padding: 0 5px;
+  border-radius: 4px;
+  font-size: 10px;
+  font-weight: 500;
+  color: var(--muted);
+  border: 1px solid var(--border);
+  vertical-align: 1px;
+}
+.signed-in {
+  color: var(--ok);
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.profile-edit h2 {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.pathfield-label {
+  align-self: center;
+  min-width: 44px;
+  font-size: 11px;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
 }

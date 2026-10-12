@@ -430,9 +430,20 @@ fn compare_file_pair(lp: &str, rp: &str, l: &EntryMeta, r: &EntryMeta, ctx: &Ctx
 /// Whether a file pair survives the size/date filters. `None` is the side
 /// where the file doesn't exist (an orphan).
 pub fn pair_passes(left: Option<&EntryMeta>, right: Option<&EntryMeta>, filters: &FolderFilters) -> bool {
-    // TODO(you): decide how size/date filters treat a pair. See chat notes.
-    let _ = (left, right, filters);
-    true
+    let passes = |m: &EntryMeta| {
+        // An unknown timestamp (some remote stores) can't be shown to be out
+        // of range, so date filters keep it rather than hide it.
+        let time_ok = |bound: Option<i64>, ok: fn(i64, i64) -> bool| {
+            bound.is_none_or(|b| m.modified_ms.is_none_or(|t| ok(t, b)))
+        };
+        filters.min_size.is_none_or(|min| m.size >= min)
+            && filters.max_size.is_none_or(|max| m.size <= max)
+            && time_ok(filters.modified_after_ms, |t, b| t >= b)
+            && time_ok(filters.modified_before_ms, |t, b| t <= b)
+    };
+    // Either side matching keeps the pair, so a file that just crossed a
+    // threshold (e.g. grew past max_size) is listed instead of vanishing.
+    left.is_some_and(passes) || right.is_some_and(passes)
 }
 
 fn error_entry(name: String, rel_path: String, is_dir: bool, err: CoreError) -> FolderEntry {

@@ -1,3 +1,4 @@
+import { ArrowDown, RefreshCw } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api, errorMessage, type HexChunk, type HexSummary } from "../lib/api";
 import { formatSize, hex } from "../lib/format";
@@ -148,7 +149,7 @@ export function HexCompare({ left, right, onPathsChange }: Props) {
     <div className="session">
       <div className="toolbar">
         <button onClick={nextDiff} disabled={!summary || summary.identical}>
-          ↓ Next difference
+          <ArrowDown size={14} /> Next difference
         </button>
         <span className="spacer" />
         <label className={`check${watchState === "watching" || watchState === "polling" ? " live" : ""}`} title={autoRefreshTitle(watchState)}>
@@ -156,7 +157,7 @@ export function HexCompare({ left, right, onPathsChange }: Props) {
           Auto-refresh
         </label>
         <button onClick={reload} title="Reload both files">
-          ⟳ Refresh
+          <RefreshCw size={14} /> Refresh
         </button>
       </div>
       <PathBar left={left} right={right} directory={false} onCompare={onPathsChange} />
