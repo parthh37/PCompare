@@ -7,6 +7,7 @@
 //! stored so it can show "saved" placeholders.
 
 use crate::provider::{spec, FieldKind, ProviderKind, REFRESH_TOKEN};
+pub use pcompare_core::secrets::{MemorySecrets, SecretStore};
 use pcompare_core::store::{now_ms, read_json, write_json};
 use pcompare_core::{CoreError, Result};
 use serde::{Deserialize, Serialize};
@@ -43,12 +44,6 @@ pub struct ProfileInput {
     pub secrets: BTreeMap<String, String>,
 }
 
-pub trait SecretStore: Send + Sync {
-    fn get(&self, profile: &str, key: &str) -> Result<Option<String>>;
-    fn set(&self, profile: &str, key: &str, value: &str) -> Result<()>;
-    fn delete(&self, profile: &str, key: &str) -> Result<()>;
-}
-
 /// The platform keychain.
 pub struct KeyringSecrets;
 
@@ -77,24 +72,6 @@ impl SecretStore for KeyringSecrets {
             Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
             Err(e) => Err(CoreError::Other(format!("keychain: {e}"))),
         }
-    }
-}
-
-/// In-memory secrets for tests.
-#[derive(Default)]
-pub struct MemorySecrets(Mutex<HashMap<(String, String), String>>);
-
-impl SecretStore for MemorySecrets {
-    fn get(&self, profile: &str, key: &str) -> Result<Option<String>> {
-        Ok(self.0.lock().unwrap().get(&(profile.into(), key.into())).cloned())
-    }
-    fn set(&self, profile: &str, key: &str, value: &str) -> Result<()> {
-        self.0.lock().unwrap().insert((profile.into(), key.into()), value.into());
-        Ok(())
-    }
-    fn delete(&self, profile: &str, key: &str) -> Result<()> {
-        self.0.lock().unwrap().remove(&(profile.into(), key.into()));
-        Ok(())
     }
 }
 

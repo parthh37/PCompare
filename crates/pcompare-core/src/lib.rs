@@ -7,6 +7,7 @@
 pub mod error;
 pub mod folder;
 pub mod hex;
+pub mod secrets;
 pub mod session;
 pub mod store;
 pub mod text;
