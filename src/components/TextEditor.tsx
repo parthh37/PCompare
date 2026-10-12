@@ -246,7 +246,7 @@ export function TextEditor({ left: path, onPathsChange, settings, onSettingsChan
   const dirty = !!doc && isDirty(doc);
   const reportDirty = useRef(onDirtyChange);
   reportDirty.current = onDirtyChange;
-  useEffect(() => reportDirty.current?.(dirty), [dirty]);
+  useEffect(() => void reportDirty.current?.(dirty), [dirty]);
 
   useEffect(() => {
     if (!notice) return;

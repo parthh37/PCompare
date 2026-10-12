@@ -44,7 +44,7 @@ export function VersionCompare({ left, right, onPathsChange, settings, onSetting
   const [filter, setFilter] = useState<PropertyFilter>(settings?.filter ?? "all");
   const reportSettings = useRef(onSettingsChange);
   reportSettings.current = onSettingsChange;
-  useEffect(() => reportSettings.current?.({ filter }), [filter]);
+  useEffect(() => void reportSettings.current?.({ filter }), [filter]);
 
   const [result, setResult] = useState<VersionCompareResult | null>(null);
   const [error, setError] = useState<string | null>(null);

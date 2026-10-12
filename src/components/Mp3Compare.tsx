@@ -73,7 +73,7 @@ export function Mp3Compare({ left, right, onPathsChange, settings, onSettingsCha
   const [filter, setFilter] = useState<PropertyFilter>(settings?.filter ?? "all");
   const reportSettings = useRef(onSettingsChange);
   reportSettings.current = onSettingsChange;
-  useEffect(() => reportSettings.current?.({ filter }), [filter]);
+  useEffect(() => void reportSettings.current?.({ filter }), [filter]);
 
   const [result, setResult] = useState<AudioCompareResult | null>(null);
   const [error, setError] = useState<string | null>(null);
