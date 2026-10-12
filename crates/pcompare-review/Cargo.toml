@@ -1,0 +1,17 @@
+[package]
+name = "pcompare-review"
+description = "Single-file comparison archives (.pcmpz) for reviewing a comparison on another machine"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+# Pure Rust only, like pcompare-archive: clippy-checkable for Windows from macOS.
+[dependencies]
+pcompare-core = { path = "../pcompare-core" }
+serde.workspace = true
+serde_json.workspace = true
+zip = { version = "8", default-features = false, features = ["deflate"] }
+
+[dev-dependencies]
+tempfile = "3"

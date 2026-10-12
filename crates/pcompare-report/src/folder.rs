@@ -1,14 +1,15 @@
 //! Folder comparison reports: a summary (status and relative path of every
 //! file) or a detailed side-by-side listing with sizes, dates and status, as
-//! HTML, plain text or CSV. Reports honour a display filter and name filter
-//! like the Folder Compare view, and HTML reports can link a text-compare
-//! report for every differing text file, written to `<report>_files/`.
+//! HTML, plain text, CSV or XML. Reports honour a display filter and name
+//! filter like the Folder Compare view. HTML reports can link a text-compare
+//! report for every differing text file, written to `<report>_files/`, and
+//! show bookmark comments; XML reports can embed those comparisons instead.
 
 use crate::html::{self, escape, Style};
 use crate::text::{self, TextReportFormat, TextReportOptions, TextSection};
-use crate::{csv_row, display_width, format_size, format_time, pad};
+use crate::{csv_row, display_width, format_size, format_time, pad, xml};
 use pcompare_core::folder::{EntryMeta, EntryStatus, FolderCompareResult, FolderEntry, Side};
-use pcompare_core::text::TextDiffOptions;
+use pcompare_core::text::{TextDiffOptions, TextDiffResult};
 use pcompare_core::{textfile, CoreError, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
@@ -178,6 +179,40 @@ pub enum FolderReportFormat {
     Html,
     Text,
     Csv,
+    /// Every listed row as XML (schema in [`crate::xml`]).
+    Xml,
+}
+
+/// A bookmarked entry (by relative path) with an optional comment, shown
+/// as an annotation in HTML reports and as `<comment>` in XML ones.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FolderBookmark {
+    pub path: String,
+    #[serde(default)]
+    pub comment: Option<String>,
+}
+
+impl FolderBookmark {
+    fn comment(&self) -> Option<&str> {
+        self.comment
+            .as_deref()
+            .map(str::trim)
+            .filter(|c| !c.is_empty())
+    }
+}
+
+/// Bookmarks by relative path (a duplicate keeps whichever has a comment).
+fn bookmark_map(bookmarks: &[FolderBookmark]) -> HashMap<&str, &FolderBookmark> {
+    let mut map: HashMap<&str, &FolderBookmark> = HashMap::new();
+    for b in bookmarks {
+        let path = b.path.trim_end_matches('/');
+        let e = map.entry(path).or_insert(b);
+        if e.comment().is_none() {
+            *e = b;
+        }
+    }
+    map
 }
 
 /// The Folder Compare display filters (same names as the UI's).
@@ -547,13 +582,41 @@ pub fn render(
     generated: &str,
     links: &HashMap<String, String>,
 ) -> String {
+    render_annotated(input, opts, &[], generated, links)
+}
+
+/// [`render`] with bookmarks (HTML and XML show their comments).
+pub fn render_annotated(
+    input: &FolderReportInput,
+    opts: &FolderReportOptions,
+    bookmarks: &[FolderBookmark],
+    generated: &str,
+    links: &HashMap<String, String>,
+) -> String {
+    render_full(input, opts, bookmarks, generated, links, &HashMap::new())
+}
+
+/// An embedded per-file comparison of an XML report: the diff with the
+/// sides' paths, or why there is none.
+type Embedded = std::result::Result<(String, String, TextDiffResult), String>;
+
+fn render_full(
+    input: &FolderReportInput,
+    opts: &FolderReportOptions,
+    bookmarks: &[FolderBookmark],
+    generated: &str,
+    links: &HashMap<String, String>,
+    embedded: &HashMap<String, (Embedded, &TextReportOptions)>,
+) -> String {
     let rows = rows(input, opts);
     let mut t = Tally::default();
     tally(&input.entries, &mut t);
+    let marks = bookmark_map(bookmarks);
     match opts.format {
-        FolderReportFormat::Html => render_html(input, opts, generated, &rows, &t, links),
+        FolderReportFormat::Html => render_html(input, opts, generated, &rows, &t, links, &marks),
         FolderReportFormat::Text => render_text(input, opts, generated, &rows, &t),
         FolderReportFormat::Csv => render_csv(opts, &rows),
+        FolderReportFormat::Xml => render_xml(input, opts, generated, &rows, &t, &marks, embedded),
     }
 }
 
@@ -571,9 +634,28 @@ fn render_html(
     rows: &[Row],
     t: &Tally,
     links: &HashMap<String, String>,
+    marks: &HashMap<&str, &FolderBookmark>,
 ) -> String {
     let title = title(opts);
     let mut body = html::header(title, generated, &input.left_root, &input.right_root);
+    // Bookmarked rows: their index (for the comment list's links) and comment row.
+    let mut anchors: HashMap<&str, usize> = HashMap::new();
+    let mut mark = |e: &ReportEntry, i: usize| -> (String, &'static str) {
+        let Some(b) = marks.get(e.rel_path.as_str()) else {
+            return (String::new(), "");
+        };
+        anchors.insert(b.path.trim_end_matches('/'), i);
+        (format!(" id=\"bm-{i}\""), " bm")
+    };
+    let note = |out: &mut String, e: &ReportEntry, cols: usize| {
+        if let Some(c) = marks.get(e.rel_path.as_str()).and_then(|b| b.comment()) {
+            let _ = writeln!(
+                out,
+                "<tr class=\"note\"><td colspan=\"{cols}\"><span class=\"tag\">Comment</span>{}</td></tr>",
+                escape(c)
+            );
+        }
+    };
     let _ = writeln!(
         body,
         "<div class=\"stats\">{} · {}</div>",
@@ -584,14 +666,16 @@ fn render_html(
         body.push_str("<div class=\"note\">Nothing to show for this filter.</div>\n");
     } else if opts.layout == FolderLayout::Summary {
         body.push_str("<table class=\"grid\">\n<tr><th>Status</th><th>Path</th></tr>\n");
-        for Row { entry: e, .. } in rows {
+        for (i, Row { entry: e, .. }) in rows.iter().enumerate() {
+            let (id, bm) = mark(e, i);
             let _ = writeln!(
                 body,
-                "<tr class=\"{}\"><td>{}</td><td>{}</td></tr>",
+                "<tr class=\"{}{bm}\"{id}><td>{}</td><td>{}</td></tr>",
                 status_class(e),
                 escape(&status_label(e)),
                 linked_name(&display_path(e), links.get(&e.rel_path))
             );
+            note(&mut body, e, 2);
         }
         body.push_str("</table>\n");
     } else {
@@ -612,7 +696,8 @@ fn render_html(
             head("Left"),
             head("Right")
         );
-        for Row { entry: e, depth } in rows {
+        for (i, Row { entry: e, depth }) in rows.iter().enumerate() {
+            let (id, bm) = mark(e, i);
             let indent = 6 + depth * 16;
             let href = links.get(&e.rel_path);
             let side = |meta: &Option<ReportMeta>, name: &str| -> String {
@@ -638,7 +723,7 @@ fn render_html(
             };
             let _ = writeln!(
                 body,
-                "<tr class=\"{}{}\">{}<td class=\"st\" title=\"{}\">{}</td>{}</tr>",
+                "<tr class=\"{}{}{bm}\"{id}>{}<td class=\"st\" title=\"{}\">{}</td>{}</tr>",
                 if e.is_dir { "dir " } else { "" },
                 status_class(e),
                 side(&e.left, e.left_name()),
@@ -646,8 +731,29 @@ fn render_html(
                 status_symbol(e),
                 side(&e.right, &e.name),
             );
+            note(&mut body, e, side_cols * 2 + 1);
         }
         body.push_str("</table>\n");
+    }
+    if !marks.is_empty() {
+        let mut all: Vec<&&FolderBookmark> = marks.values().collect();
+        all.sort_by(|a, b| a.path.cmp(&b.path));
+        body.push_str("<h3>Comments</h3>\n<ul class=\"comments\">\n");
+        for b in all {
+            let path = b.path.trim_end_matches('/');
+            let label = match anchors.get(path) {
+                Some(i) => format!("<a href=\"#bm-{i}\">{}</a>", escape(path)),
+                None => escape(path),
+            };
+            let _ = writeln!(
+                body,
+                "<li><span class=\"tag\">{label}</span>{}</li>",
+                b.comment()
+                    .map(escape)
+                    .unwrap_or_else(|| "<span class=\"note-empty\">(bookmark)</span>".into())
+            );
+        }
+        body.push_str("</ul>\n");
     }
     html::page(
         title,
@@ -814,9 +920,143 @@ fn render_csv(opts: &FolderReportOptions, rows: &[Row]) -> String {
     out
 }
 
+fn status_name(s: Status) -> &'static str {
+    match s {
+        Status::Same => "same",
+        Status::Similar => "similar",
+        Status::Different => "different",
+        Status::LeftOnly => "leftOnly",
+        Status::RightOnly => "rightOnly",
+        Status::TypeMismatch => "typeMismatch",
+        Status::Error => "error",
+    }
+}
+
+fn render_xml(
+    input: &FolderReportInput,
+    opts: &FolderReportOptions,
+    generated: &str,
+    rows: &[Row],
+    t: &Tally,
+    marks: &HashMap<&str, &FolderBookmark>,
+    embedded: &HashMap<String, (Embedded, &TextReportOptions)>,
+) -> String {
+    let mut out = String::from(xml::DECLARATION);
+    let _ = write!(
+        out,
+        "<folderReport version=\"1\" generator=\"PCompare\" title=\"{}\"",
+        xml::attr(title(opts))
+    );
+    if !generated.is_empty() {
+        let _ = write!(out, " produced=\"{}\"", xml::attr(generated));
+    }
+    let layout = match opts.layout {
+        FolderLayout::Summary => "summary",
+        FolderLayout::Detailed => "detailed",
+    };
+    let filter = filter_name(opts.filter);
+    let _ = writeln!(
+        out,
+        ">\n  <left root=\"{}\"/>\n  <right root=\"{}\"/>\n  <options layout=\"{layout}\" filter=\"{filter}\" nameFilter=\"{}\"/>",
+        xml::attr(&input.left_root),
+        xml::attr(&input.right_root),
+        xml::attr(opts.name_filter.trim())
+    );
+    let _ = writeln!(
+        out,
+        "  <summary same=\"{}\" similar=\"{}\" different=\"{}\" leftOnly=\"{}\" rightOnly=\"{}\" errors=\"{}\" ignored=\"{}\"/>",
+        t.same, t.similar, t.different, t.left_only, t.right_only, t.errors, t.ignored
+    );
+    let _ = writeln!(out, "  <entries count=\"{}\">", rows.len());
+    for Row { entry: e, depth } in rows {
+        let _ = write!(
+            out,
+            "    <entry path=\"{}\" name=\"{}\" type=\"{}\" depth=\"{depth}\" status=\"{}\" label=\"{}\"",
+            xml::attr(&e.rel_path),
+            xml::attr(&e.name),
+            if e.is_dir { "folder" } else { "file" },
+            status_name(e.status),
+            xml::attr(&status_label(e)),
+        );
+        if let Some(n) = e.newer {
+            let _ = write!(
+                out,
+                " newer=\"{}\"",
+                if n == Newer::Left { "left" } else { "right" }
+            );
+        }
+        if e.ignored {
+            out.push_str(" ignored=\"true\"");
+        }
+        if let Some(l) = e.left_rel_path.as_ref().filter(|l| **l != e.rel_path) {
+            let _ = write!(out, " leftPath=\"{}\"", xml::attr(l));
+        }
+        if let Some(err) = &e.error {
+            let _ = write!(out, " error=\"{}\"", xml::attr(err));
+        }
+        let mut inner = String::new();
+        for (tag, meta) in [("left", &e.left), ("right", &e.right)] {
+            let Some(m) = meta else { continue };
+            let _ = write!(inner, "      <{tag}");
+            if !e.is_dir {
+                let _ = write!(inner, " size=\"{}\"", m.size);
+            }
+            if let Some(ms) = m.modified_ms {
+                let _ = write!(inner, " modified=\"{}\"", xml::attr(&format_time(ms)));
+            }
+            inner.push_str("/>\n");
+        }
+        if let Some(c) = marks.get(e.rel_path.as_str()).and_then(|b| b.comment()) {
+            let _ = writeln!(inner, "      <comment>{}</comment>", xml::text(c));
+        }
+        match embedded.get(&e.rel_path) {
+            Some((Ok((left, right, diff)), text_opts)) => {
+                let section = TextSection {
+                    name: "",
+                    left,
+                    right,
+                    diff,
+                };
+                text::xml_comparison(&mut inner, &section, "", text_opts, &[], "      ");
+            }
+            Some((Err(reason), _)) => {
+                let _ = writeln!(
+                    inner,
+                    "      <comparison skipped=\"{}\"/>",
+                    xml::attr(reason)
+                );
+            }
+            None => {}
+        }
+        if inner.is_empty() {
+            out.push_str("/>\n");
+        } else {
+            let _ = write!(out, ">\n{inner}    </entry>\n");
+        }
+    }
+    out.push_str("  </entries>\n</folderReport>\n");
+    out
+}
+
+/// The filter's serialized name, as the app spells it.
+fn filter_name(f: DisplayFilter) -> &'static str {
+    match f {
+        DisplayFilter::All => "all",
+        DisplayFilter::Diffs => "diffs",
+        DisplayFilter::DiffsNoOrphans => "diffsNoOrphans",
+        DisplayFilter::Same => "same",
+        DisplayFilter::Orphans => "orphans",
+        DisplayFilter::LeftOrphans => "leftOrphans",
+        DisplayFilter::RightOrphans => "rightOrphans",
+        DisplayFilter::LeftNewer => "leftNewer",
+        DisplayFilter::RightNewer => "rightNewer",
+    }
+}
+
 // ---------- writing with linked file reports ----------
 
-/// Per-file text reports linked from an HTML folder report.
+/// Per-file text reports linked from an HTML folder report (or embedded in
+/// an XML one).
 pub struct LinkedReports<'a> {
     /// Layout and options of each file's report (always written as HTML).
     pub text: &'a TextReportOptions,
@@ -862,13 +1102,13 @@ fn href_path(rel: &str) -> String {
     out
 }
 
-/// Diffs one file pair and renders its report; `Ok(None)` for binary files.
-fn file_report(
+/// Diffs one file pair: the sides' paths and the diff, `Ok(None)` for
+/// binary files.
+fn file_diff(
     input: &FolderReportInput,
     e: &ReportEntry,
     linked: &LinkedReports,
-    generated: &str,
-) -> Result<Option<String>> {
+) -> Result<Option<(String, String, TextDiffResult)>> {
     let left = join_root(&input.left_root, e.left_rel());
     let right = join_root(&input.right_root, &e.rel_path);
     let (lp, rp) = ((linked.local)(&left)?, (linked.local)(&right)?);
@@ -883,6 +1123,19 @@ fn file_report(
         Some(&right),
         linked.rules,
     )?;
+    Ok(Some((left, right, diff)))
+}
+
+/// Diffs one file pair and renders its report; `Ok(None)` for binary files.
+fn file_report(
+    input: &FolderReportInput,
+    e: &ReportEntry,
+    linked: &LinkedReports,
+    generated: &str,
+) -> Result<Option<String>> {
+    let Some((left, right, diff)) = file_diff(input, e, linked)? else {
+        return Ok(None);
+    };
     let opts = TextReportOptions {
         format: TextReportFormat::Html,
         title: e.rel_path.clone(),
@@ -897,12 +1150,39 @@ fn file_report(
     Ok(Some(text::render(&[section], &opts, generated)))
 }
 
-/// Renders the report to `out`. With `linked` (HTML only), first writes a
-/// text-compare report for every differing (or similar) text file the
-/// report lists into `<report name>_files/` next to it and links them.
+/// The differing (or similar) file pairs a report lists, which get per-file
+/// reports.
+fn file_candidates<'a>(
+    input: &'a FolderReportInput,
+    opts: &FolderReportOptions,
+) -> Vec<&'a ReportEntry> {
+    rows(input, opts)
+        .into_iter()
+        .map(|r| r.entry)
+        .filter(|e| !e.is_dir && e.left.is_some() && e.right.is_some())
+        .filter(|e| matches!(e.effective(), Status::Different | Status::Similar))
+        .collect()
+}
+
+/// Renders the report to `out`. With `linked`, an HTML report first writes
+/// a text-compare report for every differing (or similar) text file it
+/// lists into `<report name>_files/` next to it and links them; an XML
+/// report embeds each file's comparison in its `<entry>` instead.
 pub fn write_folder_report(
     input: &FolderReportInput,
     opts: &FolderReportOptions,
+    generated: &str,
+    out: &Path,
+    linked: Option<&LinkedReports>,
+) -> Result<WrittenReport> {
+    write_folder_report_annotated(input, opts, &[], generated, out, linked)
+}
+
+/// [`write_folder_report`] with bookmarks (see [`render_annotated`]).
+pub fn write_folder_report_annotated(
+    input: &FolderReportInput,
+    opts: &FolderReportOptions,
+    bookmarks: &[FolderBookmark],
     generated: &str,
     out: &Path,
     linked: Option<&LinkedReports>,
@@ -912,6 +1192,23 @@ pub fn write_folder_report(
         ..Default::default()
     };
     let mut links = HashMap::new();
+    let mut embedded = HashMap::new();
+    if let Some(linked) = linked.filter(|_| opts.format == FolderReportFormat::Xml) {
+        for e in file_candidates(input, opts) {
+            let found = match file_diff(input, e, linked) {
+                Ok(Some(d)) => {
+                    written.linked += 1;
+                    Ok(d)
+                }
+                Ok(None) => Err("binary file".to_owned()),
+                Err(err) => Err(err.to_string()),
+            };
+            if let Err(reason) = &found {
+                written.skipped.push(format!("{}: {reason}", e.rel_path));
+            }
+            embedded.insert(e.rel_path.clone(), (found, linked.text));
+        }
+    }
     if let Some(linked) = linked.filter(|_| opts.format == FolderReportFormat::Html) {
         let stem = out
             .file_stem()
@@ -919,13 +1216,7 @@ pub fn write_folder_report(
             .unwrap_or_else(|| "report".into());
         let dir_name = format!("{stem}_files");
         let dir = out.with_file_name(&dir_name);
-        let candidates: Vec<&ReportEntry> = rows(input, opts)
-            .into_iter()
-            .map(|r| r.entry)
-            .filter(|e| !e.is_dir && e.left.is_some() && e.right.is_some())
-            .filter(|e| matches!(e.effective(), Status::Different | Status::Similar))
-            .collect();
-        for e in candidates {
+        for e in file_candidates(input, opts) {
             match file_report(input, e, linked, generated) {
                 Ok(Some(html)) => {
                     let target = dir.join(format!("{}.html", e.rel_path));
@@ -948,7 +1239,7 @@ pub fn write_folder_report(
             written.files_dir = Some(dir.to_string_lossy().into_owned());
         }
     }
-    let report = render(input, opts, generated, &links);
+    let report = render_full(input, opts, bookmarks, generated, &links, &embedded);
     std::fs::write(out, report).map_err(|e| CoreError::io(out, e))?;
     Ok(written)
 }
@@ -1176,6 +1467,143 @@ mod tests {
             folder.contains("<a href=\"diff%20report_files/sub%20dir/x.txt.html\">x.txt</a>"),
             "{folder}"
         );
+    }
+
+    #[test]
+    fn xml_report_is_well_formed_and_lists_every_row() {
+        let mut input = sample();
+        input.entries[0].children[1].left_rel_path = Some("src/B <old>.rs".into());
+        input.entries[1].ignored = true;
+        let marks = [FolderBookmark {
+            path: "src/c.rs".into(),
+            comment: Some("gone? & why".into()),
+        }];
+        let x = render_annotated(
+            &input,
+            &opts(|o| {
+                o.format = FolderReportFormat::Xml;
+                o.name_filter = "\"q\"".into();
+            }),
+            &marks,
+            "today",
+            &HashMap::new(),
+        );
+        let names = crate::xml::tests::parse(&x);
+        assert_eq!(names[0], "folderReport");
+        assert_eq!(
+            names.iter().filter(|n| *n == "entry").count(),
+            0,
+            "name filter hides all"
+        );
+        let x = render_annotated(
+            &input,
+            &opts(|o| o.format = FolderReportFormat::Xml),
+            &marks,
+            "today",
+            &HashMap::new(),
+        );
+        let names = crate::xml::tests::parse(&x);
+        assert_eq!(names.iter().filter(|n| *n == "entry").count(), 5, "{x}");
+        assert!(x.contains("<entries count=\"5\">"));
+        assert!(x.contains("<summary same=\"2\" similar=\"0\" different=\"1\" leftOnly=\"1\" rightOnly=\"0\" errors=\"0\" ignored=\"1\"/>"), "{x}");
+        assert!(x.contains("<entry path=\"src/b.rs\" name=\"b.rs\" type=\"file\" depth=\"1\" status=\"different\" label=\"Left newer\" newer=\"left\" leftPath=\"src/B &lt;old&gt;.rs\">"), "{x}");
+        assert!(x.contains("      <left size=\"1200\"/>\n      <right size=\"1100\"/>"));
+        assert!(x.contains("<comment>gone? &amp; why</comment>"));
+        assert!(
+            x.contains("status=\"rightOnly\" label=\"Ignored\" ignored=\"true\">"),
+            "{x}"
+        );
+    }
+
+    #[test]
+    fn html_shows_bookmark_comments_on_rows() {
+        let marks = [
+            FolderBookmark {
+                path: "src/b.rs".into(),
+                comment: Some("review <this>".into()),
+            },
+            FolderBookmark {
+                path: "nowhere.txt".into(),
+                comment: None,
+            },
+        ];
+        let h = render_annotated(
+            &sample(),
+            &opts(|o| o.show_modified = false),
+            &marks,
+            "",
+            &HashMap::new(),
+        );
+        assert!(
+            h.contains("<tr class=\"s-different bm\" id=\"bm-2\">"),
+            "{h}"
+        );
+        assert!(h.contains("<tr class=\"note\"><td colspan=\"5\"><span class=\"tag\">Comment</span>review &lt;this&gt;</td></tr>"), "{h}");
+        assert!(h.contains("<a href=\"#bm-2\">src/b.rs</a>"));
+        assert!(h.contains(
+            "<span class=\"tag\">nowhere.txt</span><span class=\"note-empty\">(bookmark)</span>"
+        ));
+        let s = render_annotated(
+            &sample(),
+            &opts(|o| o.layout = FolderLayout::Summary),
+            &marks,
+            "",
+            &HashMap::new(),
+        );
+        assert!(s.contains("<td colspan=\"2\"><span class=\"tag\">Comment</span>"));
+    }
+
+    #[test]
+    fn xml_reports_embed_file_comparisons() {
+        let l = tempfile::tempdir().unwrap();
+        let r = tempfile::tempdir().unwrap();
+        let out = tempfile::tempdir().unwrap();
+        for (dir, text, tag) in [(&l, "one\ntwo\n", 1u8), (&r, "one\nTWO\n", 2u8)] {
+            std::fs::write(dir.path().join("x.txt"), text).unwrap();
+            std::fs::write(dir.path().join("bin.dat"), [0u8, 1, 2, tag]).unwrap();
+        }
+        let cmp = pcompare_core::folder::compare_folders(
+            l.path(),
+            r.path(),
+            &pcompare_core::folder::FolderCompareOptions {
+                content: pcompare_core::folder::ContentMethod::Binary,
+                compare_timestamp: false,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let input = FolderReportInput::from(&cmp);
+        let report = out.path().join("report.xml");
+        let local = |p: &str| Ok(PathBuf::from(p));
+        let text_opts = TextReportOptions::default();
+        let rules = TextDiffOptions::default();
+        let written = write_folder_report(
+            &input,
+            &opts(|o| o.format = FolderReportFormat::Xml),
+            "",
+            &report,
+            Some(&LinkedReports {
+                text: &text_opts,
+                rules: &rules,
+                local: &local,
+            }),
+        )
+        .unwrap();
+        assert_eq!(
+            (written.linked, written.skipped.len()),
+            (1, 1),
+            "{written:?}"
+        );
+        assert_eq!(written.files_dir, None);
+        let x = std::fs::read_to_string(&report).unwrap();
+        let names = crate::xml::tests::parse(&x);
+        assert_eq!(
+            names.iter().filter(|n| *n == "comparison").count(),
+            2,
+            "{x}"
+        );
+        assert!(x.contains("<comparison skipped=\"binary file\"/>"));
+        assert!(x.contains("<line side=\"right\" n=\"2\">TWO</line>"), "{x}");
     }
 
     #[test]

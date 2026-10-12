@@ -15,6 +15,8 @@
 //!   attributes and optional CRCs of a folder tree, without contents.
 //! - `svn:https://host/repo/trunk@123` — a Subversion repository through
 //!   the `svn` command-line client ([`svn`]).
+//! - `git:/src/app@HEAD~1`, `hg:/src/app@tip` — a revision of a Git or
+//!   Mercurial working tree through the `git` / `hg` clients ([`vcs`]).
 //!
 //! [`Archives`] turns such a path into a file system plus the path inside
 //! it, caches what it opened, and extracts single entries for the viewers.
@@ -26,6 +28,7 @@ mod formats;
 pub mod snapshot;
 pub mod svn;
 mod tree;
+pub mod vcs; // araxis:vcs
 
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
@@ -43,6 +46,7 @@ pub use archive::ArchiveFs;
 pub use expand::ExpandFs;
 pub use snapshot::SnapshotFs;
 pub use svn::SvnFs;
+pub use vcs::VcsFs; // araxis:vcs
 
 /// The archive formats PCompare reads.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
@@ -139,6 +143,10 @@ pub enum ContainerKind {
     Archive(ArchiveKind),
     Snapshot,
     Svn,
+    // araxis:vcs — `git:` / `hg:` revisions
+    Git,
+    Hg,
+    // araxis:vcs end
 }
 
 /// Checksums a container stores for its files (zip and 7z headers,
@@ -234,13 +242,20 @@ pub fn split_path<'a>(
 /// Cheap syntactic test: could this path lead into an archive, snapshot or
 /// repository? Used to skip the special handling for ordinary paths.
 pub fn may_be_container_path(path: &str) -> bool {
-    is_svn(path) || path.split(['/', '\\']).any(|c| split_kind(c).is_some())
+    is_repo_path(path) || path.split(['/', '\\']).any(|c| split_kind(c).is_some())
 }
 
 pub fn is_svn(path: &str) -> bool {
     path.get(..SVN_PREFIX.len())
         .is_some_and(|p| p.eq_ignore_ascii_case(SVN_PREFIX))
 }
+
+// araxis:vcs
+/// `svn:`, `git:` and `hg:` paths: repositories reached through a client.
+pub fn is_repo_path(path: &str) -> bool {
+    is_svn(path) || vcs::is_vcs(path)
+}
+// araxis:vcs end
 
 /// Writes `src` to `dest` through a temp file in the same folder, so a
 /// crash or a concurrent reader never sees half a file.
@@ -274,6 +289,10 @@ pub struct Archives {
     archives: Mutex<HashMap<(PathBuf, String, bool), Arc<ArchiveFs>>>,
     snapshots: Mutex<HashMap<PathBuf, (snapshot::Stamp, Arc<SnapshotFs>)>>,
     repos: Mutex<HashMap<String, (Instant, Arc<SvnFs>)>>,
+    // araxis:vcs — git/hg trees by location@rev, and refs with slashes seen per location
+    vcs: Mutex<HashMap<String, (Instant, Arc<VcsFs>)>>,
+    vcs_refs: Mutex<HashMap<(vcs::VcsKind, String), Vec<String>>>,
+    // araxis:vcs end
 }
 
 impl Archives {
@@ -285,6 +304,8 @@ impl Archives {
             archives: Mutex::new(HashMap::new()),
             snapshots: Mutex::new(HashMap::new()),
             repos: Mutex::new(HashMap::new()),
+            vcs: Mutex::new(HashMap::new()),      // araxis:vcs
+            vcs_refs: Mutex::new(HashMap::new()), // araxis:vcs
         }
     }
 
@@ -345,6 +366,57 @@ impl Archives {
         fs
     }
 
+    // araxis:vcs
+    /// The tree behind a `git:` / `hg:` path (listing cached; moving
+    /// revisions such as `HEAD` briefly).
+    pub fn open_vcs(&self, root: &vcs::VcsPath) -> Arc<VcsFs> {
+        let key = format!("{}{}@{}", root.kind.prefix(), root.location, root.rev);
+        let mut map = self.vcs.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some((at, fs)) = map.get(&key) {
+            if root.pinned() || at.elapsed() < SVN_HEAD_TTL {
+                return fs.clone();
+            }
+        }
+        let fs = Arc::new(VcsFs::new(root.clone()));
+        map.insert(key, (Instant::now(), fs.clone()));
+        fs
+    }
+
+    /// Splits a `git:` / `hg:` path into revision and inner path, asking the
+    /// client only for refs that may contain slashes (remembered per working
+    /// tree, so the files below a compared root resolve without it).
+    pub fn resolve_vcs_path(&self, path: &str) -> Result<vcs::VcsPath> {
+        let spec = vcs::VcsSpec::parse(path)?;
+        let key = (spec.kind, spec.location.clone());
+        let known = self
+            .vcs_refs
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(&key)
+            .cloned()
+            .unwrap_or_default();
+        let (rev, inner) = vcs::split_rev(spec.kind, &spec.tail, &known, |c| {
+            vcs::rev_exists(spec.kind, &spec.location, c)
+        });
+        if rev.contains(['/', '\\']) && !known.contains(&rev) {
+            self.vcs_refs
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .entry(key)
+                .or_default()
+                .push(rev.clone());
+        }
+        let inner = tree::normalize(&inner)
+            .ok_or_else(|| CoreError::Other(format!("`{path}` climbs out of the repository")))?;
+        Ok(vcs::VcsPath {
+            kind: spec.kind,
+            location: spec.location,
+            rev,
+            inner,
+        })
+    }
+    // araxis:vcs end
+
     /// Resolves a local path into an archive or snapshot, or an `svn:`
     /// path. `None` for ordinary paths (and for a bare archive file unless
     /// `as_folder`, so archives still compare as files where a file is
@@ -362,6 +434,22 @@ impl Archives {
                 snapshot: None,
             }));
         }
+        // araxis:vcs
+        if vcs::is_vcs(path) {
+            let p = self.resolve_vcs_path(path)?;
+            return Ok(Some(Resolved {
+                fs: self.open_vcs(&p),
+                path: p.inner.clone(),
+                crcs: None,
+                kind: match p.kind {
+                    vcs::VcsKind::Git => ContainerKind::Git,
+                    vcs::VcsKind::Hg => ContainerKind::Hg,
+                },
+                read_only: Some(p.kind.read_only().into()),
+                snapshot: None,
+            }));
+        }
+        // araxis:vcs end
         if !may_be_container_path(path) {
             return Ok(None);
         }

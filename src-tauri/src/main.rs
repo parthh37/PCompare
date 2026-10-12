@@ -19,6 +19,8 @@ mod watch;
 mod workspace; // bc5:app-shell
 mod cli; // bc5:reports-script
 mod report; // bc5:reports-script
+mod review; // araxis:text-review
+mod vcs; // araxis:vcs
 
 use pcompare_core::session::{SavedSession, SessionInput, SessionStore};
 use pcompare_core::text::{self, TextDiffOptions, TextDiffResult};
@@ -357,7 +359,17 @@ fn main() {
     if let Some(code) = cli::run_headless(args.get(1..).unwrap_or_default()) {
         std::process::exit(code);
     }
+    // araxis:vcs — `--wait` (git difftool / mergetool) blocks here until the tab closes.
+    if let Some(code) = vcs::run_wait_mode(args.get(1..).unwrap_or_default()) {
+        std::process::exit(code);
+    }
+    // araxis:vcs end
     let _ = LAUNCH_OPTIONS.set(resolve_launch_paths(args.get(1..).unwrap_or_default()));
+    // araxis:vcs
+    if let Some(token) = LAUNCH_OPTIONS.get().and_then(|o| o.wait_token.as_deref()) {
+        vcs::register(token);
+    }
+    // araxis:vcs end
 
     tauri::Builder::default()
         // bc5:app-shell — must be the first plugin: a second launch hands its
@@ -403,6 +415,12 @@ fn main() {
             // bc5:archives — archive / snapshot / svn: sides, snapshots (archive.rs)
             archive::archive_side_info,
             archive::snapshot_save,
+            // araxis:text-review — comparison archives (review.rs)
+            review::review_save,
+            review::review_open,
+            review::review_save_bookmarks,
+            review::review_read_file,
+            // araxis:text-review end
             folder::compare_folders_cancel,
             watch_paths,
             unwatch_paths,
@@ -520,6 +538,9 @@ fn main() {
             patch::patch_load,
             patch::patch_check,
             patch::patch_apply_file,
+            // araxis:merge
+            patch::patch_write_selected,
+            // araxis:merge end
             // --- bc5:converters — file format rules, external tools (convert.rs) ---
             convert::convert_config_load,
             convert::convert_config_save,
@@ -539,6 +560,14 @@ fn main() {
             report::report_table,
             report::report_write,
             report::report_open_in_browser,
+            // araxis:vcs — wait mode, git setup, tool snippets, revision picker (vcs.rs)
+            vcs::vcs_wait_done,
+            vcs::vcs_git_setup_preview,
+            vcs::vcs_git_setup_apply,
+            vcs::vcs_snippets,
+            vcs::vcs_detect,
+            vcs::vcs_revisions,
+            // araxis:vcs end
         ])
         .run(tauri::generate_context!())
         .expect("error while running PCompare");

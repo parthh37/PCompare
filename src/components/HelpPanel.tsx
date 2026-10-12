@@ -4,6 +4,7 @@ import { HELP_TOPICS, type HelpTopic } from "../help/topics";
 import { bindingFor, COMMANDS, formatBinding, type CommandDef } from "../lib/keymap";
 import { usePref } from "../lib/prefs";
 import "./HelpPanel.css";
+import { GettingStarted } from "./GettingStarted"; // araxis:vcs
 
 interface Props {
   /** Page to show when the panel opens (F1 passes the active view's page). */
@@ -102,6 +103,7 @@ function snippet(t: HelpTopic, q: string): string {
 export function HelpPanel({ topicId, onClose }: Props) {
   const [current, setCurrent] = useState(topicId);
   const [query, setQuery] = useState("");
+  const [overview, setOverview] = useState(false); // araxis:vcs
   const body = useRef<HTMLDivElement>(null);
 
   // F1 on another tab while the panel is open jumps to that tab's page.
@@ -179,6 +181,16 @@ export function HelpPanel({ topicId, onClose }: Props) {
           </nav>
           <div className="help-body" ref={body}>
             <h2>{topic.title}</h2>
+            {/* araxis:vcs — reopen the first-run overview */}
+            {topic.id === "home" && (
+              <p>
+                <button className="link" onClick={() => setOverview(true)}>
+                  Show the Getting started overview
+                </button>
+              </p>
+            )}
+            {overview && <GettingStarted onClose={() => setOverview(false)} />}
+            {/* araxis:vcs end */}
             <HelpBody body={topic.body} />
             <ShortcutTable commands={topicCommands(topic)} />
           </div>

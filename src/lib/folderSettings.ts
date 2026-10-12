@@ -5,9 +5,11 @@ import {
   type AlignRule,
   type ContentMethod,
   type FolderCompareOptions,
+  type LargeFileMethod,
   type TextDiffOptions,
 } from "./api";
 import type { DisplayFilter } from "./folderTree";
+import type { FolderBookmark } from "./reviewApi"; // araxis:text-review
 
 /** Settings that change what the engine computes (editing them re-runs the compare). */
 export interface CompareSettings {
@@ -17,6 +19,9 @@ export interface CompareSettings {
   ignoreDstShift: boolean;
   content: ContentMethod;
   overrideQuickTests: boolean;
+  /** Pairs with a file larger than this many MB use `largeFileMethod` instead of `content`; null = no limit. */
+  largeFileThresholdMb: number | null;
+  largeFileMethod: LargeFileMethod;
   rules: TextDiffOptions;
   includeHidden: boolean;
   /** Comma-separated globs, kept as typed. */
@@ -62,6 +67,8 @@ export interface FolderSettings extends CompareSettings {
   showAttributes: boolean;
   /** Relative paths marked "ignore" (shown as same). */
   ignored: string[];
+  /** araxis:text-review — bookmarked rows (by relative path) with review comments. */
+  bookmarks?: FolderBookmark[];
 }
 
 const IS_WINDOWS = typeof navigator !== "undefined" && navigator.userAgent.includes("Windows");
@@ -73,6 +80,8 @@ export const DEFAULT_FOLDER_SETTINGS: FolderSettings = {
   ignoreDstShift: false,
   content: "off",
   overrideQuickTests: true,
+  largeFileThresholdMb: null,
+  largeFileMethod: "binary",
   rules: DEFAULT_TEXT_OPTIONS,
   includeHidden: true,
   exclude: ".git, node_modules",
@@ -104,13 +113,17 @@ export const DEFAULT_FOLDER_SETTINGS: FolderSettings = {
   ignored: [],
 };
 
-/** Toolbar shortcuts for the most common quick-test/content combinations. */
+/**
+ * Toolbar shortcuts for the most common quick-test/content combinations. The
+ * first three carry Araxis Merge's names: Quick (metadata only), Thorough
+ * (contents, honouring the text rules) and Byte-by-byte.
+ */
 export const COMPARE_PRESETS = {
-  sizeAndTimestamp: { label: "Size & timestamp", compareSize: true, compareTimestamp: true, content: "off" },
+  sizeAndTimestamp: { label: "Quick — size & timestamp", compareSize: true, compareTimestamp: true, content: "off" },
+  rules: { label: "Thorough — rules-based", compareSize: true, compareTimestamp: true, content: "rules" },
+  binary: { label: "Byte-by-byte — binary", compareSize: true, compareTimestamp: true, content: "binary" },
   size: { label: "Size only", compareSize: true, compareTimestamp: false, content: "off" },
-  binary: { label: "Binary contents", compareSize: true, compareTimestamp: true, content: "binary" },
   crc: { label: "CRC-32", compareSize: true, compareTimestamp: true, content: "crc" },
-  rules: { label: "Rules-based", compareSize: true, compareTimestamp: true, content: "rules" },
   version: { label: "Exe/dll version", compareSize: true, compareTimestamp: true, content: "version" },
 } as const satisfies Record<string, { label: string; compareSize: boolean; compareTimestamp: boolean; content: ContentMethod }>;
 export type ComparePreset = keyof typeof COMPARE_PRESETS;
@@ -122,6 +135,17 @@ export function presetOf(s: CompareSettings): ComparePreset | "custom" {
   }
   return "custom";
 }
+
+/** The three named presets, for the settings dialog's segmented control. */
+export const NAMED_PRESETS: { key: ComparePreset; name: string; help: string }[] = [
+  { key: "sizeAndTimestamp", name: "Quick", help: "Sizes and timestamps decide; nothing is read." },
+  {
+    key: "rules",
+    name: "Thorough",
+    help: "Reads the files and compares text with the text rules (unimportant differences show as similar).",
+  },
+  { key: "binary", name: "Byte-by-byte", help: "Reads the files and compares every byte." },
+];
 
 /** Loads saved settings, upgrading sessions saved before quick tests/content methods existed. */
 export function loadFolderSettings(saved: Record<string, unknown> | undefined): FolderSettings {
@@ -174,6 +198,8 @@ export function toEngineOptions(s: CompareSettings): FolderCompareOptions {
     compareTimestamp: s.compareTimestamp,
     content: s.content,
     overrideQuickTests: s.overrideQuickTests,
+    largeFileThreshold: s.largeFileThresholdMb == null ? null : Math.round(s.largeFileThresholdMb * 1024 * 1024),
+    largeFileMethod: s.largeFileMethod,
     rules: { ...s.rules, ignorePatterns: s.rules.ignorePatterns.map((p) => p.trim()).filter(Boolean) },
     recursive: true,
     exclude: globs(s.exclude),

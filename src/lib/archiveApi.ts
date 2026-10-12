@@ -5,7 +5,12 @@ import { Channel, invoke } from "@tauri-apps/api/core";
 export type ArchiveFormat = "zip" | "tar" | "tarGz" | "tarBz2" | "tarXz" | "gz" | "bz2" | "xz" | "sevenZ";
 
 /** What a container side is (`null` in [`SideInfo`] for a plain folder). */
-export type ContainerKind = { type: "archive"; format: ArchiveFormat } | { type: "snapshot" } | { type: "svn" };
+export type ContainerKind =
+  | { type: "archive"; format: ArchiveFormat }
+  | { type: "snapshot" }
+  | { type: "svn" }
+  | { type: "git" } // araxis:vcs
+  | { type: "hg" }; // araxis:vcs
 
 export interface SnapshotSummary {
   files: number;
@@ -28,7 +33,7 @@ export interface SideInfo {
   /** Why the side can't be written to. */
   readOnly: string | null;
   snapshot: SnapshotInfo | null;
-  /** For svn: sides, whether the `svn` client is installed. */
+  /** For svn: sides, whether the `svn` client is installed (araxis:vcs — git:/hg: sides: `git` / `hg`). */
   svnAvailable: boolean | null;
 }
 
@@ -92,6 +97,12 @@ export function containerLabel(kind: ContainerKind): string {
       return "snapshot";
     case "svn":
       return "Subversion repository";
+    // araxis:vcs
+    case "git":
+      return "Git revision";
+    case "hg":
+      return "Mercurial revision";
+    // araxis:vcs end
     case "archive": {
       const names: Record<ArchiveFormat, string> = {
         zip: "zip archive",

@@ -26,6 +26,9 @@ pcompare-report = { path = "../crates/pcompare-report" }
 pcompare-script = { path = "../crates/pcompare-script" }
 # bc5:archives — archives, folder snapshots and svn: repositories as folders.
 pcompare-archive = { path = "../crates/pcompare-archive" }
+# araxis:text-review — comparison archives (.pcmpz) with review comments.
+pcompare-review = { path = "../crates/pcompare-review" }
+# araxis:text-review end
 serde.workspace = true
 serde_json.workspace = true
 tauri = { version = "2", features = [] }

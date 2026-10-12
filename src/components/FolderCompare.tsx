@@ -12,7 +12,16 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { FilePen } from "lucide-react"; // bc5:editor-patch
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { ListChecks, PanelBottom } from "lucide-react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type PointerEvent as ReactPointerEvent,
+} from "react";
 import {
   api,
   ATTR,
@@ -45,9 +54,11 @@ import {
   effectiveStatus,
   nameMatcher,
   pairedFiles,
+  selectMatching,
   tally,
   visibleSet,
   type DisplayFilter,
+  type SelectCriteria,
 } from "../lib/folderTree";
 import { basename, formatSize, formatTime, hex, joinPath } from "../lib/format";
 import { useShell } from "../lib/shell";
@@ -65,6 +76,13 @@ import { ReportDialog } from "./ReportDialog"; // bc5:reports-script
 import { useFolderFileOps } from "./FolderFileOps"; // bc5:file-ops
 import { ArchiveBanner } from "./ArchiveBanner"; // bc5:archives
 import { SnapshotDialog } from "./SnapshotDialog"; // bc5:archives
+import { useFolderReview } from "./FolderReview"; // araxis:text-review
+import { embedFocused } from "../lib/embeddedPane";
+import { matches, shortcutLabel } from "../lib/keymap";
+import { getPrefs, setPrefs, usePref } from "../lib/prefs";
+import { sessionForFiles } from "../lib/sessions";
+import { FolderSelectDialog, type SelectRequest } from "./FolderSelectDialog";
+import { FolderSplitPane, type SplitPair } from "./FolderSplitPane";
 import "./FolderCompare.css";
 
 export type { FolderSettings };
@@ -82,6 +100,8 @@ interface Props {
   onEditFile?: (path: string) => void;
   settings?: Record<string, unknown>;
   onSettingsChange?: (s: FolderSettings) => void;
+  /** The split view's embedded file comparison holds unsaved edits. */
+  onDirtyChange?: (dirty: boolean) => void;
 }
 
 const STATUS_ICON: Record<EntryStatus, LucideIcon> = {
@@ -188,6 +208,7 @@ export function FolderCompare({
   onEditFile, // bc5:editor-patch
   settings,
   onSettingsChange,
+  onDirtyChange,
 }: Props) {
   const [cfg, setCfg] = useState<FolderSettings>(() => loadFolderSettings(settings));
   const update = (patch: Partial<FolderSettings>) => setCfg((c) => ({ ...c, ...patch }));
@@ -201,6 +222,15 @@ export function FolderCompare({
   const [toolsDialog, setToolsDialog] = useState(false); // bc5:converters
   const [snapshotting, setSnapshotting] = useState(false); // bc5:archives
   const [reporting, setReporting] = useState(false); // bc5:reports-script
+  const [selecting, setSelecting] = useState(false);
+  // Split view (file comparison below the list): each tab toggles its own, and
+  // the last choice and divider position are saved in prefs for new tabs.
+  const [splitView, setSplitView] = useState(() => getPrefs().folderSplitView);
+  const savedRatio = usePref("folderSplitRatio");
+  const [splitRatio, setSplitRatio] = useState(savedRatio);
+  useEffect(() => setSplitRatio(savedRatio), [savedRatio]);
+  const splitBox = useRef<HTMLDivElement>(null);
+  const splitDirty = useRef(false);
   const [result, setResult] = useState<FolderCompareResult | null>(null);
   const [verdicts, setVerdicts] = useState<Verdicts>(new Map());
   const [checking, setChecking] = useState<{ done: number; total: number } | null>(null);
@@ -385,6 +415,24 @@ export function FolderCompare({
     if (failures.length) setError(failures.slice(0, 3).join("\n") + (failures.length > 3 ? "\n…" : ""));
   };
 
+  // araxis:text-review — bookmarks with comments, Statistics, Save comparison archive.
+  const review = useFolderReview({
+    bookmarks: cfg.bookmarks ?? [],
+    onBookmarks: (bookmarks) => update({ bookmarks }),
+    result,
+    entries,
+    stats,
+    visible,
+    flat,
+    root,
+    rowHeight: 24,
+    expand: (rels) => setExpanded((prev) => new Set([...prev, ...rels])),
+    showAll: () => update({ filter: "all" }),
+    engineOptions,
+    settings: { filter: cfg.filter, flatten: cfg.flatten, showAttributes: cfg.showAttributes },
+  });
+  // araxis:text-review end
+
   // bc5:file-ops — multi-selection, file operations and the Operations panel.
   const fops = useFolderFileOps({
     root,
@@ -398,6 +446,69 @@ export function FolderCompare({
     onRefresh: () => run(true),
     onError: setError,
   });
+
+  // Split view: the focused row's file pair (orphans show their one file; folders nothing).
+  const focusRel = fops.sel.focus && fops.sel.rows.has(fops.sel.focus) ? fops.sel.focus : (fops.selected[0]?.relPath ?? null);
+  const focusEntry = useMemo(
+    () => (focusRel == null ? undefined : flat.find((r) => r.entry.relPath === focusRel)?.entry),
+    [flat, focusRel],
+  );
+  const pairFile = focusEntry && !focusEntry.isDir && !focusEntry.left?.isDir && !focusEntry.right?.isDir;
+  const pairLeft = pairFile && focusEntry.left ? sidePath(focusEntry, "left") : "";
+  const pairRight = pairFile && focusEntry.right ? sidePath(focusEntry, "right") : "";
+  const pairSize = pairFile ? (focusEntry.left ?? focusEntry.right)!.size : 0;
+  const splitPair = useMemo<SplitPair | null>(
+    () => (pairFile && focusRel ? { id: focusRel, left: pairLeft, right: pairRight, size: pairSize } : null),
+    [pairFile, focusRel, pairLeft, pairRight, pairSize],
+  );
+  const splitHint = !focusEntry
+    ? "Select a file to compare it here."
+    : "Folders aren’t compared here — select a file inside.";
+
+  /** Opens the split view's pair in its own tab; an orphan text file opens alone in Text Edit. */
+  const openPairInTab = (l: string, r: string) => {
+    const one = l && r ? "" : l || r;
+    if (one && onEditFile && sessionForFiles(one, one) === "text") onEditFile(one);
+    else onOpenFiles(l, r, engineOptions.rules);
+  };
+
+  const toggleSplit = () => {
+    const discard = "The file comparison below has unsaved edits. Close it and discard them?";
+    if (splitView && splitDirty.current && !window.confirm(discard)) return;
+    setSplitView(!splitView);
+    setPrefs({ folderSplitView: !splitView });
+  };
+  const toggleSplitRef = useRef(toggleSplit);
+  toggleSplitRef.current = toggleSplit;
+
+  /** Drags the divider between the folder list and the file comparison. */
+  const dragDivider = (ev: ReactPointerEvent<HTMLDivElement>) => {
+    const box = splitBox.current?.getBoundingClientRect();
+    if (!box) return;
+    ev.preventDefault();
+    const bar = ev.currentTarget;
+    bar.setPointerCapture(ev.pointerId);
+    let ratio = splitRatio;
+    const move = (m: PointerEvent) => {
+      ratio = Math.min(0.85, Math.max(0.15, (m.clientY - box.top) / box.height));
+      setSplitRatio(ratio);
+    };
+    const up = () => {
+      bar.removeEventListener("pointermove", move);
+      bar.removeEventListener("pointerup", up);
+      setPrefs({ folderSplitRatio: ratio });
+    };
+    bar.addEventListener("pointermove", move);
+    bar.addEventListener("pointerup", up);
+  };
+
+  const rowsMatching = (criteria: SelectCriteria, reachCollapsed: boolean) =>
+    selectMatching(entries, visible, criteria, { flatten: cfg.flatten, expanded, reachCollapsed });
+  const selectWhere = ({ criteria, side, add, reachCollapsed }: SelectRequest) => {
+    const { rows, expand } = rowsMatching(criteria, reachCollapsed);
+    if (expand.length) setExpanded((prev) => new Set([...prev, ...expand]));
+    fops.selectRows(rows, side, add);
+  };
 
   // Keep the context menu on screen: shift it left at the right edge and
   // open it upwards when it would run past the bottom.
@@ -425,6 +536,20 @@ export function FolderCompare({
     const onKey = (e: KeyboardEvent) => {
       // Every open tab stays mounted; only the visible one handles keys.
       if (!root.current?.offsetParent) return;
+      // The split view's viewer has focus: its keys (F5, Esc…) are its own.
+      if (embedFocused()) return;
+      if (!document.querySelector(".modal-backdrop")) {
+        if (matches(e, "folder.selectWhere")) {
+          e.preventDefault();
+          if (hasResult.current) setSelecting(true);
+          return;
+        }
+        if (matches(e, "folder.splitView")) {
+          e.preventDefault();
+          toggleSplitRef.current();
+          return;
+        }
+      }
       if (e.key === "Escape" && runKey.current) {
         e.preventDefault();
         api.cancelCompareFolders(runKey.current).catch(() => {});
@@ -470,6 +595,7 @@ export function FolderCompare({
                   <Link size={11} />
                 </span>
               )}
+              {review.mark(e, side) /* araxis:text-review */}
             </>
           )}
         </div>
@@ -488,7 +614,7 @@ export function FolderCompare({
     const StatusIcon = e.ignored ? EyeOff : STATUS_ICON[e.status];
     return (
       <div
-        className={`frow s-${effectiveStatus(e)}${e.ignored ? " ignored" : ""}${fops.rowClass(e.relPath)}`}
+        className={`frow s-${effectiveStatus(e)}${e.ignored ? " ignored" : ""}${fops.rowClass(e.relPath)}${review.rowClass(e.relPath) /* araxis:text-review */}`}
         onClick={(ev) => fops.onRowClick(ev, e)}
         onDoubleClick={() => open(e)}
         onContextMenu={(ev) => {
@@ -499,7 +625,7 @@ export function FolderCompare({
           fops.onRowContext(e, side);
           setMenu({ x: ev.clientX, y: ev.clientY, entry: e, side });
         }}
-        title={rowTitle(e)}
+        title={review.title(e.relPath, rowTitle(e)) /* araxis:text-review */}
       >
         {renderSide(e, "left", depth)}
         <div className={`fcell status${checked ? " checked" : ""}`}>{!oneSided && <StatusIcon size={13} />}</div>
@@ -571,6 +697,25 @@ export function FolderCompare({
           disabled={!result}
           onClick={() => setReporting(true)}
         />
+        <button
+          className="tool-btn"
+          title={`Select files and folders by status, name, size or date (${shortcutLabel("folder.selectWhere")})`}
+          disabled={!result}
+          onClick={() => setSelecting(true)}
+        >
+          <ListChecks size={20} className="fop-tool" />
+          <span>Select</span>
+        </button>
+        <button
+          className={`tool-btn${splitView ? " active" : ""}`}
+          aria-pressed={splitView}
+          title={`Show the selected file pair's comparison below the folders (${shortcutLabel("folder.splitView")})`}
+          onClick={toggleSplit}
+        >
+          <PanelBottom size={20} className="fop-tool" />
+          <span>Split</span>
+        </button>
+        {review.toolbar /* araxis:text-review */}
         {fops.toolbar /* bc5:file-ops */}
         {/* bc5:archives */}
         <ToolButton
@@ -634,44 +779,72 @@ export function FolderCompare({
 
       <PathBar left={left} right={right} directory oneSided onCompare={onPathsChange} />
 
-      <div className="fheader">
-        <div>Name</div>
-        <div className="num">Size</div>
-        <div>Modified</div>
-        {cfg.showAttributes && <div>Attr</div>}
-        <div />
-        <div>Name</div>
-        <div className="num">Size</div>
-        <div>Modified</div>
-        {cfg.showAttributes && <div>Attr</div>}
-      </div>
-
-      <div className={`session-body${oneSided ? " one-sided" : ""}`}>
-        {!left && !right && (
-          <div className="empty-state">Choose a folder on either side — its contents list right away.</div>
-        )}
-        {loading && (
-          <div className="overlay">
-            <div className="fc-progress">
-              <div>Comparing folders…</div>
-              {progress && (
-                <small className="muted" title={progress.current}>
-                  {progress.scanned.toLocaleString()} items in {progress.folders.toLocaleString()} folders
-                  {progress.compared ? ` · ${progress.compared.toLocaleString()} files compared` : ""}
-                  {progress.current ? ` · ${progress.current}` : ""}
-                </small>
-              )}
-              <button onClick={cancel} title="Stop comparing (Esc)">
-                Cancel
-              </button>
-            </div>
+      <div className={`fc-split${splitView ? " on" : ""}`} ref={splitBox}>
+        <div className="fc-split-top" style={splitView ? { flexGrow: splitRatio } : undefined}>
+          <div className="fheader">
+            <div>Name</div>
+            <div className="num">Size</div>
+            <div>Modified</div>
+            {cfg.showAttributes && <div>Attr</div>}
+            <div />
+            <div>Name</div>
+            <div className="num">Size</div>
+            <div>Modified</div>
+            {cfg.showAttributes && <div>Attr</div>}
           </div>
+
+          <div className={`session-body${oneSided ? " one-sided" : ""}`}>
+            {!left && !right && (
+              <div className="empty-state">Choose a folder on either side — its contents list right away.</div>
+            )}
+            {loading && (
+              <div className="overlay">
+                <div className="fc-progress">
+                  <div>Comparing folders…</div>
+                  {progress && (
+                    <small className="muted" title={progress.current}>
+                      {progress.scanned.toLocaleString()} items in {progress.folders.toLocaleString()} folders
+                      {progress.compared ? ` · ${progress.compared.toLocaleString()} files compared` : ""}
+                      {progress.current ? ` · ${progress.current}` : ""}
+                    </small>
+                  )}
+                  <button onClick={cancel} title="Stop comparing (Esc)">
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            )}
+            {error && <div className="banner error">{error}</div>}
+            {/* bc5:archives */}
+            <ArchiveBanner left={left} right={right} content={engineOptions.content} onOpenHex={onOpenHex} />
+            {result && flat.length === 0 && <div className="empty-state">Nothing to show for this filter.</div>}
+            {result && <VirtualList className="folder-list" count={flat.length} rowHeight={24} renderRow={renderRow} />}
+            {review.layer /* araxis:text-review — Bookmarks & comments panel */}
+          </div>
+        </div>
+        {splitView && (
+          <>
+            <div
+              className="fc-divider"
+              role="separator"
+              aria-orientation="horizontal"
+              title="Drag to resize"
+              onPointerDown={dragDivider}
+            />
+            <FolderSplitPane
+              pair={splitPair}
+              hint={splitHint}
+              rules={engineOptions.rules}
+              style={{ flexGrow: 1 - splitRatio }}
+              onOpenInTab={openPairInTab}
+              onDirtyChange={(d) => {
+                splitDirty.current = d;
+                onDirtyChange?.(d);
+              }}
+              onSaved={() => run(true)}
+            />
+          </>
         )}
-        {error && <div className="banner error">{error}</div>}
-        {/* bc5:archives */}
-        <ArchiveBanner left={left} right={right} content={engineOptions.content} onOpenHex={onOpenHex} />
-        {result && flat.length === 0 && <div className="empty-state">Nothing to show for this filter.</div>}
-        {result && <VirtualList className="folder-list" count={flat.length} rowHeight={24} renderRow={renderRow} />}
       </div>
       {fops.panel /* bc5:file-ops — docked Operations panel */}
 
@@ -740,6 +913,9 @@ export function FolderCompare({
               <hr />
             </>
           )}
+          {/* araxis:text-review */}
+          {review.menuItems(menu.entry, () => setMenu(null))}
+          <hr />
           {/* bc5:file-ops */}
           {fops.menuItems(() => setMenu(null))}
           <hr />
@@ -809,9 +985,19 @@ export function FolderCompare({
             rules: engineOptions.rules,
           }}
           onClose={() => setReporting(false)}
+          bookmarks={(cfg.bookmarks ?? []).map((b) => ({ path: b.relPath, comment: b.comment }))}
         />
       )}
       {fops.overlay /* bc5:file-ops */}
+      {review.dialogs /* araxis:text-review */}
+      {selecting && result && (
+        <FolderSelectDialog
+          count={(c, reach) => rowsMatching(c, reach).rows.length}
+          flatten={cfg.flatten}
+          onSelect={selectWhere}
+          onClose={() => setSelecting(false)}
+        />
+      )}
       {snapshotting && <SnapshotDialog folders={[left, right]} onClose={() => setSnapshotting(false)} /> /* bc5:archives */}
       {/* bc5:converters */}
       {toolsDialog && <FileFormatsDialog initialPage="tools" onClose={() => setToolsDialog(false)} />}

@@ -1,6 +1,6 @@
 [package]
 name = "pcompare-report"
-description = "HTML, text, patch and CSV reports of PCompare text, folder and table comparisons"
+description = "HTML, text, patch, diff, XML and CSV reports of PCompare text, folder and table comparisons"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -15,3 +15,5 @@ chrono = { version = "0.4", default-features = false, features = ["std", "clock"
 
 [dev-dependencies]
 tempfile = "3"
+# Parses XML reports back in tests (already in the lockfile via other crates).
+quick-xml = "0.42"

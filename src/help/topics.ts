@@ -75,7 +75,26 @@ Side-by-side line diff with word-level highlights inside changed lines. Both sid
 
 ## Colours
 Changed lines are amber, lines only on the left red, only on the right green. Change them in *Settings → Colors*.
-`,
+` + // araxis:text-engine
+      `
+## Numbers and ignored blocks
+In *Rules → Importance*, **Compare numbers by value** makes 1.0 match 1.00 and 1e3 match 1000; with an absolute tolerance (e.g. 0.01) or a relative one (percent of the larger value), lines that differ only in nearly equal numbers are unimportant and those numbers are not highlighted. Signs count, so -0.5 and 0.5 differ. *Rules → Ignored blocks* takes begin/end regex pairs: every line from a begin match through the next end match (both included) is unimportant, e.g. an auto-generated region, even when only one side has it. A block that never ends runs to the end of the file.
+` + // araxis:text-engine end
+      // araxis:text-view
+      `
+## Linked lines and sync points
+- **Vertical padding** (toolbar, rows icon) is on by default: blank rows keep both sides aligned. Turn it off to see only each file's real lines; the panes then scroll together so matching blocks meet, and curved bands in the middle link each difference's left lines to its right lines (click a band to select it). The setting is remembered.
+- **Sync points** force two lines to sit side by side: Ctrl+click (⌘+click on macOS) or right-click → *Set Sync Point Here* on a line on one side, then on its partner on the other side. The files are compared again around them. Sync points show as purple dots and dashed links; right-click → *Remove Sync Point*, or clear them all from the **…** menu. They also appear under *Rules → Alignment*.
+
+## Editing extras
+- **Go to line** (Ctrl+G) jumps to a line of either side; the status bar shows the caret's side, line and column.
+- **Tab / Shift+Tab** indent or un-indent the selected lines (Shift+Tab also un-indents the line being edited).
+- **Drag selected lines** by their line numbers: drop them on the other side to copy them there, or elsewhere on the same side to move them (hold Ctrl or Alt to copy). Undo reverts it.
+- **Copy All to Right / Left** (right-click or **…**) replaces the whole other side with this one, as an undoable edit.
+- Lines changed by editing or copying get an orange bar by their number (and in the overview strip) until the file is saved or reloaded.
+- **Mark Resolved** dims the selected lines (or the current difference) once you have dealt with them; it changes only the view, unlike *Mark unimportant*, and is saved with the session. *Unmark Resolved* undoes it.
+- **Show line endings** (pilcrow icon) shows ↵ for LF, ␍␊ for CRLF and ␍ for CR at the end of each line.
+`, // araxis:text-view end
   },
   {
     id: "merge",
@@ -91,7 +110,20 @@ Changed lines are amber, lines only on the left red, only on the right green. Ch
 
 ## As a git mergetool
 \`pcompare "$LOCAL" "$REMOTE" "$BASE" "$MERGED"\` opens this view with the output set to the merged file.
-`,
+` + // araxis:merge
+      `
+## Automatic merge and undo
+- **Start with** chooses what the output holds after loading: **Auto-merged** (every one-sided change applied, conflicts between markers) or **Base only** (the ancestor text, nothing merged yet). Changing it rebuilds the output as one undoable step.
+- **Automatic merge** (Ctrl+Shift+M) applies every change not merged yet in one step: one-sided changes are taken and dimmed as resolved, conflicts are wrapped in markers. Changes you already took or edited are left alone.
+- **Undo** / **Redo** (Ctrl+Z / Ctrl+Y when the output pane doesn't have the focus) step back through automatic merges, takes, marks and bursts of typing. Right after loading, the first Undo is **Undo automatic merge**.
+
+## Marking resolved
+- Select a change (or pick lines in an input pane) and click **Resolved** or **Unresolved** (Ctrl+Shift+R toggles). Resolved changes are dimmed and no longer counted as conflicts, whatever the output holds.
+
+## Highlights and edit markers
+- Inside changed lines, the characters that differ from the base are highlighted in the left, base and right panes.
+- The output's left margin shows where each line came from: **Auto**-merged (green), taken from **Left** (blue), **Right** (purple) or **Base** (grey), or **Edited** by hand (orange). The legend is in the output header.
+`, // araxis:merge end
   },
   {
     id: "table",
@@ -155,7 +187,21 @@ Right-click, the toolbar or the shortcuts below act on the selection:
 
 ## Operations panel
 Operations run in the background while you keep comparing. The **Ops** button shows the panel: progress, the current file, **Pause / Resume** and **Cancel** per operation, questions about existing files, and errors when it is done. Operations on overlapping folders wait for each other; the comparison rescans when one finishes.
-`, // bc5:file-ops — Selecting, File operations, Operations panel
+` + // bc5:file-ops — Selecting, File operations, Operations panel
+      // araxis:folder
+      `
+## Split view
+**Split** (Ctrl+Shift+V) shows the selected file pair's comparison below the folder list, in the same viewer a double-click opens (text, hex, table or picture). Drag the divider to resize; the split and its size are remembered. A file on one side only shows a read-only preview; folders show nothing. Click inside the lower pane to give it the keyboard (F5, Alt+↓, Ctrl+S…); click the folder list to take it back. Saving edits there rescans the folders.
+
+## Select by criteria
+**Select…** (Ctrl+Shift+E) selects the rows matching a status (different with the left or right newer, similar, same, orphans on either side, errors), name wildcards to include or exclude (e.g. \`*.cs;*.xml\`), files and/or folders, and size or date ranges. **Select** replaces the selection, **Add to selection** extends it; matches inside collapsed folders can be expanded into view. The selection then drives copy, move, delete and the other file operations.
+
+## Comparison type and large files
+In *Rules → Comparison*, **Quick** compares sizes and timestamps, **Thorough** reads the files and compares text with the text rules, and **Byte-by-byte** compares every byte. *For files larger than N MB use* keeps a thorough (or CRC) comparison fast: bigger pairs are compared byte-by-byte, by size only, or by size and timestamp instead.
+
+## Dropping files
+Drop a folder (or file) onto the left or right path field to fill just that side. Dropping anywhere else fills the empty side or opens a new tab.
+`, // araxis:folder end
   },
   {
     id: "sync",
@@ -291,7 +337,13 @@ Shows a \`.patch\` or \`.diff\` file as a side-by-side comparison. Opening (or d
 1. **Apply against folder…** picks the folder the patch was made for. Every file is dry-run against it and marked as applying cleanly or not; the strip level (\`-p\`) is detected, or choose it.
 2. Hunks are found where their header says, or nearby when the file moved on (offset), ignoring up to two outer context lines if needed (fuzz) — like \`patch\`.
 3. **Open in Text Compare** (or double-click a file) shows the real file on the left and the patched text on the right, in memory. Hunks that failed to apply are listed and left out; copy or edit changes across and save the left side to apply them for real.
-`,
+` + // araxis:merge
+      `
+## Applying only some hunks
+- Every hunk header and every file in the list has a checkbox; untick hunks (Space toggles the current one) or whole files to leave them out. Unticked hunks are greyed and also left out of **Open in Text Compare**.
+- **Apply selected** (Ctrl+Shift+Enter) writes the ticked hunks into the real files under the folder, in their own encoding and line endings, after asking. New files are created; deleted files and the old names of renamed files go to the Trash (a file is only deleted when all its hunks are ticked and apply).
+- A report lists each file and hunk: applied (with offset or fuzz), skipped, already applied, or failed with the reason. The dry run then re-checks the folder.
+`, // araxis:merge end
   },
   {
     id: "appearance",
@@ -332,6 +384,86 @@ Zip archives can be written to: Folder Sync and file operations can copy into, r
 Write \`svn:\` before a repository URL to compare it as a read-only folder: \`svn:https://host/repo/trunk\`, \`svn:svn+ssh://host/repo/branches/x@1234\` (a fixed revision) or \`svn:file:///srv/repo/trunk\`. PCompare runs the \`svn\` command-line client (\`svn list\`, \`svn cat\`), which must be installed and on the PATH; its saved credentials are used.
 `,
   },
+  // araxis:text-review
+  {
+    id: "review",
+    title: "Comments, statistics and comparison archives",
+    kinds: ["review"],
+    body: `
+## Bookmarks and comments
+- **Text Compare**: bookmark a line (Ctrl+F2 or the bookmark button), or right-click a line and choose **Comment…** to bookmark it and type a comment straight away.
+- **Folder Compare**: right-click a row and choose **Bookmark** or **Comment…**; rows are bookmarked by their relative path.
+- The **Comments** button (speech bubble) opens the *Bookmarks & comments* panel: every bookmark with its comment, editable in place. Click a bookmark to jump to it, the cross to remove it, **Copy** to put them all on the clipboard as text.
+- A commented bookmark shows a speech bubble in the line-number gutter (or after the file name); hover it to read the comment.
+- Bookmarks and comments are saved with the session and travel in comparison archives.
+
+## Statistics
+The **Statistics** button (bar chart) shows figures for the comparison in front:
+- Text: lines per side, identical, changed, inserted, deleted and unimportant lines, difference blocks, characters changed, similarity, encodings, sizes and line endings.
+- Folders: files and folders per side, bytes per side (and in differing files), orphans, newer files, and files and folders per status.
+**Copy** puts the table on the clipboard as tab-separated text.
+
+## Comparison archives (.pcmpz)
+**Archive** in Text or Folder Compare saves the whole comparison in one file a reviewer can open on another machine, without the originals:
+- Text: both texts as shown (unsaved edits included), their encodings, sizes and line endings, the text rules, and the bookmarks and comments.
+- Folders: every row with its sizes, dates and status (re-checks and ignore marks included), the rules, bookmarks and comments — and optionally the contents of differing text files, up to a size per file and in total. Binary files and remote or archived folders are left out.
+
+Open an archive with **Open comparison archive…** on Home, by dropping the \`.pcmpz\` on the window, or from the command line (\`pcompare review.pcmpz\`). It opens read-only: texts in Text Compare, folders as the stored tree (double-click a file with stored contents to compare it). Reviewers can add or edit comments and **Save comments** writes them back into the archive.
+`,
+  },
+  // araxis:text-review end
+  // araxis:reports
+  {
+    id: "reports",
+    title: "Reports and printing",
+    kinds: [],
+    body: `
+**Report…** in Text, Folder and Table Compare saves, copies, previews or prints the comparison.
+
+## Text comparison formats
+- **HTML**: side by side or unified, with the diff colours and changed-word highlights.
+- **HTML slideshow**: one self-contained page showing one difference per slide with its context lines. Step with **Prev / Next**, the ← / → keys (Home / End jump to the ends); \`#slide-5\` in the address opens slide 5. Printed, every slide gets its own page.
+- **Plain text**, **Unified diff (patch)** (\`--- / +++ / @@\`, for \`patch\` and \`git apply\`) and **Normal diff** — classic \`diff\` output such as \`3c3\`, \`5a6,7\` and \`8d7\` with \`<\` / \`>\` lines.
+- **XML**: the options, summary counts and every difference block (\`<difference kind="changed" leftStart=… >\` with its \`<line>\`s) for other tools to read.
+
+## Folder comparison formats
+HTML, plain text, CSV or **XML** (one \`<entry>\` per row with status, sizes and dates). When saving, *Link to file comparison reports* writes an HTML report for every differing text file next to an HTML report; for XML, *Embed file comparisons* adds each file's text comparison to its entry instead.
+
+## Bookmark comments
+Bookmarks in Text Compare (and their comments) are marked next to their lines in HTML reports, with a **Comments** list at the end; differences-only reports keep bookmarked lines visible. XML reports list them as \`<bookmark>\` elements.
+
+## Printing
+- **Preview…** shows the printed report on a sheet of the chosen paper size, with the running header and footer and dashed lines where pages are likely to break, plus an estimated page count. Print from there or go back.
+- **Header** and **Footer** templates (kept in your preferences) take the tokens \`{title}\`, \`{left}\`, \`{right}\`, \`{date}\`, \`{page}\` and \`{pages}\`; \`|\` splits a template into left | center | right parts. Leave one empty for none. Page numbers print where the browser engine supports them (Windows; Chrome); elsewhere the parts with page numbers are left out.
+- **Print only pages/sections with changes** leaves out unchanged runs (keeping the context lines) — the same as *Differences only*.
+- On macOS the report opens in your default browser, which shows the print dialog.
+`,
+  },
+  // araxis:reports end
+  // araxis:vcs
+  {
+    id: "vcs",
+    title: "Version control: git, Mercurial, Perforce, Subversion",
+    kinds: [],
+    body: `
+## Revisions as sides
+Write \`git:\` or \`hg:\` before a file or folder of a clone, then \`@\` and a revision, in any path field:
+- \`git:C:\\src\\app\\main.c@HEAD~1\` — one file one commit back, against \`C:\\src\\app\\main.c\` for what you changed since.
+- \`git:/src/app@v1.2\` against \`git:/src/app@main\` — two whole trees in Folder Compare.
+- \`hg:/src/app@tip\`, \`hg:/src/app/docs@42\` — Mercurial revisions (numbers, hashes, \`tip\`, \`.\`, bookmarks).
+Without \`@\`, \`HEAD\` (git) or \`.\` (hg) is used. Branches with slashes work (\`git:/src/app@origin/main\`). A path that itself contains \`@\` needs an explicit revision: \`git:/x/img@2x.png@HEAD\`. The **branch button** next to a path field picks a revision from the file's history. Revisions are read-only; PCompare runs the \`git\` / \`hg\` command-line client, which must be on the PATH. \`svn:\` URLs work the same way (see *Archives, snapshots and Subversion*).
+
+## As git's difftool and mergetool
+*Settings → Source control → Set up git…* shows the \`git config --global\` commands it would run and runs them when you confirm: \`difftool.pcompare\` and \`mergetool.pcompare\` (with \`trustExitCode\`), optionally as the default \`diff.tool\` / \`merge.tool\`. Then \`git difftool\`, \`git difftool -d\` (whole folders) and \`git mergetool\` open PCompare.
+
+## Waiting for the tab
+\`pcompare --wait <left> <right>\` (or \`/wait\`; implied by \`/mergeoutput=\`) doesn't return until you close that comparison's tab — also when PCompare is already open and the comparison goes to a tab there. The exit code is 0, or 1 for a merge whose output was never saved, so a tool can tell an abandoned merge. Quitting PCompare counts as closing the tab.
+
+## Other tools
+The same Settings page has copy-paste snippets for Mercurial (\`[extdiff]\`, \`[merge-tools]\`), Perforce (\`P4DIFF\`, \`P4MERGE\` and P4V) and Subversion (\`--diff-cmd\`, a \`merge-tool-cmd\` script). \`--base-first\` takes merge paths in \`base theirs yours merged\` order (P4MERGE, svn), and \`-L <label>\` labels the sides as \`svn diff\` passes them.
+`,
+  },
+  // araxis:vcs end
 ];
 
 /** The help page F1 should open for a tab of `kind`. */

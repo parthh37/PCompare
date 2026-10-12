@@ -23,19 +23,22 @@ import { cssVar, DIFF_COLOR_VARS } from "../lib/theme";
 import type { Updater } from "../lib/useUpdater";
 import "./AppShell.css";
 import { Modal } from "./Modal";
+import { GitBranch } from "lucide-react"; // araxis:vcs
+import { VcsSetupPage } from "./VcsSetup"; // araxis:vcs
 
 interface Props {
   updater: Updater;
   onClose: () => void;
 }
 
-type Page = "general" | "appearance" | "fonts" | "keyboard";
+type Page = "general" | "appearance" | "fonts" | "keyboard" | "vcs"; // araxis:vcs (vcs)
 
 const PAGES: { id: Page; label: string; icon: typeof Settings }[] = [
   { id: "general", label: "General", icon: Settings },
   { id: "appearance", label: "Colors", icon: Palette },
   { id: "fonts", label: "Fonts", icon: Type },
   { id: "keyboard", label: "Keyboard", icon: Keyboard },
+  { id: "vcs", label: "Source control", icon: GitBranch }, // araxis:vcs
 ];
 
 function updateStatus({ phase, checkedAt }: Updater): string {
@@ -560,6 +563,7 @@ export function AppSettingsDialog({ updater, onClose }: Props) {
           {page === "appearance" && <AppearancePage prefs={prefs} set={set} />}
           {page === "fonts" && <FontsPage prefs={prefs} set={set} />}
           {page === "keyboard" && <KeyboardPage prefs={prefs} set={set} />}
+          {page === "vcs" && <VcsSetupPage /> /* araxis:vcs */}
         </div>
       </div>
     </Modal>

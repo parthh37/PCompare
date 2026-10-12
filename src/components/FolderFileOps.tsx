@@ -173,6 +173,22 @@ export function useFolderFileOps({ root, result, entries, flat, left, right, onO
     scrollIntoView(next);
   };
 
+  // araxis:folder — "Select…" by criteria: replace the selection, or add to it.
+  const selectRows = (rows: string[], side: SelSide, add: boolean) =>
+    setSel((s) => {
+      const keep = add && s.rows.size > 0;
+      const next = new Set(keep ? s.rows : []);
+      rows.forEach((r) => next.add(r));
+      const first = rows[0] ?? null;
+      return {
+        side: keep && s.side !== side ? "both" : side,
+        rows: next,
+        anchor: keep ? s.anchor : first,
+        focus: first ?? s.focus,
+      };
+    });
+  // araxis:folder end
+
   const selectAll = () =>
     setSel((s) => ({ ...s, rows: new Set(flat.map((r) => r.entry.relPath)), anchor: s.anchor ?? flat[0]?.entry.relPath ?? null }));
 
@@ -342,6 +358,7 @@ export function useFolderFileOps({ root, result, entries, flat, left, right, onO
       const target = e.target as HTMLElement | null;
       if (target?.closest("input, textarea, select, [contenteditable='true']")) return;
       if (document.querySelector(".modal-backdrop")) return;
+      if (target?.closest(".fc-embed")) return; // araxis:folder — keys belong to the split view's viewer
       if (keys.current(e)) e.preventDefault();
     };
     window.addEventListener("keydown", onKey);
@@ -569,5 +586,6 @@ export function useFolderFileOps({ root, result, entries, flat, left, right, onO
     );
   }
 
-  return { sel, selected, onRowClick, onRowContext, menuEntries, rowClass, toolbar, menuItems, panel, overlay };
+  // araxis:folder — selectRows added
+  return { sel, selected, onRowClick, onRowContext, menuEntries, rowClass, toolbar, menuItems, panel, overlay, selectRows };
 }
