@@ -30,6 +30,7 @@ import {
   type ContentVerdict,
   type EntryMeta,
   type EntryStatus,
+  type FolderCompareOptions,
   type FolderCompareResult,
   type FolderEntry,
   type ScanProgress,
@@ -214,7 +215,7 @@ export function FolderCompare({
   const update = (patch: Partial<FolderSettings>) => setCfg((c) => ({ ...c, ...patch }));
   const reportSettings = useRef(onSettingsChange);
   reportSettings.current = onSettingsChange;
-  useEffect(() => reportSettings.current?.(cfg), [cfg]);
+  useEffect(() => void reportSettings.current?.(cfg), [cfg]);
 
   const [excludeText, setExcludeText] = useState(cfg.exclude);
   const [nameQuery, setNameQuery] = useState("");
@@ -235,8 +236,11 @@ export function FolderCompare({
   const [verdicts, setVerdicts] = useState<Verdicts>(new Map());
   const [checking, setChecking] = useState<{ done: number; total: number } | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [loading, setLoading] = useState(false);
+  /** What the running compare is doing; the list stays usable throughout. */
+  const [phase, setPhase] = useState<"scanning" | "contents" | null>(null);
   const [progress, setProgress] = useState<ScanProgress | null>(null);
+  /** The rows on screen come from the quick pass; contents weren't read yet. */
+  const [quickOnly, setQuickOnly] = useState(false);
   /** Run key of the compare in flight, for cancelling it. */
   const runKey = useRef<string | null>(null);
   const hasResult = useRef(false);
@@ -250,47 +254,66 @@ export function FolderCompare({
   const engineOptions = useMemo(() => toEngineOptions(cfg), [cfg]);
   const optionsKey = JSON.stringify(engineOptions);
   const requestSeq = useRef(0);
+  const shownPaths = useRef("");
 
-  /** `quiet` refreshes (auto-refresh) keep the current view instead of flashing an overlay. */
+  /**
+   * Compares live: a quick size/timestamp pass fills the list straight away,
+   * then the content pass (CRC, binary, rules) refines it in place. `quiet`
+   * refreshes (auto-refresh) skip the quick pass so settled rows don't flicker.
+   */
   const expandArchives = !!cfg.expandArchives; // bc5:archives
   const run = useCallback(
     async (quiet = false) => {
       // One folder is enough: it lists on its own until the other side is picked.
       if (!left && !right) return;
       const seq = ++requestSeq.current;
-      // A superseded compare would only burn CPU: stop it.
-      if (runKey.current) api.cancelCompareFolders(runKey.current).catch(() => {});
-      const key = `folder-${crypto.randomUUID()}`;
-      runKey.current = key;
-      if (!quiet) {
-        setLoading(true);
-        setProgress(null);
-      }
-      try {
-        const res = await api.compareFolders(
-          left,
-          right,
-          JSON.parse(optionsKey),
-          key,
-          (p) => {
-            if (seq === requestSeq.current) setProgress(p);
-          },
-          expandArchives, // bc5:archives
-        );
-        if (seq !== requestSeq.current) return; // a newer compare superseded this one
+      const stale = () => seq !== requestSeq.current; // a newer compare superseded this one
+      const options: FolderCompareOptions = JSON.parse(optionsKey);
+      let shown = false;
+      const show = (res: FolderCompareResult, quick = false) => {
+        shown = true;
+        setQuickOnly(quick);
         setResult(res);
         setVerdicts(new Map());
         setError(null);
+      };
+      // New folders: don't leave the previous pair's rows up while scanning.
+      const pathsKey = `${left}\n${right}`;
+      if (shownPaths.current !== pathsKey) {
+        shownPaths.current = pathsKey;
+        setResult(null);
+      }
+      // A superseded compare would only burn CPU: stop it. Each pass gets its
+      // own run key so Esc / Cancel stops whichever one is in flight.
+      const pass = (opts: FolderCompareOptions) => {
+        if (runKey.current) api.cancelCompareFolders(runKey.current).catch(() => {});
+        const key = `folder-${crypto.randomUUID()}`;
+        runKey.current = key;
+        if (!quiet) setProgress(null);
+        return api.compareFolders(left, right, opts, key, (p) => !stale() && setProgress(p), expandArchives);
+      };
+      const twoPass = !quiet && options.content !== "off";
+      try {
+        if (twoPass) {
+          setPhase("scanning");
+          const quick = await pass({ ...options, content: "off" });
+          if (stale()) return;
+          show(quick, true);
+        }
+        if (!quiet) setPhase(twoPass ? "contents" : "scanning");
+        const res = await pass(options);
+        if (stale()) return;
+        show(res);
       } catch (e) {
-        if (seq !== requestSeq.current) return;
+        if (stale()) return;
         const msg = errorMessage(e);
-        // A cancelled refresh keeps showing the last complete result.
-        const shown = hasResult.current ? " — showing the previous results." : ".";
-        setError(msg === CANCELLED ? `Comparison cancelled${shown}` : msg);
-        if (!quiet && msg !== CANCELLED) setResult(null);
+        // A cancelled pass keeps showing whatever was already on screen.
+        const kept = shown || hasResult.current;
+        setError(msg === CANCELLED ? `Comparison cancelled${kept ? " — showing the previous results." : "."}` : msg);
+        if (!quiet && msg !== CANCELLED && !shown) setResult(null);
       } finally {
-        if (seq === requestSeq.current) {
-          setLoading(false);
+        if (!stale()) {
+          setPhase(null);
           runKey.current = null;
         }
       }
@@ -641,6 +664,22 @@ export function FolderCompare({
   // bc5:file-ops — context-menu actions cover the whole selection.
   const menuList = menu ? fops.menuEntries(menu.entry) : [];
   const menuFiles = menuList.flatMap((e) => (e.isDir ? pairedFiles(e.children) : paths(e) ? [e] : []));
+  /** Status-bar stand-in for the old blocking overlay. */
+  const liveStatus = phase && (
+    <span className="live-progress" title={progress?.current}>
+      <span className="spinner" />
+      {phase === "scanning" ? "Scanning folders…" : "Comparing contents…"}
+      {progress && (
+        <span className="muted">
+          {progress.scanned.toLocaleString()} items
+          {progress.compared ? ` · ${progress.compared.toLocaleString()} compared` : ""}
+        </span>
+      )}
+      <button onClick={cancel} title="Stop comparing (Esc)">
+        Cancel
+      </button>
+    </span>
+  );
 
   return (
     <div className={`session${cfg.showAttributes ? " fc-attrs" : ""}`} ref={root}>
@@ -797,23 +836,6 @@ export function FolderCompare({
             {!left && !right && (
               <div className="empty-state">Choose a folder on either side — its contents list right away.</div>
             )}
-            {loading && (
-              <div className="overlay">
-                <div className="fc-progress">
-                  <div>Comparing folders…</div>
-                  {progress && (
-                    <small className="muted" title={progress.current}>
-                      {progress.scanned.toLocaleString()} items in {progress.folders.toLocaleString()} folders
-                      {progress.compared ? ` · ${progress.compared.toLocaleString()} files compared` : ""}
-                      {progress.current ? ` · ${progress.current}` : ""}
-                    </small>
-                  )}
-                  <button onClick={cancel} title="Stop comparing (Esc)">
-                    Cancel
-                  </button>
-                </div>
-              </div>
-            )}
             {error && <div className="banner error">{error}</div>}
             {/* bc5:archives */}
             <ArchiveBanner left={left} right={right} content={engineOptions.content} onOpenHex={onOpenHex} />
@@ -849,6 +871,7 @@ export function FolderCompare({
       {fops.panel /* bc5:file-ops — docked Operations panel */}
 
       <div className="statusbar">
+        {!stats && liveStatus}
         {stats && oneSided && (
           <>
             <span>
@@ -856,6 +879,7 @@ export function FolderCompare({
             </span>
             <span className="muted">Choose the other folder to compare</span>
             <span className="spacer" />
+            {liveStatus}
             <span className="muted">{result!.elapsedMs} ms</span>
           </>
         )}
@@ -870,13 +894,14 @@ export function FolderCompare({
             <span className="s-rightOnly-fg">{stats.rightOnly} right only</span>
             {stats.errors > 0 && <span className="s-error-fg">{stats.errors} errors</span>}
             <span className="spacer" />
+            {liveStatus}
             {checking && (
               <span>
                 Comparing contents {checking.done}/{checking.total}…
               </span>
             )}
             <span className="muted">
-              {cfg.content !== "off" ? `${METHOD_LABEL[cfg.content]} · ` : ""}
+              {cfg.content !== "off" && !quickOnly ? `${METHOD_LABEL[cfg.content]} · ` : ""}
               {result!.elapsedMs} ms
             </span>
           </>

@@ -435,7 +435,7 @@ export function TextMerge({
   const [start, setStart] = useState<StartMode>(settings?.start ?? "auto");
   const startRef = useRef(start);
   startRef.current = start;
-  useEffect(() => reportSettings.current?.({ options, split, start }), [options, split, start]);
+  useEffect(() => void reportSettings.current?.({ options, split, start }), [options, split, start]);
 
   const [draft, setDraft] = useState<MergePaths>({ left, base, right, output });
   useEffect(() => setDraft({ left, base, right, output }), [left, base, right, output]);
@@ -521,7 +521,7 @@ export function TextMerge({
   const reportDirty = useRef(onDirtyChange);
   reportDirty.current = onDirtyChange;
   // Only hand edits count: an untouched auto-merge can simply be recomputed.
-  useEffect(() => reportDirty.current?.(edited), [edited]);
+  useEffect(() => void reportDirty.current?.(edited), [edited]);
   const confirmDiscard = (action: string) =>
     !edited || window.confirm(`The merged output has unsaved edits. Discard them and ${action}?`);
 

@@ -94,7 +94,7 @@ export function ReviewArchiveView({ left: path, onPathsChange, onDirtyChange }: 
       : !sameBookmarks(savedMarks as FolderBookmark[], marks as FolderBookmark[], folderKey));
   const reportDirty = useRef(onDirtyChange);
   reportDirty.current = onDirtyChange;
-  useEffect(() => reportDirty.current?.(dirty), [dirty]);
+  useEffect(() => void reportDirty.current?.(dirty), [dirty]);
 
   useEffect(() => {
     if (!notice) return;
