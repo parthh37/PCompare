@@ -1096,6 +1096,21 @@ textarea:focus {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.update-status {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+.update-status > span {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.update-status > button {
+  white-space: nowrap;
+}
 .update-banner progress {
   flex: 1;
   max-width: 260px;

@@ -17,12 +17,8 @@ export type UpdatePhase =
   | { kind: "downloading"; update: Update; done: number; total: number | null }
   | { kind: "error"; message: string };
 
-export function autoUpdateEnabled(): boolean {
+function autoUpdateEnabled(): boolean {
   return localStorage.getItem(AUTO_CHECK_KEY) !== "off";
-}
-
-export function setAutoUpdateEnabled(on: boolean) {
-  localStorage.setItem(AUTO_CHECK_KEY, on ? "on" : "off");
 }
 
 /**
@@ -34,6 +30,9 @@ export function useUpdater(notify: (msg: string) => void) {
   const [phase, setPhase] = useState<UpdatePhase>({ kind: "idle" });
   const [version, setVersion] = useState("");
   const [dismissed, setDismissed] = useState<string | null>(null);
+  const [autoCheck, setAutoCheckState] = useState(autoUpdateEnabled);
+  /** When the last check reached the server, successfully or not. */
+  const [checkedAt, setCheckedAt] = useState<Date | null>(null);
   const busy = useRef(false);
 
   useEffect(() => {
@@ -47,6 +46,7 @@ export function useUpdater(notify: (msg: string) => void) {
       if (manual) setPhase({ kind: "checking" });
       try {
         const update = await check();
+        setCheckedAt(new Date());
         if (update) {
           setPhase({ kind: "available", update });
           if (manual) setDismissed(null);
@@ -55,6 +55,7 @@ export function useUpdater(notify: (msg: string) => void) {
           if (manual) notify(`You're on the latest version${version ? ` (${version})` : ""}.`);
         }
       } catch (e) {
+        if (manual) setCheckedAt(new Date());
         // Background failures (offline, no release yet) stay quiet.
         setPhase(manual ? { kind: "error", message: errorMessage(e) } : { kind: "idle" });
         if (manual) notify(`Update check failed: ${errorMessage(e)}`);
@@ -67,14 +68,19 @@ export function useUpdater(notify: (msg: string) => void) {
 
   useEffect(() => {
     // Dev builds have no release to compare against.
-    if (!import.meta.env.PROD || !autoUpdateEnabled()) return;
+    if (!import.meta.env.PROD || !autoCheck) return;
     const first = window.setTimeout(() => runCheck(false), FIRST_CHECK_DELAY_MS);
     const every = window.setInterval(() => runCheck(false), CHECK_EVERY_MS);
     return () => {
       window.clearTimeout(first);
       window.clearInterval(every);
     };
-  }, [runCheck]);
+  }, [runCheck, autoCheck]);
+
+  const setAutoCheck = useCallback((on: boolean) => {
+    localStorage.setItem(AUTO_CHECK_KEY, on ? "on" : "off");
+    setAutoCheckState(on);
+  }, []);
 
   const install = useCallback(async () => {
     if (phase.kind !== "available") return;
@@ -103,8 +109,13 @@ export function useUpdater(notify: (msg: string) => void) {
     phase,
     version,
     bannerVisible: visible,
+    autoCheck,
+    setAutoCheck,
+    checkedAt,
     checkNow: () => runCheck(true),
     install,
     dismiss: () => phase.kind === "available" && setDismissed(phase.update.version),
   };
 }
+
+export type Updater = ReturnType<typeof useUpdater>;
