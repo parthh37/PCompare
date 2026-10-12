@@ -1,0 +1,238 @@
+/* ---------- 3-way folder merge ---------- */
+.fm-paths {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px 8px;
+  padding: 7px 10px;
+  border-bottom: 1px solid var(--border);
+}
+.fm-paths .pathfield {
+  min-width: 0;
+}
+.fm-paths .pathfield input {
+  min-width: 0;
+}
+.fm-output {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.fm-output .pathfield {
+  flex: 1;
+}
+.fm-output > .muted {
+  margin-left: 6px;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+/* tree */
+.fm-header,
+.fm-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 96px 96px 96px 190px 118px;
+  align-items: center;
+}
+.fm-header {
+  padding: 4px 0;
+  color: var(--muted);
+  font-size: 11.5px;
+  border-bottom: 1px solid var(--border);
+  background: var(--panel-2);
+}
+.fm-header > div {
+  padding: 0 6px;
+}
+.fm-row {
+  height: 100%;
+  cursor: default;
+  user-select: none;
+}
+.fm-row:hover {
+  background: rgba(255, 255, 255, 0.03);
+}
+.fm-row.selected {
+  background: rgba(91, 156, 255, 0.16);
+}
+.fm-row.conflict {
+  box-shadow: inset 3px 0 0 var(--different);
+}
+.fm-cell {
+  padding: 0 6px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.fm-cell.name {
+  display: flex;
+  align-items: center;
+}
+
+/* left / base / right presence */
+.fm-cell.side {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 5px;
+  height: 100%;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  color: var(--muted);
+}
+.fm-cell.side.absent {
+  background: var(--hatch);
+}
+.fm-cell.side.st-changed {
+  color: var(--warn);
+}
+.fm-cell.side.st-added {
+  color: var(--ok);
+}
+.fm-cell.side.st-deleted {
+  color: var(--different);
+}
+.fm-row.conflict .fm-cell.side.st-changed {
+  color: var(--different);
+}
+
+/* classification */
+.fm-cell.status {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+.fm-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0 6px;
+  border-radius: 4px;
+  font-size: 11px;
+  line-height: 17px;
+  color: var(--muted);
+  border: 1px solid transparent;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.fm-row:not(.c-unchanged) .fm-badge {
+  color: var(--text);
+  border-color: var(--border);
+}
+.c-leftChanged .fm-badge,
+.c-leftAdded .fm-badge,
+.c-leftDeleted .fm-badge {
+  color: #8fb8ff;
+}
+.c-rightChanged .fm-badge,
+.c-rightAdded .fm-badge,
+.c-rightDeleted .fm-badge {
+  color: var(--orphan);
+}
+.fm-row.conflict .fm-badge {
+  color: var(--different);
+  border-color: rgba(242, 119, 122, 0.45);
+  background: rgba(242, 119, 122, 0.1);
+}
+.fm-row.c-error .fm-badge {
+  color: var(--warn);
+  border-color: rgba(245, 163, 92, 0.45);
+  background: rgba(245, 163, 92, 0.1);
+}
+.fm-row.conflict .fm-cell.name {
+  color: var(--different);
+}
+.fm-count {
+  font-size: 11px;
+  color: var(--different);
+  font-variant-numeric: tabular-nums;
+}
+.fm-resolve {
+  padding: 0 5px;
+  line-height: 16px;
+}
+
+/* action */
+.fm-cell.action select {
+  width: 100%;
+  padding: 0 4px;
+  font-size: 12px;
+  height: 19px;
+}
+.fm-cell.action select.overridden {
+  border-color: var(--accent);
+}
+.fm-cell.action select.unresolved {
+  border-color: rgba(242, 119, 122, 0.6);
+  color: var(--different);
+}
+
+.fm-left-fg {
+  color: #8fb8ff;
+}
+.fm-right-fg {
+  color: var(--orphan);
+}
+
+/* dialogs */
+.fm-confirm-out {
+  margin-bottom: 10px;
+}
+.fm-confirm-list {
+  margin: 8px 0;
+  padding-left: 18px;
+  display: grid;
+  gap: 3px;
+}
+.fm-warn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  border-radius: 5px;
+  color: var(--different);
+  background: rgba(239, 68, 68, 0.1);
+  border: 1px solid rgba(239, 68, 68, 0.35);
+}
+.fm-report-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 4px;
+}
+.fm-report-head > svg {
+  color: var(--ok);
+}
+.fm-report-head.bad > svg {
+  color: var(--different);
+}
+.fm-report-list {
+  list-style: none;
+  margin: 10px 0 0;
+  padding: 0;
+  max-height: 40vh;
+  overflow-y: auto;
+  display: grid;
+  gap: 3px;
+  font-size: 12px;
+}
+.fm-report-list li {
+  display: flex;
+  gap: 10px;
+  min-width: 0;
+}
+.fm-report-list .what {
+  width: 52px;
+  flex-shrink: 0;
+  color: var(--muted);
+}
+.fm-report-list .o-failed .what,
+.fm-report-list .err {
+  color: var(--different);
+}
+.fm-report-list .path {
+  font-family: var(--mono);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

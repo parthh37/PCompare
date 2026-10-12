@@ -1,0 +1,291 @@
+/* ---------- folder sync ---------- */
+.folder-sync {
+  --op-copy: var(--accent);
+  --op-delete: var(--different);
+  --op-mkdir: var(--orphan);
+}
+
+.sync-mode-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 22px;
+  border-radius: 5px;
+  color: var(--accent);
+  background: rgba(91, 156, 255, 0.12);
+  border: 1px solid rgba(91, 156, 255, 0.35);
+}
+.sync-mode-icon.mirror {
+  color: var(--warn);
+  background: rgba(245, 163, 92, 0.12);
+  border-color: rgba(245, 163, 92, 0.4);
+}
+
+.sync-filterbar {
+  padding-block: 5px;
+}
+.sync-count {
+  margin-left: 6px;
+  font-size: 11px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+.sync-hint {
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+  flex-shrink: 1;
+}
+.sync-banner {
+  margin: 8px 10px 0;
+}
+
+/* list */
+.sync-header,
+.sync-row {
+  display: grid;
+  grid-template-columns: 30px 140px minmax(0, 1fr) 90px minmax(120px, 0.45fr);
+  align-items: center;
+}
+.sync-header {
+  padding: 4px 0;
+  color: var(--muted);
+  font-size: 11.5px;
+  border-bottom: 1px solid var(--border);
+  background: var(--panel-2);
+}
+.sync-header > div {
+  padding: 0 6px;
+  display: flex;
+  align-items: center;
+  gap: 3px;
+}
+.sync-header .num {
+  justify-content: flex-end;
+}
+.sync-header .sortable {
+  cursor: pointer;
+  user-select: none;
+}
+.sync-header .sortable:hover {
+  color: var(--text);
+}
+.sync-row {
+  height: 100%;
+  cursor: default;
+  user-select: none;
+}
+.sync-row:hover {
+  background: rgba(255, 255, 255, 0.03);
+}
+.sync-row.selected {
+  background: rgba(91, 156, 255, 0.16);
+}
+.sync-cell {
+  padding: 0 6px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.sync-cell.check {
+  display: flex;
+  justify-content: center;
+}
+.sync-cell.check input {
+  margin: 0;
+}
+.sync-cell.op {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+}
+.sync-cell.path {
+  display: flex;
+  align-items: center;
+  font-family: var(--mono);
+  font-size: 12px;
+}
+.sync-cell.num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.sync-cell.reason {
+  color: var(--muted);
+  font-size: 12px;
+}
+.sync-row.k-copy .op {
+  color: var(--op-copy);
+}
+.sync-row.k-delete .op,
+.sync-row.k-delete .path {
+  color: var(--op-delete);
+}
+.sync-row.k-mkdir .op {
+  color: var(--op-mkdir);
+}
+.sync-row.off .op,
+.sync-row.off .path,
+.sync-row.off .num,
+.sync-row.off .reason {
+  opacity: 0.4;
+}
+.sync-row.off .path {
+  text-decoration: line-through;
+}
+.sync-row.skipped {
+  background: var(--hatch);
+}
+.sync-row.skipped .op,
+.sync-row.skipped .path {
+  color: var(--muted);
+}
+.sync-row.skipped.conflict .op,
+.sync-row.skipped.conflict .reason {
+  color: var(--warn);
+}
+
+.op-copy-fg {
+  color: var(--accent);
+}
+.op-delete-fg {
+  color: var(--different);
+}
+.op-mkdir-fg {
+  color: var(--orphan);
+}
+
+/* progress */
+.sync-progress {
+  width: min(460px, 86%);
+  padding: 16px 18px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  box-shadow: 0 18px 60px rgba(0, 0, 0, 0.5);
+  display: grid;
+  gap: 10px;
+  font-size: 13px;
+}
+.sync-progress-title {
+  display: flex;
+  justify-content: space-between;
+  font-weight: 600;
+}
+.sync-progress-title .muted {
+  font-weight: 400;
+  font-variant-numeric: tabular-nums;
+}
+.sync-bar {
+  height: 6px;
+  border-radius: 3px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  overflow: hidden;
+}
+.sync-bar > div {
+  height: 100%;
+  background: var(--accent);
+  transition: width 0.15s linear;
+}
+.sync-progress-file {
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  direction: rtl;
+  text-align: left;
+}
+.sync-progress-foot {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 12px;
+}
+
+/* results */
+.sync-report {
+  margin: 8px 10px 0;
+  border-radius: 6px;
+  border: 1px solid rgba(34, 197, 94, 0.35);
+  background: rgba(34, 197, 94, 0.08);
+}
+.sync-report.has-failures {
+  border-color: rgba(239, 68, 68, 0.4);
+  background: rgba(239, 68, 68, 0.08);
+}
+.sync-report-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+}
+.sync-report-head > svg {
+  color: var(--ok);
+}
+.sync-report.has-failures .sync-report-head > svg {
+  color: var(--different);
+}
+.sync-failures {
+  list-style: none;
+  margin: 0;
+  padding: 0 10px 8px 33px;
+  max-height: 140px;
+  overflow-y: auto;
+  display: grid;
+  gap: 3px;
+  font-size: 12px;
+}
+.sync-failures li {
+  display: flex;
+  gap: 10px;
+  min-width: 0;
+}
+.sync-failures .path {
+  font-family: var(--mono);
+  flex-shrink: 0;
+  max-width: 50%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.sync-failures .err {
+  color: var(--different);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* confirmation */
+.sync-confirm-mode {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin: 0 0 10px;
+  font-weight: 600;
+}
+.sync-confirm-list {
+  list-style: none;
+  margin: 0 0 10px;
+  padding: 0;
+  display: grid;
+  gap: 5px;
+}
+.sync-confirm-list li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.sync-confirm-warn {
+  margin: 8px 0 0;
+  padding: 6px 10px;
+  border-radius: 5px;
+  background: rgba(245, 163, 92, 0.1);
+  border: 1px solid rgba(245, 163, 92, 0.35);
+  color: var(--warn);
+}

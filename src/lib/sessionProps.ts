@@ -10,6 +10,8 @@ export interface CompareProps<S = Record<string, unknown>> {
   settings?: Partial<S>;
   /** Report the current settings whenever they change. */
   onSettingsChange?: (s: S) => void;
+  /** Report whether the session holds unsaved edits, so closing it can confirm. */
+  onDirtyChange?: (dirty: boolean) => void;
 }
 
 export interface MergePaths {
@@ -24,4 +26,5 @@ export interface MergeProps<S = Record<string, unknown>> extends MergePaths {
   onPathsChange: (paths: MergePaths) => void;
   settings?: Partial<S>;
   onSettingsChange?: (s: S) => void;
+  onDirtyChange?: (dirty: boolean) => void;
 }

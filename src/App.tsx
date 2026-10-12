@@ -58,6 +58,8 @@ export default function App() {
   const [saved, setSaved] = useState<SavedSession[]>([]);
   const [saving, setSaving] = useState<Tab | null>(null);
   const [toast, setToast] = useState<string | null>(null);
+  /** Tabs whose session reported unsaved edits. */
+  const dirtyTabs = useRef(new Set<number>());
   const updater = useUpdater(setToast);
   const [autoUpdate, setAutoUpdate] = useState(autoUpdateEnabled);
 
@@ -113,7 +115,9 @@ export default function App() {
   const updateTab = (id: number, patch: Partial<Tab>) =>
     setTabs((ts) => ts.map((t) => (t.id === id ? { ...t, ...patch } : t)));
 
-  const closeTab = (id: number) =>
+  const closeTab = (id: number) => {
+    if (dirtyTabs.current.has(id) && !window.confirm("This tab has unsaved changes. Close it and discard them?")) return;
+    dirtyTabs.current.delete(id);
     setTabs((ts) => {
       const idx = ts.findIndex((t) => t.id === id);
       const rest = ts.filter((t) => t.id !== id);
@@ -121,6 +125,7 @@ export default function App() {
       if (id === active) setActive(remaining[Math.max(0, idx - 1)].id);
       return remaining;
     });
+  };
 
   // `pcompare.exe <left> <right>` from the shell or a git difftool, and
   // `pcompare.exe <left> <right> <base> [<output>]` (Beyond Compare's order) as a git mergetool.
@@ -172,6 +177,8 @@ export default function App() {
     return () => clearTimeout(t);
   }, [toast]);
 
+  const openFiles = (left: string, right: string) => openTab(sessionForFiles(left, right), left, right);
+
   const renderSession = (t: Tab) => {
     const two = {
       left: t.left,
@@ -179,6 +186,7 @@ export default function App() {
       settings: t.settings,
       onSettingsChange: (settings: object) => updateTab(t.id, { settings: { ...settings } }),
       onPathsChange: (left: string, right: string) => updateTab(t.id, { left, right }),
+      onDirtyChange: (dirty: boolean) => (dirty ? dirtyTabs.current.add(t.id) : dirtyTabs.current.delete(t.id)),
     };
     const three = {
       left: t.left,
@@ -187,6 +195,7 @@ export default function App() {
       output: t.output ?? "",
       settings: t.settings,
       onSettingsChange: two.onSettingsChange,
+      onDirtyChange: two.onDirtyChange,
       onPathsChange: (p: MergePaths) => updateTab(t.id, p),
     };
     switch (t.kind) {
@@ -243,9 +252,15 @@ export default function App() {
           />
         );
       case "sync":
-        return <FolderSync {...two} />;
+        return <FolderSync {...two} onOpenFiles={openFiles} />;
       case "folderMerge":
-        return <FolderMerge {...three} />;
+        return (
+          <FolderMerge
+            {...three}
+            onOpenFiles={openFiles}
+            onOpenTextMerge={(p) => openTab("merge", p.left, p.right, { base: p.base, output: p.output })}
+          />
+        );
       case "hex":
         return <HexCompare left={t.left} right={t.right} onPathsChange={two.onPathsChange} />;
       case "registry":

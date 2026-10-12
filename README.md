@@ -9,24 +9,32 @@ A fast, modern file & folder comparison tool for Windows and macOS — inspired 
 | Session | What it does |
 |---|---|
 | **Folder Compare** | Recursive, parallel (rayon) · **quick tests** (size, timestamp with tolerance / DST) then optional **content compare**: *Binary*, *CRC-32* or *Rules-based* (text rules — encoding, line endings, whitespace, case, ignore-regexes — so cosmetic changes show as ≈ *similar*) · override-quick-tests switch · right-click → compare contents of a file or whole folder on demand · **filters**: include/exclude files, exclude folders, size range, modified-date range, hidden files · **display filters**: All / Differences / Same / Orphans / no-orphans / left- or right-only / left- or right-newer · quick name search (`*.rs`) · flatten (ignore folder structure) · swap sides |
-| **Text Compare** | Side-by-side aligned diff · word-level intra-line highlights · Patience or Myers algorithm · ignore whitespace (trailing / changes / all), case and regex-defined text (e.g. `\$Id:[^$]*\$`), with *unimportant* differences shown separately · All / Context / Diffs-only views · overview map · prev/next difference (Alt+↑/↓) · encoding (UTF-8/16 BOM, Windows-1252) and line-ending detection |
+| **Text Compare** | **Editable**: gutter buttons and Alt+→ / Alt+← copy a difference across, double-click a line to edit, undo/redo, Ctrl+S saves with the original encoding, BOM and line endings · side-by-side aligned diff · word-level intra-line highlights · Patience or Myers algorithm · ignore whitespace (trailing / changes / all), case and regex-defined text (e.g. `\$Id:[^$]*\$`), with *unimportant* differences shown separately · All / Context / Diffs-only views · overview map · prev/next difference (Alt+↑/↓) · encoding (UTF-8/16 BOM, Windows-1252) and line-ending detection |
+| **Text Merge** | 3-way merge of left and right against their common ancestor · non-conflicting changes merged automatically · editable output with marked conflicts · take left / right / both / base per conflict · prev/next conflict (Alt+↑/↓) · works as a `git mergetool` |
+| **Table Compare** | Cell-by-cell CSV/TSV (delimiter sniffing), Excel/ODS workbooks (sheet picker) and HTML tables · align rows on **key columns** or by order · ignore columns · columns paired by header name · ignore case, trim, numeric tolerance |
+| **Picture Compare** | PNG, JPEG, GIF, BMP, ICO, TIFF, WebP, TGA, PNM, QOI · side-by-side with highlighted differences, difference, blend and swipe views · per-channel tolerance · synced zoom and pan · jump to the differing region |
+| **Folder Sync** | Update or mirror left→right / right→left, or update both · preview of every copy, delete and new folder with per-item checkboxes · progress and cancel · deletions go to the Recycle Bin/Trash · timestamps preserved |
+| **Folder Merge** | 3-way merge of folder trees against a common ancestor · classifies every path (changed, added, deleted, conflicts) with a proposed action · resolve text conflicts in Text Merge · writes the result to an output folder or into one side |
 | **Hex Compare** | Streams files of any size in 4 KB pages · byte-level highlighting · next-difference search |
-| **Saved sessions** | Name and save any comparison (Ctrl+S) — paths plus view settings · reopen, rename, delete from Home |
-| **Connection profiles** | Amazon S3 & S3-compatible (R2, MinIO, Wasabi…), Azure Blob, Google Cloud Storage, Backblaze B2, FTP/FTPS, SFTP, WebDAV, OneDrive, Dropbox, Google Drive · secrets kept in the OS keychain · use `remote://<profile>/path` (or 🌐) on either side of any compare |
+| **Registry Compare** | `.reg` exports (REGEDIT4 and v5, UTF-16) or live keys such as `HKLM\Software\Vendor` on Windows · key tree with status plus value-by-value differences |
+| **Version Compare** | `.exe`/`.dll` version resources (fixed info and all string tables) plus PE header facts: architecture, timestamp, subsystem, ASLR/DEP/CFG, signature presence |
+| **MP3 Compare** | Tags (ID3v1/v2, APE, Vorbis, MP4) of MP3, FLAC, M4A, OGG/Opus, WAV and AIFF · audio properties · embedded cover art |
+| **Saved sessions** | Name and save any comparison (Ctrl+Shift+S) — paths plus view settings · reopen, rename, delete from Home |
+| **Connection profiles** | Amazon S3 & S3-compatible (R2, MinIO, Wasabi…), Azure Blob, Google Cloud Storage, Backblaze B2, FTP/FTPS, SFTP, WebDAV, OneDrive, Dropbox, Google Drive · secrets kept in the OS keychain · use `remote://<profile>/path` (or the globe button) on either side of any compare |
 | **Auto-refresh** | Folder, text and hex sessions re-compare by themselves when either side changes on disk (OS file watcher, debounced, ignores excluded folders); remote sides are polled every 30 s |
-| **Updates** | Signed over-the-air updates from GitHub Releases — checked at startup and every 6 h, or on demand (⬆ Updates); install & restart in one click |
-| **Shell** | Tabbed sessions · drag two files/folders onto the window · `pcompare <left> <right>` command line |
+| **Updates** | Signed over-the-air updates from GitHub Releases — checked at startup and every 6 h, or on demand (Updates); install & restart in one click |
+| **Shell** | Tabbed sessions · drag two files/folders onto the window · `pcompare <left> <right>` command line · `pcompare <left> <right> <base> [<output>]` opens a 3-way merge |
 
 ## Roadmap
 
 ### Phase 2 — Beyond Compare parity
-- [ ] Editable text panes, copy hunk left ⇄ right, save with original encoding/line endings
-- [ ] Folder **sync** actions: copy, move, delete, mirror, update (with preview + undo log)
-- [ ] **Text Merge**: 3-way merge with base, conflict resolution, `git mergetool` support
+- [x] Editable text panes, copy hunk left ⇄ right, save with original encoding/line endings
+- [x] Folder **sync** actions: copy, move, delete, mirror, update (with preview + undo log)
+- [x] **Text Merge**: 3-way merge with base, conflict resolution, `git mergetool` support
 - [ ] Better line alignment inside replace blocks (similarity-based pairing)
 - [x] Ignore rules (regex-defined unimportant text) · [ ] language grammars (comments, strings)
-- [ ] **Table / CSV compare** with key columns
-- [ ] **Image compare** (side-by-side, overlay, pixel-diff, tolerance)
+- [x] **Table / CSV compare** with key columns
+- [x] **Image compare** (side-by-side, overlay, pixel-diff, tolerance)
 - [ ] Archive compare (zip / 7z / tar as folders)
 - [x] Saved sessions
 - [ ] Workspaces (save all open tabs), file-format rules per extension
@@ -94,10 +102,15 @@ offering the same release.
 ### Project layout
 
 ```
-crates/pcompare-core/   Rust diff engines (text, folder, hex) + saved sessions — UI-agnostic, unit tested
-crates/pcompare-remote/ Connection profiles and remote file systems (OpenDAL + russh SFTP)
-src-tauri/              Tauri shell exposing the engines as commands
-src/                    React + TypeScript UI
+crates/pcompare-core/    Rust diff engines (text, folder, hex) + saved sessions — UI-agnostic, unit tested
+crates/pcompare-remote/  Connection profiles and remote file systems (OpenDAL + russh SFTP)
+crates/pcompare-merge/   3-way text merge (diff3)
+crates/pcompare-table/   Table compare: CSV/TSV, Excel/ODS (calamine), HTML tables
+crates/pcompare-picture/ Picture compare (image crate)
+crates/pcompare-sync/    Folder sync planning/execution and 3-way folder merge
+crates/pcompare-meta/    Registry (.reg / live), executable version (pelite) and audio tag (lofty) compare
+src-tauri/               Tauri shell exposing the engines as commands
+src/                     React + TypeScript UI
 ```
 
 ### Connecting OneDrive, Dropbox or Google Drive
@@ -117,6 +130,16 @@ These use OAuth sign-in, which needs an app registration you control:
 ```bash
 git config --global diff.tool pcompare
 git config --global difftool.pcompare.cmd '"C:/Program Files/PCompare/pcompare.exe" "$LOCAL" "$REMOTE"'
+```
+
+### Use as a git mergetool
+
+The argument order matches Beyond Compare (`left right base output`):
+
+```bash
+git config --global merge.tool pcompare
+git config --global mergetool.pcompare.cmd '"C:/Program Files/PCompare/pcompare.exe" "$LOCAL" "$REMOTE" "$BASE" "$MERGED"'
+git config --global mergetool.pcompare.trustExitCode false
 ```
 
 ## License

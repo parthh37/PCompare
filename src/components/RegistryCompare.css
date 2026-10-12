@@ -1,0 +1,146 @@
+/* ---------- registry compare ---------- */
+.reg-split {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: minmax(240px, 36%) minmax(0, 1fr);
+}
+.reg-tree,
+.reg-values {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  min-width: 0;
+}
+.reg-tree {
+  border-right: 1px solid var(--border);
+  outline: none;
+}
+.reg-tree:focus-visible .rk-row.selected {
+  outline: 1px solid var(--accent);
+  outline-offset: -1px;
+}
+.reg-head {
+  padding: 4px 8px;
+  color: var(--muted);
+  font-size: 11.5px;
+  background: var(--panel-2);
+  border-bottom: 1px solid var(--border);
+}
+.rk-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  height: 100%;
+  padding-right: 8px;
+  cursor: default;
+  user-select: none;
+  white-space: nowrap;
+}
+.rk-row:hover {
+  background: rgba(255, 255, 255, 0.03);
+}
+.rk-row.selected {
+  background: rgba(91, 156, 255, 0.16);
+}
+.rk-icon {
+  color: #fbbf24;
+}
+.rk-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.rk-status {
+  color: var(--muted);
+  opacity: 0.7;
+}
+.rk-row.s-different .rk-name,
+.rk-row.s-different .rk-status {
+  color: var(--different);
+}
+.rk-row.own-diff .rk-name {
+  font-weight: 650;
+}
+.rk-row.s-leftOnly .rk-name,
+.rk-row.s-rightOnly .rk-name,
+.rk-row.s-leftOnly .rk-status,
+.rk-row.s-rightOnly .rk-status,
+.rk-row.s-leftOnly .rk-icon,
+.rk-row.s-rightOnly .rk-icon {
+  color: var(--orphan);
+}
+
+.rv-row {
+  display: grid;
+  grid-template-columns: minmax(110px, 20%) 150px minmax(0, 1fr) minmax(0, 1fr);
+  height: 100%;
+  align-items: center;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.035);
+}
+.rv-row.reg-head {
+  height: auto;
+  padding: 0;
+}
+.rv-row > div {
+  padding: 0 8px;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.rv-row.reg-head > div {
+  padding: 4px 8px;
+}
+.rv-type {
+  color: var(--muted);
+  font-size: 11.5px;
+}
+.rv-type.differs {
+  color: var(--different);
+}
+.rv-val {
+  font-family: var(--mono);
+  font-size: 12px;
+  height: 100%;
+  line-height: 22px;
+  user-select: text;
+}
+.rv-val.absent {
+  background: var(--hatch);
+}
+.rv-row.p-different .rv-val {
+  background: var(--chg-bg);
+  color: var(--different);
+}
+.rv-row.p-different .rv-name {
+  color: var(--different);
+}
+.rv-row.p-leftOnly .rv-name,
+.rv-row.p-rightOnly .rv-name,
+.rv-row.p-leftOnly .rv-val,
+.rv-row.p-rightOnly .rv-val {
+  color: var(--orphan);
+}
+.rv-hidden {
+  padding: 4px 8px;
+  font-size: 11.5px;
+  border-top: 1px solid var(--border);
+}
+.reg-warn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--warn);
+  margin-left: 4px;
+}
+.statusbar .sep-v {
+  width: 1px;
+  height: 14px;
+  background: var(--border);
+}
+.empty-state code {
+  font-family: var(--mono);
+  font-size: 12px;
+}
