@@ -4,6 +4,7 @@
 import {
   Binary,
   Cpu,
+  Database,
   FileText,
   FolderGit2,
   FolderSync,
@@ -29,7 +30,8 @@ export type CompareKind =
   | "hex"
   | "registry"
   | "version"
-  | "mp3";
+  | "mp3"
+  | "database";
 
 export type SessionKind = "home" | "profiles" | CompareKind;
 
@@ -126,6 +128,12 @@ export const SESSIONS: Record<SessionKind, SessionInfo> = {
     color: "#f87171",
     description: "Compare tags and audio properties of MP3 and other audio files.",
   },
+  database: {
+    label: "Database Compare",
+    icon: Database,
+    color: "#a3e635",
+    description: "Schema and data compare for SQL Server, MySQL, PostgreSQL and SQLite with sync scripts.",
+  },
 };
 
 /** Order of the "new session" cards on Home. */
@@ -141,6 +149,7 @@ export const COMPARE_KINDS: CompareKind[] = [
   "registry",
   "version",
   "mp3",
+  "database",
 ];
 
 export const isCompareKind = (k: SessionKind): k is CompareKind => k !== "home" && k !== "profiles";
@@ -162,10 +171,13 @@ register("picture", "png jpg jpeg gif bmp ico tif tiff webp tga pnm pbm pgm ppm 
 register("mp3", "mp3 flac ogg opus m4a aac wav aif aiff wv ape mpc spx");
 register("version", "exe dll sys ocx cpl drv scr");
 register("registry", "reg");
+// SQLite files open as ad-hoc Database Compare sides. Plain `.db` stays with
+// Hex (many `.db` files aren't SQLite); App sniffs those via `dbApi.isSqlite`.
+register("database", "sqlite sqlite3 db3 s3db sl3");
 register(
   "hex",
   "bin dat img iso zip 7z rar gz tgz bz2 xz zst jar war apk class o obj lib a so dylib pdb " +
-    "pdf doc ppt msi cab db sqlite woff woff2 ttf otf mp4 mov mkv avi",
+    "pdf doc ppt msi cab db woff woff2 ttf otf mp4 mov mkv avi",
 );
 
 /**
