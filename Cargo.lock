@@ -4711,7 +4711,7 @@ dependencies = [
 
 [[package]]
 name = "pcompare"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "globset",
  "notify",
@@ -4737,7 +4737,7 @@ dependencies = [
 
 [[package]]
 name = "pcompare-core"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "crc32fast",
  "encoding_rs",
@@ -4753,7 +4753,7 @@ dependencies = [
 
 [[package]]
 name = "pcompare-db"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "bigdecimal",
  "chrono",
@@ -4773,7 +4773,7 @@ dependencies = [
 
 [[package]]
 name = "pcompare-index"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "pcompare-core",
  "pcompare-sync",
@@ -4786,7 +4786,7 @@ dependencies = [
 
 [[package]]
 name = "pcompare-merge"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "pcompare-core",
  "serde",
@@ -4798,7 +4798,7 @@ dependencies = [
 
 [[package]]
 name = "pcompare-meta"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "base64 0.23.1",
  "lofty",
@@ -4812,7 +4812,7 @@ dependencies = [
 
 [[package]]
 name = "pcompare-picture"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "base64 0.22.1",
  "image",
@@ -4824,7 +4824,7 @@ dependencies = [
 
 [[package]]
 name = "pcompare-remote"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "base64 0.22.1",
  "keyring",
@@ -4845,7 +4845,7 @@ dependencies = [
 
 [[package]]
 name = "pcompare-sync"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "crc32fast",
  "filetime",
@@ -4863,7 +4863,7 @@ dependencies = [
 
 [[package]]
 name = "pcompare-table"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "calamine",
  "csv",
