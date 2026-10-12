@@ -1,6 +1,7 @@
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { CircleArrowUp, Globe, Plus, Save, X } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
+import { DbCompare } from "./components/DbCompare";
 import { FolderCompare } from "./components/FolderCompare";
 import { FolderMerge } from "./components/FolderMerge";
 import { FolderSync } from "./components/FolderSync";
@@ -17,9 +18,17 @@ import { TextCompare } from "./components/TextCompare";
 import { TextMerge } from "./components/TextMerge";
 import { VersionCompare } from "./components/VersionCompare";
 import { api, errorMessage, type SavedSession } from "./lib/api";
+import { dbApi, dbPathLabel, useDbConnectionNames } from "./lib/dbApi";
 import { basename } from "./lib/format";
 import type { MergePaths } from "./lib/sessionProps";
-import { SESSIONS, isCompareKind, sessionForFiles, type CompareKind, type SessionKind } from "./lib/sessions";
+import {
+  SESSIONS,
+  extension,
+  isCompareKind,
+  sessionForFiles,
+  type CompareKind,
+  type SessionKind,
+} from "./lib/sessions";
 import { ShellContext } from "./lib/shell";
 import { autoUpdateEnabled, setAutoUpdateEnabled, useUpdater } from "./lib/useUpdater";
 
@@ -40,11 +49,13 @@ export interface Tab {
   sessionName?: string;
 }
 
-function tabTitle(t: Tab): string {
+/** `dbNames` titles Database Compare tabs by connection name rather than `db://` id. */
+function tabTitle(t: Tab, dbNames: Record<string, string>): string {
   if (t.sessionName) return t.sessionName;
   if (!isCompareKind(t.kind) || !t.left || !t.right) return SESSIONS[t.kind].label;
-  const l = basename(t.left);
-  const r = basename(t.right);
+  const label = (p: string) => (t.kind === "database" ? dbPathLabel(p, dbNames) : basename(p));
+  const l = label(t.left);
+  const r = label(t.right);
   return l === r ? l : `${l} ↔ ${r}`;
 }
 
@@ -62,6 +73,7 @@ export default function App() {
   const dirtyTabs = useRef(new Set<number>());
   const updater = useUpdater(setToast);
   const [autoUpdate, setAutoUpdate] = useState(autoUpdateEnabled);
+  const dbNames = useDbConnectionNames();
 
   const refreshSaved = useCallback(
     () =>
@@ -107,7 +119,13 @@ export default function App() {
   const openAuto = useCallback(
     async (left: string, right: string) => {
       const [lk, rk] = await Promise.all([api.pathKind(left), api.pathKind(right)]);
-      openTab(lk === "directory" && rk === "directory" ? "folder" : sessionForFiles(left, right), left, right);
+      if (lk === "directory" && rk === "directory") return openTab("folder", left, right);
+      let kind = sessionForFiles(left, right);
+      // `.db` is ambiguous (Thumbs.db, BerkeleyDB...): only SQLite files open as databases.
+      if (kind === "hex" && extension(left) === "db" && extension(right) === "db") {
+        if (await dbApi.isSqlite([left, right]).catch(() => false)) kind = "database";
+      }
+      openTab(kind, left, right);
     },
     [openTab],
   );
@@ -269,6 +287,8 @@ export default function App() {
         return <VersionCompare {...two} />;
       case "mp3":
         return <Mp3Compare {...two} />;
+      case "database":
+        return <DbCompare {...two} />;
     }
   };
 
@@ -285,7 +305,7 @@ export default function App() {
               title={t.left && t.right ? `${t.left}\n${t.right}` : undefined}
             >
               <SessionIcon kind={t.kind} />
-              <span className="tab-title">{tabTitle(t)}</span>
+              <span className="tab-title">{tabTitle(t, dbNames)}</span>
               <button
                 className="tab-close"
                 aria-label="Close tab"
@@ -382,7 +402,7 @@ export default function App() {
             output={saving.output}
             settings={saving.settings ?? {}}
             sessionId={saving.sessionId}
-            defaultName={tabTitle(saving)}
+            defaultName={tabTitle(saving, dbNames)}
             onClose={() => setSaving(null)}
             onSaved={(s) => {
               updateTab(saving.id, { sessionId: s.id, sessionName: s.name });
