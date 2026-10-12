@@ -5,18 +5,17 @@
 //! Planning reuses [`pcompare_core::folder`] so the preview agrees exactly
 //! with what a Folder Compare session shows for the same options.
 
-use std::fs;
 use std::path::Path;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
 
 use pcompare_core::folder::{
-    self, EntryStatus, FolderCompareOptions, FolderCompareResult, FolderEntry, Side,
+    self, ChecksumCache, EntryMeta, EntryStatus, FolderCompareOptions, FolderCompareResult,
+    FolderEntry, Side,
 };
 use pcompare_core::vfs::Vfs;
 use serde::{Deserialize, Serialize};
 
-use crate::fsops::{self, Deleter};
+use crate::baseline::{self, Baseline, Snap};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -32,6 +31,50 @@ pub enum SyncMode {
     MirrorLeftToRight,
     /// Make the left side identical to the right, deleting left-only items.
     MirrorRightToLeft,
+    /// True two-way sync against the baseline from the last run: changes
+    /// and deletions on either side are carried over, and paths changed on
+    /// both sides are conflicts. Without a baseline it behaves like
+    /// [`SyncMode::UpdateBoth`].
+    TwoWay,
+}
+
+/// How [`SyncMode::TwoWay`] settles paths that changed on both sides.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ConflictPolicy {
+    /// Leave them alone and list them as conflicts.
+    #[default]
+    Skip,
+    /// The newer file wins; an edit always beats a deletion.
+    NewerWins,
+    LeftWins,
+    RightWins,
+}
+
+/// Inputs to planning besides the comparison and its options.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct PlanOptions<'a> {
+    /// State after the last successful sync (for [`SyncMode::TwoWay`]).
+    pub baseline: Option<&'a Baseline>,
+    pub conflicts: ConflictPolicy,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum WarningKind {
+    /// One side is empty while the other (or the baseline) is not — often an
+    /// unmounted drive or a disconnected share rather than a real deletion.
+    EmptySide,
+    /// The plan deletes a large share of the files on one side.
+    MassDeletion,
+}
+
+/// Something about a plan the user must acknowledge before running it.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PlanWarning {
+    pub kind: WarningKind,
+    pub message: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -64,6 +107,10 @@ pub struct SyncOp {
     #[serde(default)]
     pub overwrite: bool,
     pub reason: String,
+    /// The target (the file being replaced or deleted) as the preview saw
+    /// it. The executor refuses to touch it if it has changed since.
+    #[serde(default)]
+    pub dst_before: Option<Snap>,
 }
 
 /// An item the plan deliberately leaves alone, with the reason why.
@@ -129,46 +176,20 @@ pub struct SyncPlan {
     pub ops: Vec<SyncOp>,
     pub skipped: Vec<SyncSkip>,
     pub summary: SyncSummary,
-    pub elapsed_ms: u128,
-}
-
-#[derive(Debug, Clone, Default, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct SyncProgress {
-    pub done: usize,
-    pub total: usize,
-    pub bytes_done: u64,
-    pub bytes_total: u64,
-    /// Relative path of the operation in progress.
-    pub current: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct OpResult {
-    pub id: u32,
-    pub kind: OpKind,
-    pub direction: Direction,
-    pub rel_path: String,
-    pub ok: bool,
-    pub error: Option<String>,
-}
-
-#[derive(Debug, Clone, Default, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct SyncReport {
-    pub results: Vec<OpResult>,
-    pub succeeded: usize,
-    pub failed: usize,
-    pub bytes_copied: u64,
-    /// The run stopped early; operations after the last result never ran.
-    pub cancelled: bool,
+    pub warnings: Vec<PlanWarning>,
+    /// Whether a baseline from an earlier sync informed the plan.
+    pub has_baseline: bool,
+    /// The comparison the plan was built from, for updating the baseline.
+    #[serde(skip)]
+    pub comparison: Option<FolderCompareResult>,
     pub elapsed_ms: u128,
 }
 
 // ---------- planning ----------
 
-/// Compares two folders and plans the operations for `mode`.
+/// Compares two folders and plans the operations for `mode`. The checksum
+/// cache, when given, lets content comparisons skip unchanged files.
+#[allow(clippy::too_many_arguments)]
 pub fn plan_sync_with(
     left_fs: &dyn Vfs,
     left: &str,
@@ -176,14 +197,17 @@ pub fn plan_sync_with(
     right: &str,
     mode: SyncMode,
     opts: &FolderCompareOptions,
+    plan_opts: &PlanOptions,
+    cache: Option<&dyn ChecksumCache>,
 ) -> pcompare_core::Result<SyncPlan> {
     let started = Instant::now();
     let opts = FolderCompareOptions {
         recursive: true,
         ..opts.clone()
     };
-    let cmp = folder::compare_folders_with(left_fs, left, right_fs, right, &opts)?;
-    let mut plan = plan_from_comparison(&cmp, mode);
+    let cmp = folder::compare_folders_cached(left_fs, left, right_fs, right, &opts, cache)?;
+    let mut plan = plan_from_comparison_with(&cmp, mode, &opts, plan_opts);
+    plan.comparison = Some(cmp);
     plan.elapsed_ms = started.elapsed().as_millis();
     Ok(plan)
 }
@@ -195,23 +219,65 @@ pub fn plan_sync(
     mode: SyncMode,
     opts: &FolderCompareOptions,
 ) -> pcompare_core::Result<SyncPlan> {
+    plan_sync_local(left, right, mode, opts, &PlanOptions::default())
+}
+
+/// [`plan_sync`] with a baseline and conflict policy.
+pub fn plan_sync_local(
+    left: impl AsRef<Path>,
+    right: impl AsRef<Path>,
+    mode: SyncMode,
+    opts: &FolderCompareOptions,
+    plan_opts: &PlanOptions,
+) -> pcompare_core::Result<SyncPlan> {
     let fs = pcompare_core::vfs::LocalFs;
     let (l, r) = (
         left.as_ref().to_string_lossy(),
         right.as_ref().to_string_lossy(),
     );
-    plan_sync_with(&fs, &l, &fs, &r, mode, opts)
+    plan_sync_with(&fs, &l, &fs, &r, mode, opts, plan_opts, None)
 }
 
-#[derive(Default)]
-struct Planner {
+struct Planner<'a> {
     mkdirs: Vec<SyncOp>,
     copies: Vec<SyncOp>,
     deletes: Vec<SyncOp>,
     skipped: Vec<SyncSkip>,
+    opts: &'a FolderCompareOptions,
+    baseline: Option<&'a Baseline>,
+    conflicts: ConflictPolicy,
 }
 
-impl Planner {
+/// The side an operation toward `dir` overwrites or deletes.
+fn target_meta(e: &FolderEntry, dir: Direction) -> Option<&EntryMeta> {
+    match dir {
+        Direction::ToRight => e.right.as_ref(),
+        Direction::ToLeft => e.left.as_ref(),
+    }
+}
+
+fn toward(side: Side) -> Direction {
+    match side {
+        Side::Left => Direction::ToLeft,
+        Side::Right => Direction::ToRight,
+    }
+}
+
+fn other(side: Side) -> Side {
+    match side {
+        Side::Left => Side::Right,
+        Side::Right => Side::Left,
+    }
+}
+
+fn side_name(side: Side) -> &'static str {
+    match side {
+        Side::Left => "left",
+        Side::Right => "right",
+    }
+}
+
+impl Planner<'_> {
     fn push(
         &mut self,
         kind: OpKind,
@@ -220,6 +286,10 @@ impl Planner {
         size: u64,
         reason: &str,
     ) {
+        let dst_before = match kind {
+            OpKind::Mkdir => None,
+            OpKind::Copy | OpKind::Delete => target_meta(e, direction).map(Snap::from),
+        };
         let op = SyncOp {
             id: 0,
             kind,
@@ -229,6 +299,7 @@ impl Planner {
             size,
             overwrite: kind == OpKind::Copy && e.left.is_some() && e.right.is_some(),
             reason: reason.to_owned(),
+            dst_before,
         };
         match kind {
             OpKind::Mkdir => self.mkdirs.push(op),
@@ -246,29 +317,27 @@ impl Planner {
         });
     }
 
+    fn copy(&mut self, e: &FolderEntry, dir: Direction, reason: &str) {
+        let size = source_meta(e, dir).map_or(0, |m| m.size);
+        self.push(OpKind::Copy, dir, e, size, reason)
+    }
+
     /// Recreates an orphan subtree on the other side: one mkdir per folder
     /// (parents before children) and one copy per file.
-    fn copy_orphan(&mut self, e: &FolderEntry, dir: Direction) {
+    fn copy_orphan(&mut self, e: &FolderEntry, dir: Direction, reason: &str) {
         if e.is_dir {
-            self.push(OpKind::Mkdir, dir, e, 0, "orphan");
+            self.push(OpKind::Mkdir, dir, e, 0, reason);
             for c in &e.children {
-                self.copy_orphan(c, dir);
+                self.copy_orphan(c, dir, reason);
             }
         } else {
-            let size = source_meta(e, dir).map_or(0, |m| m.size);
-            self.push(OpKind::Copy, dir, e, size, "orphan");
+            self.copy(e, dir, reason);
         }
     }
 
-    fn delete(&mut self, e: &FolderEntry, dir: Direction) {
+    fn delete(&mut self, e: &FolderEntry, dir: Direction, reason: &str) {
         // A folder is deleted as a whole, so its children need no ops.
-        self.push(
-            OpKind::Delete,
-            dir,
-            e,
-            tree_size(e),
-            "mirror: not in source",
-        );
+        self.push(OpKind::Delete, dir, e, tree_size(e), reason);
     }
 
     fn walk(&mut self, entries: &[FolderEntry], mode: SyncMode) {
@@ -281,20 +350,23 @@ impl Planner {
                 }
                 // Rules-based "similar" files differ only in unimportant ways.
                 EntryStatus::Same | EntryStatus::Similar => {}
+                EntryStatus::LeftOnly if mode == TwoWay => self.two_way_orphan(e, Side::Left),
+                EntryStatus::RightOnly if mode == TwoWay => self.two_way_orphan(e, Side::Right),
                 EntryStatus::LeftOnly => match mode {
-                    UpdateLeftToRight | UpdateBoth | MirrorLeftToRight => {
-                        self.copy_orphan(e, ToRight)
+                    UpdateLeftToRight | UpdateBoth | MirrorLeftToRight | TwoWay => {
+                        self.copy_orphan(e, ToRight, "orphan")
                     }
-                    MirrorRightToLeft => self.delete(e, ToLeft),
+                    MirrorRightToLeft => self.delete(e, ToLeft, "mirror: not in source"),
                     UpdateRightToLeft => {}
                 },
                 EntryStatus::RightOnly => match mode {
-                    UpdateRightToLeft | UpdateBoth | MirrorRightToLeft => {
-                        self.copy_orphan(e, ToLeft)
+                    UpdateRightToLeft | UpdateBoth | MirrorRightToLeft | TwoWay => {
+                        self.copy_orphan(e, ToLeft, "orphan")
                     }
-                    MirrorLeftToRight => self.delete(e, ToRight),
+                    MirrorLeftToRight => self.delete(e, ToRight, "mirror: not in source"),
                     UpdateLeftToRight => {}
                 },
+                EntryStatus::Different if mode == TwoWay => self.two_way_changed(e),
                 EntryStatus::Different => self.different_file(e, mode),
                 EntryStatus::TypeMismatch => {
                     self.skip(e, "a file on one side and a folder on the other", true)
@@ -310,13 +382,12 @@ impl Planner {
     fn different_file(&mut self, e: &FolderEntry, mode: SyncMode) {
         use Direction::{ToLeft, ToRight};
         use SyncMode::*;
-        let size = |d| source_meta(e, d).map_or(0, |m| m.size);
         match (mode, e.newer) {
-            (UpdateLeftToRight | UpdateBoth, Some(Side::Left)) => {
-                self.push(OpKind::Copy, ToRight, e, size(ToRight), "newer on left")
+            (UpdateLeftToRight | UpdateBoth | TwoWay, Some(Side::Left)) => {
+                self.copy(e, ToRight, "newer on left")
             }
-            (UpdateRightToLeft | UpdateBoth, Some(Side::Right)) => {
-                self.push(OpKind::Copy, ToLeft, e, size(ToLeft), "newer on right")
+            (UpdateRightToLeft | UpdateBoth | TwoWay, Some(Side::Right)) => {
+                self.copy(e, ToLeft, "newer on right")
             }
             (UpdateLeftToRight, Some(Side::Right)) => {
                 self.skip(e, "newer on right; not overwritten", false)
@@ -324,7 +395,7 @@ impl Planner {
             (UpdateRightToLeft, Some(Side::Left)) => {
                 self.skip(e, "newer on left; not overwritten", false)
             }
-            (UpdateLeftToRight | UpdateRightToLeft | UpdateBoth, None) => {
+            (UpdateLeftToRight | UpdateRightToLeft | UpdateBoth | TwoWay, None) => {
                 self.skip(e, "differs, but neither side is newer", true)
             }
             (MirrorLeftToRight, newer) => {
@@ -333,7 +404,7 @@ impl Planner {
                     Some(Side::Right) => "mirror: older on left",
                     None => "different",
                 };
-                self.push(OpKind::Copy, ToRight, e, size(ToRight), reason)
+                self.copy(e, ToRight, reason)
             }
             (MirrorRightToLeft, newer) => {
                 let reason = match newer {
@@ -341,9 +412,97 @@ impl Planner {
                     Some(Side::Left) => "mirror: older on right",
                     None => "different",
                 };
-                self.push(OpKind::Copy, ToLeft, e, size(ToLeft), reason)
+                self.copy(e, ToLeft, reason)
             }
         }
+    }
+
+    /// Two-way: a file present on both sides with different contents.
+    fn two_way_changed(&mut self, e: &FolderEntry) {
+        let (Some(l), Some(r)) = (&e.left, &e.right) else {
+            return;
+        };
+        let Some(base) = self.baseline.and_then(|b| b.get(&e.rel_path)).filter(|b| !b.is_dir) else {
+            // Never synced before: fall back to "newer wins".
+            return self.different_file(e, SyncMode::TwoWay);
+        };
+        let lc = baseline::side_changed(l, &base.left, self.opts);
+        let rc = baseline::side_changed(r, &base.right, self.opts);
+        match (lc, rc) {
+            (true, false) => self.copy(e, Direction::ToRight, "changed on left"),
+            (false, true) => self.copy(e, Direction::ToLeft, "changed on right"),
+            _ => {
+                let winner = match self.conflicts {
+                    ConflictPolicy::Skip => None,
+                    ConflictPolicy::NewerWins => e.newer,
+                    ConflictPolicy::LeftWins => Some(Side::Left),
+                    ConflictPolicy::RightWins => Some(Side::Right),
+                };
+                match winner {
+                    Some(side) => self.copy(
+                        e,
+                        toward(other(side)),
+                        &format!("conflict: {} version kept", side_name(side)),
+                    ),
+                    None => self.skip(e, "changed on both sides since the last sync", true),
+                }
+            }
+        }
+    }
+
+    /// Two-way: an item that exists only on `side`.
+    fn two_way_orphan(&mut self, e: &FolderEntry, side: Side) {
+        let to_other = toward(other(side));
+        if self.baseline.and_then(|b| b.get(&e.rel_path)).is_none() {
+            let reason = format!("new on {}", side_name(side));
+            return self.copy_orphan(e, to_other, &reason);
+        }
+        // It was in sync last time, so the other side deleted it.
+        let deleted_on = side_name(other(side));
+        if self.unchanged_since_baseline(e, side) {
+            return self.delete(e, toward(side), &format!("deleted on {deleted_on}"));
+        }
+        let keep_edit = match self.conflicts {
+            ConflictPolicy::Skip => None,
+            // An edit beats a deletion: losing work is worse than resurrecting a file.
+            ConflictPolicy::NewerWins => Some(true),
+            ConflictPolicy::LeftWins => Some(side == Side::Left),
+            ConflictPolicy::RightWins => Some(side == Side::Right),
+        };
+        match keep_edit {
+            Some(true) => self.copy_orphan(e, to_other, "conflict: edit kept over deletion"),
+            Some(false) => self.delete(e, toward(side), "conflict: deletion kept over edit"),
+            None => self.skip(
+                e,
+                format!("changed on {}, deleted on {deleted_on}", side_name(side)),
+                true,
+            ),
+        }
+    }
+
+    /// Whether an orphan (and, for folders, everything inside) is exactly as
+    /// it was at the last sync — i.e. safe to treat as deleted elsewhere.
+    fn unchanged_since_baseline(&self, e: &FolderEntry, side: Side) -> bool {
+        let Some(base) = self.baseline.and_then(|b| b.get(&e.rel_path)) else {
+            return false; // new since the baseline
+        };
+        let Some(now) = (match side {
+            Side::Left => e.left.as_ref(),
+            Side::Right => e.right.as_ref(),
+        }) else {
+            return false;
+        };
+        if now.is_dir != base.is_dir {
+            return false;
+        }
+        if now.is_dir {
+            return e.children.iter().all(|c| self.unchanged_since_baseline(c, side));
+        }
+        let then = match side {
+            Side::Left => &base.left,
+            Side::Right => &base.right,
+        };
+        !baseline::side_changed(now, then, self.opts)
     }
 }
 
@@ -363,9 +522,108 @@ fn tree_size(e: &FolderEntry) -> u64 {
     }
 }
 
+/// Files present on `side` in a tree.
+fn count_files(entries: &[FolderEntry], side: Side) -> usize {
+    entries
+        .iter()
+        .map(|e| {
+            let present = match side {
+                Side::Left => e.left.is_some(),
+                Side::Right => e.right.is_some(),
+            };
+            match (present, e.is_dir) {
+                (false, _) => 0,
+                (true, true) => count_files(&e.children, side),
+                (true, false) => 1,
+            }
+        })
+        .sum()
+}
+
+/// Files a delete op removes (1 for a file, the whole tree for a folder).
+fn files_in(cmp: &[FolderEntry], rel: &str) -> usize {
+    fn find<'a>(entries: &'a [FolderEntry], rel: &str) -> Option<&'a FolderEntry> {
+        entries.iter().find_map(|e| {
+            if e.rel_path == rel {
+                Some(e)
+            } else if rel.starts_with(&e.rel_path) && rel.as_bytes().get(e.rel_path.len()) == Some(&b'/') {
+                find(&e.children, rel)
+            } else {
+                None
+            }
+        })
+    }
+    match find(cmp, rel) {
+        Some(e) if e.is_dir => count_files(&e.children, Side::Left) + count_files(&e.children, Side::Right),
+        _ => 1,
+    }
+}
+
+/// Deleting at least this many files *and* this share of a side is flagged.
+const MASS_DELETE_MIN_FILES: usize = 20;
+const MASS_DELETE_SHARE: f64 = 0.5;
+
+/// Safety checks against the classic catastrophe: mirroring (or two-way
+/// syncing) from a drive that isn't mounted, which looks exactly like
+/// "everything was deleted".
+fn plan_warnings(cmp: &FolderCompareResult, ops: &[SyncOp]) -> Vec<PlanWarning> {
+    let mut warnings = Vec::new();
+    for (side, dir) in [(Side::Left, Direction::ToLeft), (Side::Right, Direction::ToRight)] {
+        let deleted: usize = ops
+            .iter()
+            .filter(|o| o.kind == OpKind::Delete && o.direction == dir)
+            .map(|o| if o.is_dir { files_in(&cmp.entries, &o.rel_path) } else { 1 })
+            .sum();
+        if deleted == 0 {
+            continue;
+        }
+        let name = side_name(side);
+        let present_other = count_files(&cmp.entries, other(side));
+        let present_here = count_files(&cmp.entries, side);
+        if present_other == 0 {
+            warnings.push(PlanWarning {
+                kind: WarningKind::EmptySide,
+                message: format!(
+                    "The {} folder is empty, so this sync deletes everything on the {name} ({deleted} files).                      If it is on a drive or network share that isn't connected, stop now.",
+                    side_name(other(side)),
+                ),
+            });
+        } else if deleted >= MASS_DELETE_MIN_FILES && deleted as f64 >= present_here as f64 * MASS_DELETE_SHARE {
+            warnings.push(PlanWarning {
+                kind: WarningKind::MassDeletion,
+                message: format!(
+                    "This sync deletes {deleted} of the {present_here} files on the {name}.",
+                ),
+            });
+        }
+    }
+    warnings
+}
+
 /// Plans operations from an existing comparison (which must be recursive).
 pub fn plan_from_comparison(cmp: &FolderCompareResult, mode: SyncMode) -> SyncPlan {
-    let mut p = Planner::default();
+    plan_from_comparison_with(cmp, mode, &FolderCompareOptions::default(), &PlanOptions::default())
+}
+
+/// [`plan_from_comparison`] with the compare options (whose timestamp
+/// tolerance decides what counts as changed since the baseline), a baseline
+/// and a conflict policy.
+pub fn plan_from_comparison_with(
+    cmp: &FolderCompareResult,
+    mode: SyncMode,
+    opts: &FolderCompareOptions,
+    plan_opts: &PlanOptions,
+) -> SyncPlan {
+    let baseline = plan_opts.baseline.filter(|b| !b.is_empty());
+    let mut p = Planner {
+        mkdirs: Vec::new(),
+        copies: Vec::new(),
+        deletes: Vec::new(),
+        skipped: Vec::new(),
+        opts,
+        baseline,
+        conflicts: plan_opts.conflicts,
+    };
     p.walk(&cmp.entries, mode);
     let mut ops = p.mkdirs;
     ops.append(&mut p.copies);
@@ -374,6 +632,7 @@ pub fn plan_from_comparison(cmp: &FolderCompareResult, mode: SyncMode) -> SyncPl
         op.id = i as u32;
     }
     let summary = SyncSummary::of(&ops, &p.skipped);
+    let warnings = plan_warnings(cmp, &ops);
     SyncPlan {
         left_root: cmp.left_root.clone(),
         right_root: cmp.right_root.clone(),
@@ -381,135 +640,23 @@ pub fn plan_from_comparison(cmp: &FolderCompareResult, mode: SyncMode) -> SyncPl
         ops,
         skipped: p.skipped,
         summary,
+        warnings,
+        has_baseline: mode == SyncMode::TwoWay && baseline.is_some(),
+        comparison: None,
         elapsed_ms: cmp.elapsed_ms,
-    }
-}
-
-// ---------- execution ----------
-
-/// Performs `ops` against two local folders, continuing past failures.
-///
-/// `progress` is called before each operation, periodically during large
-/// copies, and once at the end. Setting `cancel` stops the run before the
-/// next operation; a copy in flight is abandoned and its temp file removed.
-pub fn execute_sync(
-    left: &Path,
-    right: &Path,
-    ops: &[SyncOp],
-    deleter: &dyn Deleter,
-    cancel: &AtomicBool,
-    progress: &mut dyn FnMut(&SyncProgress),
-) -> SyncReport {
-    let started = Instant::now();
-    let mut report = SyncReport::default();
-    let mut state = SyncProgress {
-        total: ops.len(),
-        bytes_total: ops
-            .iter()
-            .filter(|o| o.kind == OpKind::Copy)
-            .map(|o| o.size)
-            .sum(),
-        ..Default::default()
-    };
-
-    for op in ops {
-        state.current = Some(op.rel_path.clone());
-        progress(&state);
-        if cancel.load(Ordering::Relaxed) {
-            break;
-        }
-
-        let outcome = run_op(left, right, op, deleter, cancel, &mut state, progress);
-        match &outcome {
-            Ok(bytes) => {
-                report.succeeded += 1;
-                report.bytes_copied += bytes;
-                state.bytes_done += bytes;
-            }
-            Err(_) => report.failed += 1,
-        }
-        report.results.push(OpResult {
-            id: op.id,
-            kind: op.kind,
-            direction: op.direction,
-            rel_path: op.rel_path.clone(),
-            ok: outcome.is_ok(),
-            error: outcome.err(),
-        });
-        state.done += 1;
-    }
-
-    // Cancelled if anything was left undone, or the final copy was cut short.
-    report.cancelled = cancel.load(Ordering::Relaxed)
-        && (report.results.len() < ops.len() || report.results.last().is_some_and(|r| !r.ok));
-
-    state.current = None;
-    progress(&state);
-    report.elapsed_ms = started.elapsed().as_millis();
-    report
-}
-
-fn run_op(
-    left: &Path,
-    right: &Path,
-    op: &SyncOp,
-    deleter: &dyn Deleter,
-    cancel: &AtomicBool,
-    state: &mut SyncProgress,
-    progress: &mut dyn FnMut(&SyncProgress),
-) -> Result<u64, String> {
-    let (src_root, dst_root) = match op.direction {
-        Direction::ToRight => (left, right),
-        Direction::ToLeft => (right, left),
-    };
-    let dst = fsops::resolve(dst_root, &op.rel_path).map_err(|e| e.to_string())?;
-    match op.kind {
-        OpKind::Mkdir => {
-            if dst.is_file() {
-                return Err("a file with this name exists at the destination".into());
-            }
-            fs::create_dir_all(&dst).map_err(|e| e.to_string())?;
-            Ok(0)
-        }
-        OpKind::Delete => match fs::symlink_metadata(&dst) {
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(0), // already gone
-            Err(e) => Err(e.to_string()),
-            Ok(_) => deleter.delete(&dst).map(|_| 0).map_err(|e| e.to_string()),
-        },
-        OpKind::Copy => {
-            let src = fsops::resolve(src_root, &op.rel_path).map_err(|e| e.to_string())?;
-            let base = state.bytes_done;
-            let mut written = 0u64;
-            let mut last_report = 0u64;
-            let mut on_bytes = |n: u64| {
-                if cancel.load(Ordering::Relaxed) {
-                    return Err(std::io::Error::new(
-                        std::io::ErrorKind::Interrupted,
-                        "cancelled",
-                    ));
-                }
-                written += n;
-                // Report every 4 MiB so large files show movement.
-                if written - last_report >= 4 << 20 {
-                    last_report = written;
-                    state.bytes_done = base + written;
-                    progress(state);
-                }
-                Ok(())
-            };
-            let result = fsops::copy_file(&src, &dst, &mut on_bytes);
-            state.bytes_done = base;
-            result.map_err(|e| e.to_string())
-        }
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::exec::{self, ExecOptions, ExecReport};
     use crate::fsops::PermanentDeleter;
+    use crate::journal::NullJournal;
     use filetime::FileTime;
+    use std::fs;
     use std::path::PathBuf;
+    use std::sync::atomic::{AtomicBool, Ordering};
     use std::time::{Duration, SystemTime};
 
     const OLD: u64 = 1_600_000_000;
@@ -569,12 +716,14 @@ mod tests {
         plan_sync(&t.left, &t.right, mode, &opts()).unwrap()
     }
 
-    fn run(t: &Trees, ops: &[SyncOp]) -> SyncReport {
-        execute_sync(
+    fn run(t: &Trees, ops: &[SyncOp]) -> ExecReport {
+        exec::execute(
             &t.left,
             &t.right,
             ops,
+            &ExecOptions::default(),
             &PermanentDeleter,
+            &mut NullJournal,
             &AtomicBool::new(false),
             &mut |_| {},
         )
@@ -784,6 +933,7 @@ mod tests {
             size: 0,
             overwrite: false,
             reason: String::new(),
+            dst_before: None,
         });
         let r = run(&t, &p.ops);
         assert_eq!(r.failed, 2);
@@ -827,11 +977,13 @@ mod tests {
         let p = plan(&t, SyncMode::MirrorLeftToRight);
         let cancel = AtomicBool::new(false);
         let mut events = Vec::new();
-        let r = execute_sync(
+        let r = exec::execute(
             &t.left,
             &t.right,
             &p.ops,
+            &ExecOptions::default(),
             &PermanentDeleter,
+            &mut NullJournal,
             &cancel,
             &mut |s| {
                 events.push(s.clone());
@@ -861,6 +1013,7 @@ mod tests {
             size: 0,
             overwrite: false,
             reason: String::new(),
+            dst_before: None,
         }];
         assert_eq!(run(&t, &ops).succeeded, 1);
     }
@@ -872,7 +1025,7 @@ mod tests {
         let p = dir.path().join("trash-me.txt");
         fs::write(&p, "x").unwrap();
         // The trash may be unavailable on headless CI; only assert when it worked.
-        if crate::fsops::TrashDeleter::new().delete(&p).is_ok() {
+        if crate::fsops::Deleter::delete(&crate::fsops::TrashDeleter::new(), &p).is_ok() {
             assert!(!p.exists());
         }
     }
