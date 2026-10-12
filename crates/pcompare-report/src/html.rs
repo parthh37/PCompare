@@ -96,11 +96,29 @@ body.mono .m, body.mono td.cd .l, body.mono td.cd .r { background: none !importa
 body.mono [class^="s-"], body.mono tr.uni td.t { color: inherit; }
 body.mono td.cd .l::before { content: "< "; }
 body.mono td.cd .r::before { content: "> "; }
-@media print { body { margin: 0; } body table.diff td { white-space: pre-wrap; overflow-wrap: anywhere; } tr { break-inside: avoid; } }
+h3 { font-size: 13px; margin: 14px 0 4px; }
+td.ln.bm { color: #1d4ed8; font-weight: 700; box-shadow: inset 3px 0 #3b82f6; }
+table.grid tr.bm > td:first-child { box-shadow: inset 3px 0 #3b82f6; }
+tr.note td, table.diff tr.note td { background: #fff7d6; color: #5c4400; border-left: 3px solid #e0a800; font: 12px/1.4 "Segoe UI", system-ui, sans-serif; white-space: pre-wrap; overflow-wrap: anywhere; padding: 2px 8px; }
+.tag { font-weight: 600; margin-right: 6px; }
+.note-empty { color: var(--muted); font-style: italic; }
+ul.comments { margin: 4px 0 12px; padding-left: 20px; }
+ul.comments li { margin: 2px 0; white-space: pre-wrap; }
+body.mono tr.note td, body.mono table.diff tr.note td { background: none; color: inherit; border-left-color: currentColor; }
+body.mono td.ln.bm, body.mono table.grid tr.bm > td:first-child { color: inherit; box-shadow: inset 3px 0 currentColor; }
+@media print {
+  body { margin: 0; } body table.diff td { white-space: pre-wrap; overflow-wrap: anywhere; } tr { break-inside: avoid; }
+  h1, h2, h3 { break-after: avoid; } table.paths, .stats { break-inside: avoid; }
+}
 "#;
 
 /// Wraps `body` into a complete page titled `title`.
 pub fn page(title: &str, style: Style, body: &str) -> String {
+    page_with(title, style, "", body)
+}
+
+/// [`page`] with extra markup (styles) at the end of `<head>`.
+pub fn page_with(title: &str, style: Style, head: &str, body: &str) -> String {
     let mut classes = Vec::new();
     if style.mono {
         classes.push("mono");
@@ -108,11 +126,11 @@ pub fn page(title: &str, style: Style, body: &str) -> String {
     if style.wrap {
         classes.push("wrap");
     }
-    let mut out = String::with_capacity(body.len() + CSS.len() + 400);
+    let mut out = String::with_capacity(body.len() + head.len() + CSS.len() + 400);
     let _ = write!(
         out,
         "<!DOCTYPE html>\n<html lang=\"en\">\n<head>\n<meta charset=\"utf-8\">\n\
-         <meta name=\"generator\" content=\"PCompare\">\n<title>{}</title>\n<style>{CSS}</style>\n</head>\n\
+         <meta name=\"generator\" content=\"PCompare\">\n<title>{}</title>\n<style>{CSS}</style>\n{head}</head>\n\
          <body class=\"{}\">\n{body}</body>\n</html>\n",
         escape(title),
         classes.join(" "),

@@ -1,17 +1,19 @@
 //! Tauri commands for comparison reports (Text, Folder and Table Compare
-//! "Report…"): rendering to a string for the clipboard or printing, saving
-//! to a file (folder reports with linked per-file reports), and opening a
-//! report in the system browser.
+//! "Report…"): rendering to a string for the clipboard, print preview or
+//! printing, saving to a file (folder reports with linked or embedded
+//! per-file reports), and opening a report in the system browser. Text and
+//! folder reports take optional bookmarks whose comments HTML and XML
+//! reports show.
 
 use crate::CmdResult;
 use pcompare_core::text::{self, SideInput, TextDiffOptions};
 use pcompare_core::textfile::LineEnding;
 use pcompare_core::CoreError;
 use pcompare_report::folder::{
-    FolderReportInput, FolderReportOptions, LinkedReports, WrittenReport,
+    FolderBookmark, FolderReportInput, FolderReportOptions, LinkedReports, WrittenReport,
 };
 use pcompare_report::table::TableReportOptions;
-use pcompare_report::text::{TextReportOptions, TextSection};
+use pcompare_report::text::{TextBookmark, TextReportOptions, TextSection};
 use pcompare_table::TableCompareOptions;
 use serde::Deserialize;
 use std::path::PathBuf;
@@ -40,6 +42,7 @@ pub async fn report_text(
     right: ReportSide,
     rules: TextDiffOptions,
     options: TextReportOptions,
+    bookmarks: Option<Vec<TextBookmark>>,
 ) -> CmdResult<String> {
     crate::blocking(move || {
         let l: Vec<&str> = left.lines.iter().map(String::as_str).collect();
@@ -63,9 +66,10 @@ pub async fn report_text(
             right: &right.title,
             diff: &diff,
         };
-        Ok(pcompare_report::text::render(
+        Ok(pcompare_report::text::render_annotated(
             &[section],
             &options,
+            bookmarks.as_deref().unwrap_or_default(),
             &pcompare_report::now_stamp(),
         ))
     })
@@ -77,11 +81,13 @@ pub async fn report_text(
 pub async fn report_folder(
     input: FolderReportInput,
     options: FolderReportOptions,
+    bookmarks: Option<Vec<FolderBookmark>>,
 ) -> CmdResult<String> {
     crate::blocking(move || {
-        Ok(pcompare_report::folder::render(
+        Ok(pcompare_report::folder::render_annotated(
             &input,
             &options,
+            bookmarks.as_deref().unwrap_or_default(),
             &pcompare_report::now_stamp(),
             &Default::default(),
         ))
@@ -97,9 +103,10 @@ pub struct LinkOptions {
     rules: TextDiffOptions,
 }
 
-/// Writes a folder report to `path`; with `links`, first writes a text
-/// report for each differing text file into `<name>_files/` and links them.
-/// Remote sides are downloaded to the cache for those reports.
+/// Writes a folder report to `path`; with `links`, an HTML report first
+/// writes a text report for each differing text file into `<name>_files/`
+/// and links them, an XML report embeds each comparison. Remote sides are
+/// downloaded to the cache for those reports.
 #[tauri::command]
 pub async fn report_folder_save(
     app: AppHandle,
@@ -107,6 +114,7 @@ pub async fn report_folder_save(
     options: FolderReportOptions,
     path: String,
     links: Option<LinkOptions>,
+    bookmarks: Option<Vec<FolderBookmark>>,
 ) -> CmdResult<WrittenReport> {
     crate::blocking(move || {
         let roots = [input.left_root.clone(), input.right_root.clone()];
@@ -120,9 +128,10 @@ pub async fn report_folder_save(
             rules: &l.rules,
             local: &local,
         });
-        pcompare_report::folder::write_folder_report(
+        pcompare_report::folder::write_folder_report_annotated(
             &input,
             &options,
+            bookmarks.as_deref().unwrap_or_default(),
             &pcompare_report::now_stamp(),
             &PathBuf::from(&path),
             linked.as_ref(),

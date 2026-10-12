@@ -6,7 +6,8 @@ use crate::CmdResult;
 use pcompare_core::patch::{self, ChangeKind, FileApply, Patch, PatchFormat, PatchHunk};
 use pcompare_core::text::DiffRow;
 use pcompare_core::{textfile, CoreError};
-use serde::Serialize;
+use pcompare_sync::fsops::{Deleter, TrashDeleter};
+use serde::{Deserialize, Serialize};
 use std::path::Path;
 use tauri::AppHandle;
 
@@ -141,14 +142,7 @@ pub async fn patch_check(
         let strip = strip.unwrap_or_else(|| patch::detect_strip(&p, dir));
         let files = (0..p.files.len())
             .map(|i| {
-                patch::apply_to_folder(&p, dir, strip, i, false).unwrap_or_else(|e| FileApply {
-                    original: None,
-                    target: None,
-                    missing: false,
-                    hunks: Vec::new(),
-                    error: Some(e.to_string()),
-                    text: None,
-                })
+                patch::apply_to_folder(&p, dir, strip, i, None, false).unwrap_or_else(failed_file)
             })
             .collect();
         Ok(PatchCheck { strip, files })
@@ -156,8 +150,22 @@ pub async fn patch_check(
     .await
 }
 
+/// A file whose patching failed outright.
+fn failed_file(e: CoreError) -> FileApply {
+    FileApply {
+        original: None,
+        target: None,
+        missing: false,
+        hunks: Vec::new(),
+        error: Some(e.to_string()),
+        text: None,
+        written: None,
+    }
+}
+
 /// Applies file `index` of the patch to its original under `base` and
 /// returns the patched text (failed hunks are left out and reported).
+/// `hunks` limits it to those hunk indices; absent = every hunk.
 #[tauri::command]
 pub async fn patch_apply_file(
     app: AppHandle,
@@ -165,11 +173,65 @@ pub async fn patch_apply_file(
     base: String,
     strip: usize,
     index: usize,
+    hunks: Option<Vec<usize>>,
 ) -> CmdResult<FileApply> {
     crate::blocking(move || {
         let dir = local_base(&base)?;
         let (p, _) = read_patch(&app, &path)?;
-        patch::apply_to_folder(&p, dir, strip, index, true)
+        patch::apply_to_folder(&p, dir, strip, index, hunks.as_deref(), true)
+    })
+    .await
+}
+
+/// Which hunks of one file to write; `hunks` absent = all of them.
+#[derive(Deserialize)]
+pub struct FileSelection {
+    index: usize,
+    #[serde(default)]
+    hunks: Option<Vec<usize>>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WrittenFile {
+    /// The file's index in the patch.
+    index: usize,
+    #[serde(flatten)]
+    result: FileApply,
+}
+
+/// Applies the selected hunks of the selected files to the real files under
+/// `base`, in place. Old versions of deleted or renamed files go to the
+/// Trash. One result per selected file, with every hunk's outcome; a file
+/// that fails doesn't stop the others.
+#[tauri::command]
+pub async fn patch_write_selected(
+    app: AppHandle,
+    path: String,
+    base: String,
+    strip: usize,
+    files: Vec<FileSelection>,
+) -> CmdResult<Vec<WrittenFile>> {
+    crate::blocking(move || {
+        let dir = local_base(&base)?;
+        let (p, _) = read_patch(&app, &path)?;
+        let trash = TrashDeleter::new();
+        let remove = |path: &Path| trash.delete(path);
+        Ok(files
+            .into_iter()
+            .map(|sel| WrittenFile {
+                index: sel.index,
+                result: patch::write_to_folder(
+                    &p,
+                    dir,
+                    strip,
+                    sel.index,
+                    sel.hunks.as_deref(),
+                    &remove,
+                )
+                .unwrap_or_else(failed_file),
+            })
+            .collect())
     })
     .await
 }

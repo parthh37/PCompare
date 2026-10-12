@@ -255,3 +255,191 @@
 .statusbar .tc-notice {
   color: var(--ok);
 }
+
+/* ---------- araxis:text-view: linked lines, sync points, markers, line ends, line drag ---------- */
+:root {
+  --tc-edited: #f5a35c;
+  --tc-sync: #c38cf5;
+  --tc-band-chg: rgba(245, 158, 11, 0.22);
+  --tc-band-del: rgba(239, 68, 68, 0.22);
+  --tc-band-add: rgba(34, 197, 94, 0.22);
+  --tc-band-unimp: rgba(127, 166, 217, 0.18);
+}
+:root[data-theme="light"] {
+  --tc-edited: #d97706;
+  --tc-sync: #8b5cf6;
+}
+
+/* Padding off: one sticky viewport holding two panes and the linking gutter. */
+.tc-linked {
+  overflow-x: hidden;
+}
+.tc-linked-view {
+  position: sticky;
+  top: 0;
+  display: grid;
+  grid-template-columns: 1fr 40px 1fr;
+  overflow: hidden;
+}
+.tc-pane {
+  position: relative;
+  overflow: hidden;
+  min-width: 0;
+}
+.tc-editable .trow.tc-prow {
+  grid-template-columns: 52px 1fr;
+}
+/* Right pane rows: the text cell is the 2nd child there too, so restate the right-side colours. */
+.tc-pane-right .k-changed > .tcell:nth-child(2) .seg-changed {
+  background: var(--add-mark);
+}
+.tc-pane-right .k-leftOnly > .tcell:nth-child(2) {
+  background: none;
+}
+.tc-pane-right .k-rightOnly > .tcell:nth-child(2) {
+  background: var(--add-bg);
+}
+.tc-links {
+  position: relative;
+  background: var(--panel);
+  border-inline: 1px solid var(--border);
+  overflow: hidden;
+}
+.tc-links svg {
+  position: absolute;
+  inset: 0;
+  overflow: visible;
+}
+.tc-band {
+  stroke-width: 1;
+  cursor: pointer;
+}
+.tc-band.k-changed {
+  fill: var(--tc-band-chg);
+  stroke: rgba(245, 158, 11, 0.6);
+}
+.tc-band.k-leftOnly {
+  fill: var(--tc-band-del);
+  stroke: rgba(239, 68, 68, 0.6);
+}
+.tc-band.k-rightOnly {
+  fill: var(--tc-band-add);
+  stroke: rgba(34, 197, 94, 0.6);
+}
+.tc-band.k-unimportant {
+  fill: var(--tc-band-unimp);
+  stroke: var(--unimportant);
+  stroke-dasharray: 2 2;
+}
+.tc-band.current {
+  stroke: var(--accent);
+  stroke-width: 1.5;
+}
+.tc-band-btns {
+  position: absolute;
+  left: 0;
+  right: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 1px;
+}
+.tc-sync-link {
+  stroke: var(--tc-sync);
+  stroke-width: 1.5;
+  stroke-dasharray: 4 2;
+}
+
+/* Padding on: a sync point's row gets a dashed link across the middle. */
+.tc-editable .trow .mid.tc-sync {
+  background-image: linear-gradient(90deg, var(--tc-sync) 50%, transparent 50%);
+  background-size: 6px 2px;
+  background-repeat: repeat-x;
+  background-position: 0 50%;
+}
+.tc-editable .trow .ln.tc-syncln::after,
+.tc-editable .trow .ln.tc-syncpick::after {
+  content: "";
+  position: absolute;
+  right: 2px;
+  top: 7px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--tc-sync);
+}
+.tc-editable .trow .ln.tc-syncpick::after {
+  background: none;
+  box-shadow: 0 0 0 1.5px var(--tc-sync);
+  animation: tc-blink 1s steps(2, start) infinite;
+}
+@keyframes tc-blink {
+  to {
+    visibility: hidden;
+  }
+}
+.statusbar .tc-syncwait {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--tc-sync);
+}
+
+/* Edit markers: a bar at the inner edge of the line number. */
+.tc-editable .trow .ln.tc-edited {
+  box-shadow: inset -3px 0 0 var(--tc-edited);
+}
+.ov-edit {
+  position: absolute;
+  right: 0;
+  width: 3px;
+  height: 2px;
+  background: var(--tc-edited);
+}
+
+/* Resolved lines are dimmed (view only). */
+.tc-editable .tcell.tc-resolved {
+  opacity: 0.4;
+}
+
+/* Line-ending glyphs. */
+.tc-eol {
+  color: var(--faint);
+  opacity: 0.8;
+  padding-left: 1px;
+  user-select: none;
+}
+
+/* Dragging selected lines by their numbers. */
+.tc-editable .trow .ln.tc-draggable {
+  cursor: grab;
+}
+.tc-dragging,
+.tc-dragging * {
+  cursor: grabbing !important;
+}
+.tc-editable .tc-drop-before {
+  box-shadow: inset 0 2px 0 var(--accent) !important;
+}
+.tc-editable .tc-drop-after {
+  box-shadow: inset 0 -2px 0 var(--accent) !important;
+}
+
+/* Go to line bar and the caret position. */
+.tc-goto {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  background: var(--panel);
+  border-bottom: 1px solid var(--border);
+  color: var(--muted);
+}
+.tc-goto input {
+  width: 110px;
+}
+.statusbar .tc-lncol {
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+/* araxis:text-view end */

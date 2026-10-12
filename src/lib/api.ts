@@ -66,6 +66,12 @@ export interface TextDiffOptions {
   anchors: LinePair[];
   /** Forced separation: these line pairs are never shown side by side. */
   breaks: LinePair[];
+  // araxis:text-engine
+  /** Numbers compare by value, within a tolerance (absent = off). */
+  numericTolerance?: import("./textApi").NumericTolerance;
+  /** Begin/end regex pairs bounding wholly unimportant blocks of lines. */
+  ignoreBlocks?: import("./textApi").BlockPattern[];
+  // araxis:text-engine end
 }
 
 export const DEFAULT_TEXT_OPTIONS: TextDiffOptions = {
@@ -204,7 +210,14 @@ export interface FolderCompareOptions {
   followLinks: boolean;
   timeToleranceSecs: number;
   ignoreDstShift: boolean;
+  // araxis:folder — files above the threshold (bytes) use `largeFileMethod` instead of `content`.
+  largeFileThreshold?: number | null;
+  largeFileMethod?: LargeFileMethod;
+  // araxis:folder end
 }
+
+/** araxis:folder — how content comparison treats files above the size threshold. */
+export type LargeFileMethod = "binary" | "size" | "sizeTimestamp";
 
 export type EntryStatus = "same" | "similar" | "different" | "leftOnly" | "rightOnly" | "typeMismatch" | "error";
 export type Side = "left" | "right";

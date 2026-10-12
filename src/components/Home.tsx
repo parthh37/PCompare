@@ -1,5 +1,5 @@
 import { Globe, Layers, Pencil, Trash, X } from "lucide-react";
-import { useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { isRemote, type SavedSession } from "../lib/api";
 import { formatTime } from "../lib/format";
 import { shortcutLabel } from "../lib/keymap";
@@ -10,6 +10,8 @@ import "./AppShell.css";
 import { SessionIcon } from "./SessionIcon";
 import { FileFormatsDialog } from "./FileFormatsDialog"; // bc5:converters
 import { SnapshotDialog } from "./SnapshotDialog"; // bc5:archives
+import { GettingStarted } from "./GettingStarted"; // araxis:vcs
+import { setPrefs } from "../lib/prefs"; // araxis:vcs
 
 interface Props {
   onNew: (kind: Exclude<SessionKind, "home">) => void;
@@ -28,7 +30,8 @@ interface Props {
 }
 
 // bc5:archives — "Archive Compare" shipped: archives open as folders.
-const COMING = ["Git integration", "Structural JSON / XML diff"];
+// araxis:vcs — "Git integration" shipped: git:/hg: sides, difftool / mergetool setup.
+const COMING = ["Structural JSON / XML diff"];
 
 /** Remote paths get a small globe so cloud locations stand out in the list. */
 function PathText({ path }: { path: string }) {
@@ -157,6 +160,24 @@ export function Home(props: Props) {
   const [query, setQuery] = useState("");
   const [fileFormats, setFileFormats] = useState(false); // bc5:converters
   const [snapshotting, setSnapshotting] = useState(false); // bc5:archives
+  // araxis:vcs — the Getting started overview, once at first run and on request.
+  const overviewDismissed = usePref("gettingStartedDismissed");
+  const [overview, setOverview] = useState(false);
+  // Only the Home tab in front shows it (inactive tabs stay mounted, hidden).
+  const homeRef = useRef<HTMLDivElement>(null);
+  const [visible, setVisible] = useState(false);
+  useEffect(() => {
+    const el = homeRef.current;
+    if (!el || typeof IntersectionObserver === "undefined") return;
+    const io = new IntersectionObserver(([e]) => setVisible(e.isIntersecting));
+    io.observe(el);
+    return () => io.disconnect();
+  }, []);
+  const closeOverview = () => {
+    setOverview(false);
+    if (!overviewDismissed) setPrefs({ gettingStartedDismissed: true });
+  };
+  // araxis:vcs end
   const q = query.trim().toLowerCase();
   const hit = (...values: (string | undefined)[]) => !q || values.some((v) => v?.toLowerCase().includes(q));
   const shownSaved = saved.filter((s) => hit(s.name, s.left, s.right));
@@ -165,7 +186,7 @@ export function Home(props: Props) {
   const total = saved.length + workspaces.length + recent.length;
 
   return (
-    <div className="home">
+    <div className="home" ref={homeRef /* araxis:vcs */}>
       <header>
         <h1>PCompare</h1>
         <p className="muted">Choose a session, or drop two files or folders anywhere in this window.</p>
@@ -183,6 +204,21 @@ export function Home(props: Props) {
           </button>
         </p>
         {snapshotting && <SnapshotDialog folders={[]} onClose={() => setSnapshotting(false)} />}
+        {/* araxis:vcs — first-run overview, reopenable */}
+        <p className="muted">
+          <button className="link" onClick={() => setOverview(true)}>
+            Getting started overview…
+          </button>
+        </p>
+        {(overview || (!overviewDismissed && visible)) && <GettingStarted onClose={closeOverview} />}
+        {/* araxis:vcs end */}
+        {/* araxis:text-review — review a saved comparison (.pcmpz) read-only */}
+        <p className="muted">
+          <button className="link" onClick={() => onNew("review")}>
+            Open comparison archive…
+          </button>
+        </p>
+        {/* araxis:text-review end */}
       </header>
       <div className="cards">
         {[...COMPARE_KINDS, "profiles" as const].map((kind) => {

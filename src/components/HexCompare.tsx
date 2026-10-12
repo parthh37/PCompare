@@ -14,6 +14,7 @@ import {
   Undo2,
   X,
 } from "lucide-react";
+import { embedInactive } from "../lib/embeddedPane"; // araxis:folder
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type MouseEvent as ReactMouseEvent } from "react";
 import { errorMessage, isRemote, type HexRow, type HexRowFilter, type HexState, type HexView } from "../lib/api";
 import { formatSize, hex } from "../lib/format";
@@ -713,6 +714,7 @@ export function HexCompare({
     const onKey = (e: KeyboardEvent) => {
       // Inactive tabs stay mounted but hidden; only the visible session reacts.
       if (e.defaultPrevented || !root.current?.offsetParent) return;
+      if (embedInactive(root.current)) return; // araxis:folder — split view: the folder list has the keys
       const mod = e.ctrlKey || e.metaKey;
       const key = e.key.toLowerCase();
       const t = e.target as HTMLElement | null;
@@ -767,6 +769,7 @@ export function HexCompare({
     const onPaste = (e: ClipboardEvent) => {
       const t = e.target as HTMLElement | null;
       if (!root.current?.offsetParent || !cursorRef.current) return;
+      if (embedInactive(root.current)) return; // araxis:folder — split view: the folder list has the keys
       if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA")) return;
       const text = e.clipboardData?.getData("text") ?? "";
       if (!text) return;

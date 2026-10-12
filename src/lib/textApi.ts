@@ -15,6 +15,29 @@ export interface TextDocument extends BaseDocument {
   conversion?: Conversion | null;
 }
 
+/**
+ * Numeric tolerance (TextDiffOptions.numericTolerance): when enabled, numbers compare by value
+ * (`1.0` = `1.00`, `1e3` = `1000`) and also match within `absolute`, or within `relativePercent`
+ * percent of the larger value. Lines differing only in such numbers are unimportant.
+ */
+export interface NumericTolerance {
+  enabled: boolean;
+  absolute: number;
+  relativePercent: number;
+}
+
+export const DEFAULT_NUMERIC_TOLERANCE: NumericTolerance = { enabled: false, absolute: 0, relativePercent: 0 };
+
+/**
+ * Block expression (TextDiffOptions.ignoreBlocks): every line from one matching `begin` through the
+ * next line matching `end`, inclusive, is unimportant. Nested begins need their own end; a block
+ * that never ends runs to the end of the file.
+ */
+export interface BlockPattern {
+  begin: string;
+  end: string;
+}
+
 export interface TextPair {
   left: TextDocument;
   right: TextDocument;

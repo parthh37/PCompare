@@ -1,10 +1,13 @@
 //! Line-oriented text comparison producing aligned side-by-side rows.
 
 use crate::grammar::{self, Grammar, LineToken, TokenKind};
+pub use crate::numeric::NumericTolerance;
+use crate::numeric::{self, TolerantPiece};
 use crate::textfile::{split_lines_with_endings, LineEnding};
 use crate::{CoreError, Result};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
+use similar::algorithms::{myers, Capture};
 use similar::{capture_diff_slices, Algorithm, ChangeTag, DiffOp, TextDiff};
 use std::borrow::Cow;
 
@@ -100,6 +103,17 @@ pub struct Replacement {
     pub regex: bool,
 }
 
+/// A block expression: every line from one matching `begin` through the
+/// next line matching `end` (both inclusive) is unimportant, such as an
+/// auto-generated region. A nested `begin` of the same pair needs its own
+/// `end`; a block that never ends runs to the end of the file.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct BlockPattern {
+    pub begin: String,
+    pub end: String,
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct TextDiffOptions {
@@ -143,6 +157,11 @@ pub struct TextDiffOptions {
     pub anchors: Vec<LinePair>,
     /// Forced separations: these lines are never shown side by side.
     pub breaks: Vec<LinePair>,
+    /// Numbers compare by value, within a tolerance; lines differing only
+    /// in such numbers are unimportant.
+    pub numeric_tolerance: NumericTolerance,
+    /// Whole blocks of lines that are unimportant.
+    pub ignore_blocks: Vec<BlockPattern>,
 }
 
 impl TextDiffOptions {
@@ -150,7 +169,10 @@ impl TextDiffOptions {
     fn pages(&self) -> bool {
         self.page_header_lines > 0
             || self.page_footer_lines > 0
-            || self.page_header_patterns.iter().any(|p| !p.trim().is_empty())
+            || self
+                .page_header_patterns
+                .iter()
+                .any(|p| !p.trim().is_empty())
     }
 }
 
@@ -271,6 +293,7 @@ pub struct LineNormalizer {
     headers: Vec<Regex>,
     replacements: Vec<Replacer>,
     strip_form_feeds: bool,
+    blocks: Vec<(Regex, Regex)>,
 }
 
 impl LineNormalizer {
@@ -287,14 +310,26 @@ impl LineNormalizer {
                 })
             })
             .collect::<Result<_>>()?;
+        let blocks = opts
+            .ignore_blocks
+            .iter()
+            .filter(|b| !b.begin.trim().is_empty() && !b.end.trim().is_empty())
+            .map(|b| Ok((compile(b.begin.trim())?, compile(b.end.trim())?)))
+            .collect::<Result<_>>()?;
         Ok(Self {
             whitespace: opts.whitespace,
             ignore_case: opts.ignore_case,
             ignore: compile_all(&opts.ignore_patterns)?,
-            columns: opts.ignore_columns.iter().copied().filter(|c| c.start > 0).collect(),
+            columns: opts
+                .ignore_columns
+                .iter()
+                .copied()
+                .filter(|c| c.start > 0)
+                .collect(),
             headers: compile_all(&opts.page_header_patterns)?,
             replacements,
             strip_form_feeds: opts.pages(),
+            blocks,
         })
     }
 
@@ -314,10 +349,18 @@ impl LineNormalizer {
     /// Builds a key, also dropping the byte ranges in `skip` (sorted, from
     /// the grammar) and applying replacements when `replace` is set. Returns
     /// whether any text was dropped as unimportant.
-    fn key_parts(&self, line: &str, skip: &[(usize, usize, bool)], replace: bool) -> (String, bool) {
+    fn key_parts(
+        &self,
+        line: &str,
+        skip: &[(usize, usize, bool)],
+        replace: bool,
+    ) -> (String, bool) {
         let mut removed = false;
         let mut stripped = Cow::Borrowed(line);
-        if !self.columns.is_empty() || !skip.is_empty() || (self.strip_form_feeds && line.contains('\x0c')) {
+        if !self.columns.is_empty()
+            || !skip.is_empty()
+            || (self.strip_form_feeds && line.contains('\x0c'))
+        {
             let mut kept = String::with_capacity(line.len());
             let mut next = 0;
             for (col, (pos, c)) in line.char_indices().enumerate() {
@@ -370,10 +413,16 @@ impl LineNormalizer {
         let key = match self.whitespace {
             WhitespaceMode::Compare => stripped.into_owned(),
             WhitespaceMode::IgnoreTrailing => stripped.trim_end().to_owned(),
-            WhitespaceMode::IgnoreChanges => stripped.split_whitespace().collect::<Vec<_>>().join(" "),
+            WhitespaceMode::IgnoreChanges => {
+                stripped.split_whitespace().collect::<Vec<_>>().join(" ")
+            }
             WhitespaceMode::IgnoreAll => stripped.chars().filter(|c| !c.is_whitespace()).collect(),
         };
-        let key = if self.ignore_case { key.to_lowercase() } else { key };
+        let key = if self.ignore_case {
+            key.to_lowercase()
+        } else {
+            key
+        };
         (key, removed)
     }
 }
@@ -393,6 +442,37 @@ fn push_segment(out: &mut Vec<Segment>, text: &str, changed: bool) {
             changed,
         }),
     }
+}
+
+/// [`inline_diff`] where numbers equal within `tol` are not highlighted.
+/// Lines are split finer than by words (numbers, words, whitespace runs and
+/// single symbols), so `x=1.5` and `x=2.5` mark just the number.
+pub fn inline_diff_tolerant(
+    left: &str,
+    right: &str,
+    tol: &NumericTolerance,
+) -> (Vec<Segment>, Vec<Segment>) {
+    let wrap = |line| {
+        numeric::pieces(line)
+            .into_iter()
+            .map(|piece| TolerantPiece { piece, tol })
+            .collect::<Vec<_>>()
+    };
+    let (a, b) = (wrap(left), wrap(right));
+    let mut capture = Capture::new();
+    let Ok(()) = myers::diff(&mut capture, &a, 0..a.len(), &b, 0..b.len());
+    let (mut l, mut r) = (Vec::new(), Vec::new());
+    for op in capture.into_ops() {
+        let (_, old, new) = op.as_tag_tuple();
+        let changed = !matches!(op, DiffOp::Equal { .. });
+        for p in &a[old] {
+            push_segment(&mut l, p.piece.text, changed);
+        }
+        for p in &b[new] {
+            push_segment(&mut r, p.piece.text, changed);
+        }
+    }
+    (l, r)
 }
 
 /// Word-level diff inside a pair of changed lines.
@@ -437,7 +517,9 @@ struct Prepared {
 }
 
 fn in_ranges(ranges: &[LineRange], line_no: usize) -> bool {
-    ranges.iter().any(|r| r.start <= line_no && line_no <= r.end)
+    ranges
+        .iter()
+        .any(|r| r.start <= line_no && line_no <= r.end)
 }
 
 /// Page-header and footer lines: regex matches plus the first / last N lines
@@ -460,6 +542,41 @@ fn page_lines(lines: &[&str], norm: &LineNormalizer, opts: &TextDiffOptions) -> 
         let foot_start = end.saturating_sub(opts.page_footer_lines).max(start);
         out[start..head_end].iter_mut().for_each(|b| *b = true);
         out[foot_start..end].iter_mut().for_each(|b| *b = true);
+    }
+    out
+}
+
+/// Lines inside block expressions (see [`BlockPattern`]).
+fn block_lines(lines: &[&str], norm: &LineNormalizer) -> Vec<bool> {
+    let mut out = vec![false; lines.len()];
+    if norm.blocks.is_empty() {
+        return out;
+    }
+    // The pair that opened the current block and its nesting depth.
+    let mut open: Option<(usize, usize)> = None;
+    for (i, line) in lines.iter().enumerate() {
+        let inside = open.is_some();
+        open = match open {
+            None => norm
+                .blocks
+                .iter()
+                .position(|(begin, _)| begin.is_match(line))
+                .map(|k| (k, 1)),
+            Some((k, depth)) => {
+                let (begin, end) = &norm.blocks[k];
+                // `end` first, so a pair whose begin and end are the same
+                // fence still closes.
+                if end.is_match(line) {
+                    (depth > 1).then(|| (k, depth - 1))
+                } else if begin.is_match(line) {
+                    Some((k, depth + 1))
+                } else {
+                    Some((k, depth))
+                }
+            }
+        };
+        // Both the opening and the closing line belong to the block.
+        out[i] = inside || open.is_some();
     }
     out
 }
@@ -502,12 +619,18 @@ fn eol_tag(eol: LineEnding) -> &'static str {
     }
 }
 
-fn prepare(side: &SideInput, norm: &LineNormalizer, opts: &TextDiffOptions, is_left: bool) -> Prepared {
+fn prepare(
+    side: &SideInput,
+    norm: &LineNormalizer,
+    opts: &TextDiffOptions,
+    is_left: bool,
+) -> Prepared {
     let grammar = match opts.grammar.as_deref().map(str::trim) {
         Some(id) if !id.is_empty() => grammar::by_id(id),
         _ => side.path.and_then(grammar::for_path),
     };
-    let want_tokens = grammar.is_some() && (opts.ignore_comments || opts.ignore_strings || opts.syntax_spans);
+    let want_tokens =
+        grammar.is_some() && (opts.ignore_comments || opts.ignore_strings || opts.syntax_spans);
     let tokens = match grammar {
         Some(g) if want_tokens => g.tokenize(side.lines, opts.syntax_spans),
         _ => Vec::new(),
@@ -518,10 +641,11 @@ fn prepare(side: &SideInput, norm: &LineNormalizer, opts: &TextDiffOptions, is_l
         &opts.unimportant_lines.right
     };
     let pages = page_lines(side.lines, norm, opts);
+    let blocks = block_lines(side.lines, norm);
     let mut keys = Vec::with_capacity(side.lines.len());
     let mut ignorable = Vec::with_capacity(side.lines.len());
     for (i, line) in side.lines.iter().enumerate() {
-        let (mut key, unimportant) = if pages[i] || in_ranges(manual, i + 1) {
+        let (mut key, unimportant) = if pages[i] || blocks[i] || in_ranges(manual, i + 1) {
             (String::new(), true)
         } else {
             let skip: Vec<(usize, usize, bool)> = tokens
@@ -529,8 +653,12 @@ fn prepare(side: &SideInput, norm: &LineNormalizer, opts: &TextDiffOptions, is_l
                 .map(|toks| {
                     toks.iter()
                         .filter_map(|t| match t.kind {
-                            TokenKind::Comment if opts.ignore_comments => Some((t.start, t.end, true)),
-                            TokenKind::String if opts.ignore_strings && t.inner_end > t.inner_start => {
+                            TokenKind::Comment if opts.ignore_comments => {
+                                Some((t.start, t.end, true))
+                            }
+                            TokenKind::String
+                                if opts.ignore_strings && t.inner_end > t.inner_start =>
+                            {
                                 Some((t.inner_start, t.inner_end, false))
                             }
                             _ => None,
@@ -551,7 +679,11 @@ fn prepare(side: &SideInput, norm: &LineNormalizer, opts: &TextDiffOptions, is_l
         ignorable.push(unimportant);
     }
     let spans = if opts.syntax_spans {
-        tokens.iter().zip(side.lines).map(|(t, l)| utf16_spans(l, t)).collect()
+        tokens
+            .iter()
+            .zip(side.lines)
+            .map(|(t, l)| utf16_spans(l, t))
+            .collect()
     } else {
         Vec::new()
     };
@@ -619,7 +751,15 @@ fn similarity(a: &[(char, char)], b: &[(char, char)]) -> f32 {
 /// Pairs the lines of a replace block: the order-preserving set of pairs
 /// with the highest total similarity, ignoring pairs below
 /// [`MIN_SIMILARITY`]. Unpaired lines become one-sided items.
-fn align_similar(lk: &[String], rk: &[String], l0: usize, r0: usize, out: &mut Vec<Item>) {
+/// With a numeric tolerance, lines equal within it count as identical.
+fn align_similar(
+    lk: &[String],
+    rk: &[String],
+    l0: usize,
+    r0: usize,
+    tol: Option<&NumericTolerance>,
+    out: &mut Vec<Item>,
+) {
     let (n, m) = (lk.len(), rk.len());
     let positional = |out: &mut Vec<Item>| {
         let paired = n.min(m);
@@ -638,7 +778,13 @@ fn align_similar(lk: &[String], rk: &[String], l0: usize, r0: usize, out: &mut V
     let rb: Vec<_> = rk.iter().map(|s| bigrams(s)).collect();
     let score: Vec<f32> = lb
         .iter()
-        .flat_map(|a| rb.iter().map(move |b| similarity(a, b)))
+        .enumerate()
+        .flat_map(|(i, a)| {
+            rb.iter().enumerate().map(move |(j, b)| match tol {
+                Some(t) if numeric::lines_equal(&lk[i], &rk[j], t) => 1.0,
+                _ => similarity(a, b),
+            })
+        })
         .collect();
     // best[(i, j)]: best total over the first i left and j right lines.
     let w = m + 1;
@@ -710,12 +856,12 @@ fn align_range(
                 r: r0 + new_index + k,
                 inline: true,
             })),
-            DiffOp::Delete { old_index, old_len, .. } => {
-                out.extend((old_index..old_index + old_len).map(|i| Item::Left(l0 + i)))
-            }
-            DiffOp::Insert { new_index, new_len, .. } => {
-                out.extend((new_index..new_index + new_len).map(|j| Item::Right(r0 + j)))
-            }
+            DiffOp::Delete {
+                old_index, old_len, ..
+            } => out.extend((old_index..old_index + old_len).map(|i| Item::Left(l0 + i))),
+            DiffOp::Insert {
+                new_index, new_len, ..
+            } => out.extend((new_index..new_index + new_len).map(|j| Item::Right(r0 + j))),
             DiffOp::Replace {
                 old_index,
                 old_len,
@@ -724,7 +870,16 @@ fn align_range(
             } => {
                 let (li, rj) = (l0 + old_index, r0 + new_index);
                 match opts.alignment {
-                    Alignment::Similar => align_similar(&lk[li..li + old_len], &rk[rj..rj + new_len], li, rj, out),
+                    Alignment::Similar => align_similar(
+                        &lk[li..li + old_len],
+                        &rk[rj..rj + new_len],
+                        li,
+                        rj,
+                        opts.numeric_tolerance
+                            .enabled
+                            .then_some(&opts.numeric_tolerance),
+                        out,
+                    ),
                     Alignment::Positional | Alignment::Unaligned => {
                         let paired = old_len.min(new_len);
                         let inline = opts.alignment == Alignment::Positional;
@@ -783,7 +938,9 @@ fn align(lk: &[String], rk: &[String], opts: &TextDiffOptions) -> Vec<Item> {
     items
         .into_iter()
         .flat_map(|item| match item {
-            Item::Pair { l, r, .. } if breaks.contains(&(l, r)) => vec![Item::Left(l), Item::Right(r)],
+            Item::Pair { l, r, .. } if breaks.contains(&(l, r)) => {
+                vec![Item::Left(l), Item::Right(r)]
+            }
             other => vec![other],
         })
         .collect()
@@ -792,7 +949,11 @@ fn align(lk: &[String], rk: &[String], opts: &TextDiffOptions) -> Vec<Item> {
 /// Compares two documents. This is the full engine: grammars, page headers,
 /// replacements, manual unimportant lines, line terminators and manual
 /// alignment all need whole documents (and file names), not single lines.
-pub fn diff_sides(left: SideInput, right: SideInput, opts: &TextDiffOptions) -> Result<TextDiffResult> {
+pub fn diff_sides(
+    left: SideInput,
+    right: SideInput,
+    opts: &TextDiffOptions,
+) -> Result<TextDiffResult> {
     let norm = LineNormalizer::new(opts)?;
     let lp = prepare(&left, &norm, opts, true);
     let rp = prepare(&right, &norm, opts, false);
@@ -807,6 +968,14 @@ pub fn diff_sides(left: SideInput, right: SideInput, opts: &TextDiffOptions) -> 
         }
     };
     let spans = |p: &Prepared, i: usize| p.spans.get(i).cloned().unwrap_or_default();
+    let tol = opts
+        .numeric_tolerance
+        .enabled
+        .then_some(&opts.numeric_tolerance);
+    let inline_pair = |a: &str, b: &str| match tol {
+        Some(t) => inline_diff_tolerant(a, b, t),
+        None => inline_diff(a, b),
+    };
 
     let mut rows = Vec::with_capacity(items.len());
     let mut stats = DiffStats::default();
@@ -818,19 +987,25 @@ pub fn diff_sides(left: SideInput, right: SideInput, opts: &TextDiffOptions) -> 
         };
         let (kind, lseg, rseg) = match item {
             Item::Pair { l, r, inline } => {
-                if lp.keys[l] == rp.keys[r] {
+                let same = lp.keys[l] == rp.keys[r]
+                    || tol.is_some_and(|t| numeric::lines_equal(&lp.keys[l], &rp.keys[r], t));
+                if same {
                     if ltext[l] == rtext[r] {
                         stats.equal += 1;
-                        (RowKind::Equal, whole(ltext[l], false), whole(rtext[r], false))
+                        (
+                            RowKind::Equal,
+                            whole(ltext[l], false),
+                            whole(rtext[r], false),
+                        )
                     } else {
                         stats.unimportant += 1;
-                        let (a, b) = inline_diff(ltext[l], rtext[r]);
+                        let (a, b) = inline_pair(ltext[l], rtext[r]);
                         (RowKind::Unimportant, a, b)
                     }
                 } else {
                     stats.changed += 1;
                     let (a, b) = if inline {
-                        inline_diff(ltext[l], rtext[r])
+                        inline_pair(ltext[l], rtext[r])
                     } else {
                         (whole(ltext[l], true), whole(rtext[r], true))
                     };
@@ -1007,7 +1182,12 @@ mod tests {
             ignore_patterns: vec![r"\$Id:[^$]*\$".into()],
             ..Default::default()
         };
-        let res = diff_text("// $Id: a.c 41 $\nint x;\n", "// $Id: a.c 42 $\nint x;\n", &opts).unwrap();
+        let res = diff_text(
+            "// $Id: a.c 41 $\nint x;\n",
+            "// $Id: a.c 42 $\nint x;\n",
+            &opts,
+        )
+        .unwrap();
         assert_eq!(kinds(&res), vec![RowKind::Unimportant, RowKind::Equal]);
         assert!(res.hunks.is_empty());
     }
@@ -1064,7 +1244,13 @@ mod tests {
             ignore_comments: true,
             ..Default::default()
         };
-        let res = diff_named("a();\n// added note\nb();\n", "x.js", "a();\nb();\n", "x.js", &opts);
+        let res = diff_named(
+            "a();\n// added note\nb();\n",
+            "x.js",
+            "a();\nb();\n",
+            "x.js",
+            &opts,
+        );
         use RowKind::*;
         assert_eq!(kinds(&res), vec![Equal, Unimportant, Equal]);
         assert_eq!(res.rows[1].right_no, None);
@@ -1080,7 +1266,13 @@ mod tests {
             ignore_strings: true,
             ..Default::default()
         };
-        let res = diff_named("msg = \"Hello\";\n", "a.cs", "msg = \"Bonjour\";\n", "a.cs", &opts);
+        let res = diff_named(
+            "msg = \"Hello\";\n",
+            "a.cs",
+            "msg = \"Bonjour\";\n",
+            "a.cs",
+            &opts,
+        );
         assert_eq!(kinds(&res), vec![RowKind::Unimportant]);
         // Removing the string altogether is still a difference.
         let res = diff_named("f(\"x\");\n", "a.cs", "f();\n", "a.cs", &opts);
@@ -1101,7 +1293,13 @@ mod tests {
             syntax_spans: true,
             ..Default::default()
         };
-        let res = diff_named("let é = \"😀\"; // c\n", "a.rs", "let é = 1;\n", "a.rs", &opts);
+        let res = diff_named(
+            "let é = \"😀\"; // c\n",
+            "a.rs",
+            "let é = 1;\n",
+            "a.rs",
+            &opts,
+        );
         let spans = &res.rows[0].left_spans;
         assert_eq!(
             spans[0],
@@ -1132,16 +1330,31 @@ mod tests {
         let json = serde_json::to_value(&res.rows[0]).unwrap();
         assert_eq!(json["leftSpans"][2]["kind"], "comment");
         // Not sent unless asked for.
-        let res = diff_named("let a;\n", "a.rs", "let b;\n", "a.rs", &TextDiffOptions::default());
-        assert!(serde_json::to_value(&res.rows[0]).unwrap().get("leftSpans").is_none());
+        let res = diff_named(
+            "let a;\n",
+            "a.rs",
+            "let b;\n",
+            "a.rs",
+            &TextDiffOptions::default(),
+        );
+        assert!(serde_json::to_value(&res.rows[0])
+            .unwrap()
+            .get("leftSpans")
+            .is_none());
     }
 
     #[test]
     fn ignore_columns() {
         let opts = TextDiffOptions {
             ignore_columns: vec![
-                ColumnRange { start: 1, end: Some(6) },
-                ColumnRange { start: 15, end: None },
+                ColumnRange {
+                    start: 1,
+                    end: Some(6),
+                },
+                ColumnRange {
+                    start: 15,
+                    end: None,
+                },
             ],
             ..Default::default()
         };
@@ -1180,13 +1393,20 @@ mod tests {
     fn line_terminators_can_matter() {
         let l = "a\r\nb\r\nc\r\n";
         let r = "a\r\nb\nc\r\n";
-        assert!(diff_text(l, r, &TextDiffOptions::default()).unwrap().identical);
+        assert!(
+            diff_text(l, r, &TextDiffOptions::default())
+                .unwrap()
+                .identical
+        );
         let opts = TextDiffOptions {
             compare_line_endings: true,
             ..Default::default()
         };
         let res = diff_text(l, r, &opts).unwrap();
-        assert_eq!(kinds(&res), vec![RowKind::Equal, RowKind::Changed, RowKind::Equal]);
+        assert_eq!(
+            kinds(&res),
+            vec![RowKind::Equal, RowKind::Changed, RowKind::Equal]
+        );
         assert_eq!(res.rows[1].left_eol, Some(LineEnding::Crlf));
         assert_eq!(res.rows[1].right_eol, Some(LineEnding::Lf));
         // Lone CRs break lines too.
@@ -1261,7 +1481,10 @@ mod tests {
         let res = diff_text(l, r, &TextDiffOptions::default()).unwrap();
         use RowKind::*;
         assert_eq!(kinds(&res), vec![Equal, RightOnly, Changed, Equal]);
-        assert_eq!((res.rows[2].left_no, res.rows[2].right_no), (Some(2), Some(3)));
+        assert_eq!(
+            (res.rows[2].left_no, res.rows[2].right_no),
+            (Some(2), Some(3))
+        );
 
         let positional = TextDiffOptions {
             alignment: Alignment::Positional,
@@ -1349,6 +1572,185 @@ mod tests {
         .unwrap();
         assert_eq!(full.ignore_columns[0].end, None);
         assert_eq!(full.unimportant_lines.left.len(), 1);
+    }
+
+    fn tolerance(absolute: f64, relative_percent: f64) -> TextDiffOptions {
+        TextDiffOptions {
+            numeric_tolerance: NumericTolerance {
+                enabled: true,
+                absolute,
+                relative_percent,
+            },
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn numeric_tolerance_makes_close_numbers_unimportant() {
+        use RowKind::*;
+        // Off by default: any change in digits is a change.
+        let res = diff_text("x=1.001\n", "x=1.002\n", &TextDiffOptions::default()).unwrap();
+        assert_eq!(kinds(&res), vec![Changed]);
+
+        let opts = tolerance(0.01, 0.0);
+        let res = diff_text("x=1.001\n", "x=1.002\n", &opts).unwrap();
+        assert_eq!(kinds(&res), vec![Unimportant]);
+        assert!(res.hunks.is_empty());
+        assert!(!res.identical);
+        // In-tolerance numbers are not highlighted.
+        assert!(res.rows[0]
+            .left
+            .as_ref()
+            .unwrap()
+            .iter()
+            .all(|s| !s.changed));
+
+        // Same value, different spelling.
+        let exact = tolerance(0.0, 0.0);
+        let res = diff_text(
+            "a 1.0\nb 1e3\ncount 7\n",
+            "a 1.00\nb 1000\ncount 8\n",
+            &exact,
+        )
+        .unwrap();
+        assert_eq!(kinds(&res), vec![Unimportant, Unimportant, Changed]);
+
+        // The sign counts.
+        let res = diff_text("v -0.5\n", "v 0.5\n", &tolerance(0.5, 0.0)).unwrap();
+        assert_eq!(kinds(&res), vec![Changed]);
+        // The text around the numbers must still match.
+        let res = diff_text("x=1.001\n", "y=1.001\n", &opts).unwrap();
+        assert_eq!(kinds(&res), vec![Changed]);
+
+        // Relative tolerance, in percent of the larger value.
+        let rel = tolerance(0.0, 1.0);
+        let res = diff_text("total 1000\ntotal 1000\n", "total 1009\ntotal 1011\n", &rel).unwrap();
+        assert_eq!(kinds(&res), vec![Unimportant, Changed]);
+    }
+
+    #[test]
+    fn numeric_tolerance_inline_highlights_only_real_changes() {
+        let opts = tolerance(0.01, 0.0);
+        let res = diff_text("p = 1.001 + 5;\n", "p = 1.004 + 6;\n", &opts).unwrap();
+        assert_eq!(kinds(&res), vec![RowKind::Changed]);
+        let changed: Vec<&str> = res.rows[0]
+            .right
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|s| s.changed)
+            .map(|s| s.text.as_str())
+            .collect();
+        assert_eq!(changed, vec!["6"]);
+        let rebuilt: String = res.rows[0]
+            .left
+            .as_ref()
+            .unwrap()
+            .iter()
+            .map(|s| s.text.as_str())
+            .collect();
+        assert_eq!(rebuilt, "p = 1.001 + 5;");
+    }
+
+    #[test]
+    fn numeric_tolerance_pairs_lines_inside_blocks() {
+        use RowKind::*;
+        // `1e3` and `1000` share no bigrams; the tolerance still pairs them.
+        let res = diff_text(
+            "a\nn 1e3\nb\n",
+            "a\nadded line\nn 1000\nb\n",
+            &tolerance(0.0, 0.0),
+        )
+        .unwrap();
+        assert_eq!(kinds(&res), vec![Equal, RightOnly, Unimportant, Equal]);
+    }
+
+    fn blocks(pairs: &[(&str, &str)]) -> TextDiffOptions {
+        TextDiffOptions {
+            ignore_blocks: pairs
+                .iter()
+                .map(|(b, e)| BlockPattern {
+                    begin: (*b).into(),
+                    end: (*e).into(),
+                })
+                .collect(),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn block_expressions_ignore_whole_regions() {
+        use RowKind::*;
+        let opts = blocks(&[
+            ("^// BEGIN GENERATED", "^// END GENERATED"),
+            ("^<auto>$", "^</auto>$"),
+        ]);
+        let l = "a\n// BEGIN GENERATED\nx = 1\n// END GENERATED\nb\n";
+        let r = "a\n// BEGIN GENERATED\nx = 2\ny = 3\n// END GENERATED\nb\n";
+        let res = diff_text(l, r, &opts).unwrap();
+        assert!(res.hunks.is_empty(), "{:?}", kinds(&res));
+        assert_eq!(kinds(&res).first(), Some(&Equal));
+        assert_eq!(kinds(&res).last(), Some(&Equal));
+        // Without the rule the region differs.
+        assert!(!diff_text(l, r, &TextDiffOptions::default())
+            .unwrap()
+            .hunks
+            .is_empty());
+
+        // A block on one side only is unimportant, not a left-only run.
+        let res = diff_text("a\n<auto>\ngen\n</auto>\nb\n", "a\nb\n", &opts).unwrap();
+        assert_eq!(
+            kinds(&res),
+            vec![Equal, Unimportant, Unimportant, Unimportant, Equal]
+        );
+        assert_eq!(res.rows[1].right_no, None);
+
+        // Lines after the block count again.
+        let res = diff_text("<auto>\n</auto>\nkeep\n", "<auto>\n</auto>\nKEEP\n", &opts).unwrap();
+        assert_eq!(kinds(&res).last(), Some(&Changed));
+
+        // A bad regex is an error; a half-filled pair is skipped.
+        assert!(diff_text("a", "b", &blocks(&[("(", "x")])).is_err());
+        assert!(
+            diff_text("a", "a", &blocks(&[("a", "")]))
+                .unwrap()
+                .identical
+        );
+    }
+
+    #[test]
+    fn block_expressions_nest_and_run_to_eof() {
+        let norm = LineNormalizer::new(&blocks(&[(r"^\{$", r"^\}$")])).unwrap();
+        // Nested blocks need their own ends.
+        let lines = ["a", "{", "{", "}", "x", "}", "b"];
+        assert_eq!(
+            block_lines(&lines, &norm),
+            vec![false, true, true, true, true, true, false]
+        );
+        // An unterminated block runs to the end of the file.
+        let lines = ["a", "{", "x", "{", "}", "y"];
+        assert_eq!(
+            block_lines(&lines, &norm),
+            vec![false, true, true, true, true, true]
+        );
+        // A fence used as both begin and end closes on its next occurrence.
+        let fence = LineNormalizer::new(&blocks(&[("^---$", "^---$")])).unwrap();
+        let lines = ["---", "meta", "---", "body"];
+        assert_eq!(block_lines(&lines, &fence), vec![true, true, true, false]);
+    }
+
+    #[test]
+    fn new_rule_options_deserialize() {
+        let opts: TextDiffOptions = serde_json::from_str(
+            r#"{"numericTolerance":{"enabled":true,"absolute":0.5},"ignoreBlocks":[{"begin":"a","end":"b"}]}"#,
+        )
+        .unwrap();
+        assert!(opts.numeric_tolerance.enabled);
+        assert_eq!(opts.numeric_tolerance.relative_percent, 0.0);
+        assert_eq!(opts.ignore_blocks[0].end, "b");
+        let old: TextDiffOptions = serde_json::from_str(r#"{"ignoreCase":true}"#).unwrap();
+        assert!(!old.numeric_tolerance.enabled);
+        assert!(old.ignore_blocks.is_empty());
     }
 
     #[test]

@@ -4,18 +4,20 @@ import { useEffect, useState } from "react";
 import type { Alignment, LinePair, LineRange, Replacement, TextDiffOptions, WhitespaceMode } from "../lib/api";
 import {
   addRange,
+  DEFAULT_NUMERIC_TOLERANCE,
   formatColumns,
   loadBackups,
   parseColumns,
   saveBackups,
   textApi,
   type BackupOptions,
+  type BlockPattern,
   type GrammarInfo,
 } from "../lib/textApi";
 import { Modal } from "./Modal";
 import "./TextRulesDialog.css";
 
-export type RulesPage = "importance" | "replacements" | "alignment" | "unimportant" | "backups";
+export type RulesPage = "importance" | "replacements" | "blocks" | "alignment" | "unimportant" | "backups";
 
 interface Props {
   options: TextDiffOptions;
@@ -33,6 +35,7 @@ interface Props {
 const PAGES: [RulesPage, string][] = [
   ["importance", "Importance"],
   ["replacements", "Replacements"],
+  ["blocks", "Ignored blocks"],
   ["alignment", "Alignment"],
   ["unimportant", "Unimportant lines"],
   ["backups", "Backups"],
@@ -54,10 +57,16 @@ const ALIGNMENTS: { value: Alignment; label: string; help: string }[] = [
 
 const lines = (text: string) => text.split("\n").map((p) => p.trim()).filter(Boolean);
 const toInt = (v: string) => Math.max(0, Math.floor(Number(v) || 0));
+/** A non-negative number typed by the user ("" = 0), or null when malformed. */
+const toTolerance = (v: string) => {
+  const n = v.trim() === "" ? 0 : Number(v);
+  return Number.isFinite(n) && n >= 0 ? n : null;
+};
 
 /**
  * Text Compare rules: what is unimportant (grammar comments and strings, regexes,
- * columns, page headers, line endings, replaced text, marked lines), how lines are
+ * columns, page headers, line endings, nearly equal numbers, replaced text, ignored
+ * blocks, marked lines), how lines are
  * aligned (style plus manual anchors/breaks), and save backups.
  */
 export function TextRulesDialog({
@@ -74,6 +83,11 @@ export function TextRulesDialog({
   const [patterns, setPatterns] = useState(options.ignorePatterns.join("\n"));
   const [headers, setHeaders] = useState(options.pageHeaderPatterns.join("\n"));
   const [columns, setColumns] = useState(formatColumns(options.ignoreColumns));
+  const tolerance = options.numericTolerance ?? DEFAULT_NUMERIC_TOLERANCE;
+  const [tolEnabled, setTolEnabled] = useState(tolerance.enabled);
+  const [tolAbsolute, setTolAbsolute] = useState(tolerance.absolute ? String(tolerance.absolute) : "");
+  const [tolPercent, setTolPercent] = useState(tolerance.relativePercent ? String(tolerance.relativePercent) : "");
+  const [blocks, setBlocks] = useState<BlockPattern[]>(options.ignoreBlocks ?? []);
   const [backups, setBackups] = useState<BackupOptions>(loadBackups);
   const [grammars, setGrammars] = useState<GrammarInfo[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -100,6 +114,20 @@ export function TextRulesDialog({
       setError(e instanceof Error ? e.message : String(e));
       return;
     }
+    const [absolute, relativePercent] = [toTolerance(tolAbsolute), toTolerance(tolPercent)];
+    if (absolute === null || relativePercent === null) {
+      setPage("importance");
+      setError("Number tolerances must be zero or positive numbers.");
+      return;
+    }
+    const ignoreBlocks = blocks
+      .map((b) => ({ begin: b.begin.trim(), end: b.end.trim() }))
+      .filter((b) => b.begin || b.end);
+    if (ignoreBlocks.some((b) => !b.begin || !b.end)) {
+      setPage("blocks");
+      setError("Every ignored block needs both a begin and an end expression.");
+      return;
+    }
     if (backups.mode === "folder" && !backups.folder.trim()) {
       setPage("backups");
       setError("Choose a backup folder, or pick another backup mode.");
@@ -112,6 +140,8 @@ export function TextRulesDialog({
       pageHeaderPatterns: lines(headers),
       ignoreColumns,
       replacements: o.replacements.filter((r) => r.left !== ""),
+      numericTolerance: { enabled: tolEnabled, absolute, relativePercent },
+      ignoreBlocks,
     });
     onClose();
   };
@@ -237,6 +267,56 @@ export function TextRulesDialog({
           </fieldset>
 
           <fieldset>
+            <legend>Numbers</legend>
+            <label className="field check">
+              <input
+                type="checkbox"
+                checked={tolEnabled}
+                onChange={(e) => {
+                  setTolEnabled(e.target.checked);
+                  setError(null);
+                }}
+              />
+              Compare numbers by value, within a tolerance
+            </label>
+            <div className="field-row">
+              <label className="field">
+                <span>Absolute tolerance</span>
+                <input
+                  inputMode="decimal"
+                  spellCheck={false}
+                  disabled={!tolEnabled}
+                  value={tolAbsolute}
+                  placeholder="0"
+                  onChange={(e) => {
+                    setTolAbsolute(e.target.value);
+                    setError(null);
+                  }}
+                />
+              </label>
+              <label className="field">
+                <span>Relative tolerance (%)</span>
+                <input
+                  inputMode="decimal"
+                  spellCheck={false}
+                  disabled={!tolEnabled}
+                  value={tolPercent}
+                  placeholder="0"
+                  onChange={(e) => {
+                    setTolPercent(e.target.value);
+                    setError(null);
+                  }}
+                />
+              </label>
+            </div>
+            <small className="muted">
+              1.0 matches 1.00 and 1e3 matches 1000. Numbers also match when they differ by at most the absolute
+              tolerance, or by at most the percentage of the larger value. Lines differing only in such numbers are
+              unimportant.
+            </small>
+          </fieldset>
+
+          <fieldset>
             <legend>Page headers and footers</legend>
             <label className="field">
               <span>Header / footer lines matching (one regex per line)</span>
@@ -278,6 +358,16 @@ export function TextRulesDialog({
 
       {page === "replacements" && (
         <ReplacementsPage value={o.replacements} onChange={(r) => set("replacements", r)} />
+      )}
+
+      {page === "blocks" && (
+        <BlocksPage
+          value={blocks}
+          onChange={(b) => {
+            setBlocks(b);
+            setError(null);
+          }}
+        />
       )}
 
       {page === "alignment" && (
@@ -476,6 +566,71 @@ function ReplacementsPage({ value, onChange }: { value: Replacement[]; onChange:
         </table>
         <button onClick={() => onChange([...value, { left: "", right: "", regex: false }])}>
           <Plus size={14} /> Add replacement
+        </button>
+      </fieldset>
+    </div>
+  );
+}
+
+function BlocksPage({ value, onChange }: { value: BlockPattern[]; onChange: (b: BlockPattern[]) => void }) {
+  const update = (i: number, patch: Partial<BlockPattern>) =>
+    onChange(value.map((b, j) => (j === i ? { ...b, ...patch } : b)));
+  return (
+    <div className="settings-grid single">
+      <fieldset>
+        <legend>Ignore blocks of lines</legend>
+        <small className="muted">
+          Every line from one matching the begin expression through the next line matching the end expression (both
+          included) is unimportant, such as an auto-generated region. A nested begin needs its own end; a block that
+          never ends runs to the end of the file.
+        </small>
+        <table className="trd-table">
+          <thead>
+            <tr>
+              <th>Begin (regex)</th>
+              <th />
+              <th>End (regex)</th>
+              <th />
+            </tr>
+          </thead>
+          <tbody>
+            {value.map((b, i) => (
+              <tr key={i}>
+                <td>
+                  <input
+                    value={b.begin}
+                    spellCheck={false}
+                    placeholder="^// <auto-generated>"
+                    onChange={(e) => update(i, { begin: e.target.value })}
+                  />
+                </td>
+                <td className="trd-arrow">…</td>
+                <td>
+                  <input
+                    value={b.end}
+                    spellCheck={false}
+                    placeholder="^// </auto-generated>"
+                    onChange={(e) => update(i, { end: e.target.value })}
+                  />
+                </td>
+                <td>
+                  <button className="icon-btn" title="Remove" onClick={() => onChange(value.filter((_, j) => j !== i))}>
+                    <X size={13} />
+                  </button>
+                </td>
+              </tr>
+            ))}
+            {!value.length && (
+              <tr>
+                <td colSpan={4} className="muted trd-empty">
+                  No blocks
+                </td>
+              </tr>
+            )}
+          </tbody>
+        </table>
+        <button onClick={() => onChange([...value, { begin: "", end: "" }])}>
+          <Plus size={14} /> Add block
         </button>
       </fieldset>
     </div>

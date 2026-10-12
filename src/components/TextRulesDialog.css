@@ -26,6 +26,10 @@
   width: 100%;
   font-family: var(--mono);
 }
+.trd-empty {
+  font-size: 12px;
+  padding: 4px;
+}
 .trd-arrow,
 .trd-center {
   text-align: center;

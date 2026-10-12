@@ -1,8 +1,10 @@
 //! Comparison reports for PCompare, in the spirit of Beyond Compare's
-//! "Session → Report…": text compares as side-by-side or unified HTML, plain
-//! text or a unified patch; folder compares as a summary or a detailed
-//! side-by-side listing (HTML, text or CSV, optionally linking a text report
-//! per differing file); table compares as an HTML grid or CSV.
+//! "Session → Report…": text compares as side-by-side or unified HTML, an
+//! HTML slideshow (one difference per slide), plain text, a unified patch, a
+//! classic `diff` listing or XML; folder compares as a summary or a detailed
+//! side-by-side listing (HTML, text, CSV or XML, optionally linking — or for
+//! XML embedding — a text report per differing file); table compares as an
+//! HTML grid or CSV. HTML reports can carry bookmark comments.
 //!
 //! Renderers are pure functions from engine results to a `String`, so the
 //! Tauri shell (print, clipboard, save) and the script processor share them
@@ -10,8 +12,10 @@
 
 pub mod folder;
 mod html;
+mod slides;
 pub mod table;
 pub mod text;
+pub mod xml;
 
 use chrono::{Local, TimeZone};
 

@@ -145,6 +145,8 @@ export function copyRows(
 export interface Bookmark {
   side: Side;
   line: number;
+  /** araxis:text-review — review comment shown on hover and in the Comments panel. */
+  comment?: string;
 }
 
 /**
@@ -172,7 +174,7 @@ export function shiftBookmarks(
     const key = `${m.side}:${line}`;
     if (line >= 1 && !seen.has(key)) {
       seen.add(key);
-      out.push({ side: m.side, line });
+      out.push({ ...m, line }); // araxis:text-review — keeps the comment
     }
   }
   return out;
@@ -195,3 +197,42 @@ export function indexAtColumn(text: string, col: number, tabSize: number): numbe
   }
   return text.length;
 }
+
+// araxis:text-view — block indent / outdent (Text Edit and Text Compare share these).
+
+/** Indentation the file already uses: tabs, else spaces (tabs for a file with none). */
+export function indentUnitOf(lines: string[], tabSize: number): string {
+  let spaces = false;
+  for (let i = 0; i < lines.length && i < 5000; i++) {
+    const c = lines[i][0];
+    if (c === "\t") return "\t";
+    if (c === " " && lines[i].startsWith("  ")) spaces = true;
+  }
+  return spaces ? " ".repeat(tabSize) : "\t";
+}
+
+/** Removes one level of indentation (a tab or up to a tab's worth of spaces). */
+export function outdentLine(line: string, tabSize: number): string {
+  if (line.startsWith("\t")) return line.slice(1);
+  let n = 0;
+  while (n < tabSize && line[n] === " ") n++;
+  return line.slice(n);
+}
+
+/**
+ * Indents (`dir` 1) or outdents (-1) the 0-based lines `[start, end]`
+ * (inclusive). Indenting several lines skips empty ones; a single line is
+ * always indented. Returns `lines` itself when nothing changed.
+ */
+export function indentRange(lines: string[], start: number, end: number, dir: 1 | -1, unit: string, tabSize: number): string[] {
+  const next = lines.slice();
+  let changed = false;
+  for (let i = Math.max(0, start); i <= end && i < lines.length; i++) {
+    if (dir > 0) {
+      if (next[i] || start === end) next[i] = unit + next[i];
+    } else next[i] = outdentLine(next[i], tabSize);
+    changed ||= next[i] !== lines[i];
+  }
+  return changed ? next : lines;
+}
+// araxis:text-view end
