@@ -1220,6 +1220,32 @@ mod tests {
     }
 
     #[test]
+    fn file_reads_get_checkout_line_endings() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path().join("repo");
+        std::fs::create_dir_all(&repo).unwrap();
+        if !git(&repo, &["init", "-q", "-b", "main"]) {
+            eprintln!("git isn't installed; skipping");
+            return;
+        }
+        git(&repo, &["config", "core.autocrlf", "false"]);
+        std::fs::write(repo.join("a.txt"), "one\ntwo\n").unwrap();
+        git(&repo, &["add", "-A"]);
+        git(&repo, &["commit", "-q", "-m", "first"]);
+        // With autocrlf on, a checkout has CRLF; the revision side must match it
+        // so it doesn't differ from the working copy on every line.
+        git(&repo, &["config", "core.autocrlf", "true"]);
+
+        let archives = crate::Archives::new(tmp.path().join("cache"));
+        let a = repo.join("a.txt").to_string_lossy().into_owned();
+        let copy = archives
+            .local_copy(&format!("git:{a}@HEAD"))
+            .unwrap()
+            .expect("a container path");
+        assert_eq!(std::fs::read_to_string(copy).unwrap(), "one\r\ntwo\r\n");
+    }
+
+    #[test]
     fn compares_revisions_of_a_real_git_repo() {
         use pcompare_core::folder::{
             compare_folders_with, ContentMethod, EntryStatus, FolderCompareOptions,
@@ -1233,6 +1259,9 @@ mod tests {
             eprintln!("git isn't installed; skipping");
             return;
         }
+        // Reads apply checkout filters, so a global `core.autocrlf=true` (as on
+        // Windows CI runners) would turn "one\n" into "one\r\n".
+        git(&repo, &["config", "core.autocrlf", "false"]);
         std::fs::write(repo.join("src/a.txt"), "one\n").unwrap();
         std::fs::write(repo.join("gone.txt"), "old\n").unwrap();
         git(&repo, &["add", "-A"]);
