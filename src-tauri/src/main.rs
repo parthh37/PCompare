@@ -2,6 +2,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod archive; // bc5:archives
+mod automation; // automation:shell
 mod convert; // bc5:converters
 mod db;
 mod fileops; // bc5:file-ops
@@ -383,6 +384,14 @@ fn main() {
         .plugin(tauri_plugin_process::init())
         // bc5:text-ui — clipboard text as a Text Compare side.
         .plugin(tauri_plugin_clipboard_manager::init())
+        // automation:shell — desktop notifications and start at login (hidden, in the tray).
+        .plugin(tauri_plugin_notification::init())
+        .plugin(tauri_plugin_autostart::init(
+            tauri_plugin_autostart::MacosLauncher::LaunchAgent,
+            Some(vec![automation::BACKGROUND_ARG]),
+        ))
+        .on_window_event(automation::on_window_event)
+        // automation:shell end
         .setup(|app| {
             let config_dir = app.path().app_config_dir()?;
             let data_dir = app.path().app_data_dir()?;
@@ -402,6 +411,10 @@ fn main() {
             });
             app.manage(workspace::ShellState::new(&config_dir)); // bc5:app-shell
             remote::install_prompter(app.handle()); // bc5:remote-write
+            // automation:shell — after AppState: the scheduler uses its scan database.
+            // Also shows the main window (created hidden for `--background`).
+            automation::setup(app)?;
+            // automation:shell end
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -568,9 +581,35 @@ fn main() {
             vcs::vcs_detect,
             vcs::vcs_revisions,
             // araxis:vcs end
+            // automation:shell — sync automation + notification channels (automation.rs)
+            automation::automation_tasks,
+            automation::automation_new_task,
+            automation::automation_validate,
+            automation::automation_save,
+            automation::automation_delete,
+            automation::automation_set_enabled,
+            automation::automation_duplicate,
+            automation::automation_run_now,
+            automation::automation_cancel,
+            automation::automation_statuses,
+            automation::automation_runs,
+            automation::automation_upcoming,
+            automation::automation_describe_trigger,
+            automation::automation_settings,
+            automation::automation_save_settings,
+            automation::automation_export,
+            automation::automation_import,
+            automation::notify_channels,
+            automation::notify_save_channel,
+            automation::notify_delete_channel,
+            automation::notify_test_channel,
+            // automation:shell end
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running PCompare");
+        // automation:shell — with an event handler, so quitting stops running syncs at a safe point.
+        .build(tauri::generate_context!())
+        .expect("error while running PCompare")
+        .run(automation::on_run_event);
+        // automation:shell end
 }
 
 #[cfg(test)]

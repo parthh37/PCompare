@@ -22,10 +22,13 @@ interface Props {
   /** A sync is running: job actions are unavailable. */
   busy: boolean;
   onRollback: (jobId: string) => void;
-  onResume: (jobId: string) => void;
+  /** Absent: interrupted jobs can't be resumed from here (Sync Automation repairs them on the next run). */
+  onResume?: (jobId: string) => void;
   /** The pair's two-way baseline was dropped, so the plan needs refreshing. */
   onHistoryForgotten: () => void;
   onClose: () => void;
+  /** automation:ui — the job to select when the dialog opens. */
+  initialJob?: string | null;
 }
 
 export const JOB_STATUS_LABELS: Record<JobStatus, string> = {
@@ -52,9 +55,19 @@ const opText = (j: JobOp) => {
 };
 
 /** Past sync jobs of this folder pair, their operations, and the scan database. */
-export function SyncHistoryDialog({ left, right, modeLabel, busy, onRollback, onResume, onHistoryForgotten, onClose }: Props) {
+export function SyncHistoryDialog({
+  left,
+  right,
+  modeLabel,
+  busy,
+  onRollback,
+  onResume,
+  onHistoryForgotten,
+  onClose,
+  initialJob,
+}: Props) {
   const [jobs, setJobs] = useState<JobSummary[] | null>(null);
-  const [selected, setSelected] = useState<string | null>(null);
+  const [selected, setSelected] = useState<string | null>(initialJob ?? null);
   const [detail, setDetail] = useState<JobDetail | null>(null);
   const [stats, setStats] = useState<IndexStats | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -160,7 +173,7 @@ export function SyncHistoryDialog({ left, right, modeLabel, busy, onRollback, on
               {job.pendingOps > 0 && ` · ${job.pendingOps} not run`}
             </span>
             <span className="spacer" />
-            {job.status === "interrupted" && (
+            {job.status === "interrupted" && onResume && (
               <button onClick={() => onResume(job.id)} disabled={busy} title="Repair half-finished operations and run the rest">
                 <Play size={14} /> Resume
               </button>
