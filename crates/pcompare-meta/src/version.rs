@@ -110,7 +110,7 @@ impl<'a> Visit<'a> for Collector {
     }
     fn var(&mut self, key: &'a [u16], value: &'a [u16]) {
         if String::from_utf16_lossy(key) == "Translation" {
-            self.translations = value.chunks_exact(2).map(|p| (p[0], p[1])).collect();
+            self.translations = value.as_chunks::<2>().0.iter().map(|&[lang, codepage]| (lang, codepage)).collect();
         }
     }
 }

@@ -242,7 +242,7 @@ pub fn diff_pixels(left: &RgbaImage, right: &RgbaImage, tolerance: u8) -> PixelD
             if in_l && in_r {
                 let lrow = &l[y * lw_us * 4..(y * lw_us + ow_us) * 4];
                 let rrow = &r[y * rw_us * 4..(y * rw_us + ow_us) * 4];
-                for (x, (lp, rp)) in lrow.chunks_exact(4).zip(rrow.chunks_exact(4)).enumerate() {
+                for (x, (lp, rp)) in lrow.as_chunks::<4>().0.iter().zip(rrow.as_chunks::<4>().0).enumerate() {
                     if lp == rp || (lp[3] == 0 && rp[3] == 0) {
                         continue;
                     }
@@ -350,7 +350,7 @@ fn render_difference(left: &RgbaImage, right: &RgbaImage, mask: &[u8], width: u3
     let w = width as usize;
     out.par_chunks_mut(w * 4).enumerate().for_each(|(y, row)| {
         let y32 = y as u32;
-        for (x, px) in row.chunks_exact_mut(4).enumerate() {
+        for (x, px) in row.as_chunks_mut::<4>().0.iter_mut().enumerate() {
             if mask[y * w + x] != 0 {
                 px.copy_from_slice(&HIGHLIGHT);
                 continue;
@@ -377,9 +377,9 @@ pub fn png_data_url(img: &RgbaImage) -> Result<String> {
     let mut png = Vec::new();
     let encoder = PngEncoder::new_with_quality(&mut png, CompressionType::Fast, FilterType::Adaptive);
     let raw = img.as_raw();
-    let result = if raw.chunks_exact(4).all(|p| p[3] == u8::MAX) {
+    let result = if raw.as_chunks::<4>().0.iter().all(|p| p[3] == u8::MAX) {
         let mut rgb = Vec::with_capacity(raw.len() / 4 * 3);
-        raw.chunks_exact(4).for_each(|p| rgb.extend_from_slice(&p[..3]));
+        raw.as_chunks::<4>().0.iter().for_each(|p| rgb.extend_from_slice(&p[..3]));
         encoder.write_image(&rgb, img.width(), img.height(), ExtendedColorType::Rgb8)
     } else {
         encoder.write_image(raw, img.width(), img.height(), ExtendedColorType::Rgba8)

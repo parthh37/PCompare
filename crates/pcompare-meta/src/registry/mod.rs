@@ -117,10 +117,7 @@ impl ValueData {
     pub fn from_bytes(kind: RegType, bytes: Vec<u8>, utf16: bool) -> Self {
         let text = |b: &[u8]| -> String {
             if utf16 {
-                let units: Vec<u16> = b
-                    .chunks_exact(2)
-                    .map(|c| u16::from_le_bytes([c[0], c[1]]))
-                    .collect();
+                let units: Vec<u16> = b.as_chunks::<2>().0.iter().map(|&c| u16::from_le_bytes(c)).collect();
                 String::from_utf16_lossy(&units)
             } else {
                 pcompare_core::textfile::decode(b).0
