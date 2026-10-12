@@ -34,6 +34,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { errorMessage, isRemote } from "../lib/api";
 import { COMPARE_PRESETS, DEFAULT_FOLDER_SETTINGS, toEngineOptions, type ComparePreset } from "../lib/folderSettings";
 import { formatSize, formatTime, joinPath } from "../lib/format";
+import { matches, shortcutLabel } from "../lib/keymap";
 import type { CompareProps } from "../lib/sessionProps";
 import {
   DEFAULT_EXEC_OPTIONS,
@@ -251,6 +252,8 @@ interface RunningJob {
   exec: ExecOptions;
   progress: SyncProgress | null;
   cancelling: boolean;
+  /** bc5:file-ops — held by the user. */
+  paused?: boolean;
 }
 
 export function FolderSync({ left, right, onPathsChange, settings, onSettingsChange, onOpenFiles }: Props) {
@@ -331,13 +334,13 @@ export function FolderSync({ left, right, onPathsChange, settings, onSettingsCha
 
   const checkInterrupted = useCallback(() => {
     const seq = ++interruptSeq.current;
-    if (!left || !right || remote) return setInterrupted(null);
+    if (!left || !right) return setInterrupted(null);
     syncApi.interrupted(left, right).then(
       (j) => seq === interruptSeq.current && setInterrupted(j),
       // The banner is a convenience; a broken journal shows up when a sync actually runs.
       () => seq === interruptSeq.current && setInterrupted(null),
     );
-  }, [left, right, remote]);
+  }, [left, right]);
 
   useEffect(() => {
     if (!running) checkInterrupted();
@@ -346,7 +349,7 @@ export function FolderSync({ left, right, onPathsChange, settings, onSettingsCha
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       // Every open tab registers this; only the visible one reacts.
-      if (e.key !== "F5" || !root.current?.offsetParent || job) return;
+      if (!matches(e, "sync.refresh") || !root.current?.offsetParent || job) return;
       e.preventDefault();
       replan();
     };
@@ -477,8 +480,18 @@ export function FolderSync({ left, right, onPathsChange, settings, onSettingsCha
     syncApi.cancel(job.key).catch((e) => setError(errorMessage(e)));
   };
 
+  // bc5:file-ops — Pause / Resume a running sync.
+  const togglePause = () => {
+    if (!job) return;
+    const paused = !job.paused;
+    setJob({ ...job, paused });
+    syncApi.pause(job.key, paused).catch((e) => setError(errorMessage(e)));
+  };
+
   const openPair = (op: SyncOp) => {
-    if (onOpenFiles && plan && op.overwrite) onOpenFiles(joinPath(plan.leftRoot, op.relPath), joinPath(plan.rightRoot, op.relPath));
+    // bc5:file-ops — aligned pairs have their own name on the left.
+    if (onOpenFiles && plan && op.overwrite)
+      onOpenFiles(joinPath(plan.leftRoot, op.leftRelPath ?? op.relPath), joinPath(plan.rightRoot, op.relPath));
   };
 
   const renderRow = (i: number) => {
@@ -625,14 +638,14 @@ export function FolderSync({ left, right, onPathsChange, settings, onSettingsCha
         <button onClick={() => setOptionsOpen(true)} disabled={running} title={`Sync options: ${safetySummary(cfg.exec)}`}>
           <Settings2 size={14} /> Options
         </button>
-        <button onClick={replan} disabled={!left || !right || loading || running} title="Re-scan both folders (F5)">
+        <button onClick={replan} disabled={!left || !right || loading || running} title={`Re-scan both folders (${shortcutLabel("sync.refresh")})`}>
           <RefreshCw size={14} /> Preview
         </button>
         <button
           className="primary"
           onClick={() => setConfirming(true)}
-          disabled={remote || !plan || chosen.length === 0 || loading || running}
-          title={remote ? "Syncing to remote locations isn't supported yet" : "Run the selected operations"}
+          disabled={!plan || chosen.length === 0 || loading || running}
+          title={remote ? "Run the selected operations (deletions on a remote side are permanent)" : "Run the selected operations"}
         >
           <FolderSyncIcon size={14} /> Sync
         </button>
@@ -669,9 +682,11 @@ export function FolderSync({ left, right, onPathsChange, settings, onSettingsCha
         <span className="muted sync-hint">{mode.hint}</span>
       </div>
 
+      {/* bc5:remote-write — remote sides sync too, but without a Recycle Bin. */}
       {remote && (
         <div className="banner info sync-banner">
-          Previewing a remote folder. Syncing to or from remote locations isn't supported yet.
+          A side is on a remote profile. Files deleted or overwritten there are removed permanently (remote folders have
+          no Recycle Bin), so those changes can't be rolled back.
         </div>
       )}
 
@@ -769,7 +784,7 @@ export function FolderSync({ left, right, onPathsChange, settings, onSettingsCha
         {loading && !job && <div className="overlay">Planning sync…</div>}
         {job && (
           <div className="overlay">
-            <SyncProgressPanel job={job} onCancel={cancel} />
+            <SyncProgressPanel job={job} onCancel={cancel} onPause={togglePause} />
           </div>
         )}
         {error && <div className="banner error">{error}</div>}
@@ -981,11 +996,12 @@ function SyncConfirmDialog({
 }
 
 /** The progress card shown over the list while a job runs. */
-function SyncProgressPanel({ job, onCancel }: { job: RunningJob; onCancel: () => void }) {
+function SyncProgressPanel({ job, onCancel, onPause }: { job: RunningJob; onCancel: () => void; onPause: () => void }) {
   const p = job.progress;
   const pct = p ? (p.bytesTotal > 0 ? (p.bytesDone / p.bytesTotal) * 100 : p.total > 0 ? (p.done / p.total) * 100 : 0) : 0;
   let phase = "Synchronizing…";
   if (job.cancelling) phase = "Cancelling…";
+  else if (p?.phase === "paused" || job.paused) phase = p?.phase === "paused" ? "Paused" : "Pausing…"; // bc5:file-ops
   else if (p?.phase === "retrying")
     // `attempt` is the try that just failed; the wait is for the next one.
     phase = `Waiting to retry — ${lowerFirst(FAILURE_LABELS[p.waitingOn ?? "other"])} (attempt ${p.attempt + 1} of ${
@@ -1010,6 +1026,10 @@ function SyncProgressPanel({ job, onCancel }: { job: RunningJob; onCancel: () =>
         {p && p.failed > 0 && <span className="s-error-fg">{p.failed} failed</span>}
         {p && p.deferred > 0 && <span className="sync-deferred">{p.deferred} deferred</span>}
         <span className="spacer" />
+        {/* bc5:file-ops */}
+        <button onClick={onPause} disabled={job.cancelling} title="Hold the sync between files; resume continues where it stopped">
+          {job.paused ? "Resume" : "Pause"}
+        </button>
         <button onClick={onCancel} disabled={job.cancelling}>
           Cancel
         </button>

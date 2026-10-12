@@ -1,0 +1,188 @@
+/* Hex Compare: aligned, editable byte grid with a find/replace strip. */
+.hex-session .session-body {
+  overflow: hidden;
+}
+.hx-banner {
+  margin: 6px 10px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.hx-scroll {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+}
+.hx-spacer {
+  position: relative;
+  min-width: 100%;
+  font-family: var(--mono);
+  font-size: 12.5px;
+}
+.hx-viewport {
+  position: sticky;
+  top: 0;
+  overflow: hidden;
+  user-select: none;
+}
+.hx-probe {
+  position: absolute;
+  visibility: hidden;
+  white-space: pre;
+  font-family: var(--mono);
+  font-size: 12.5px;
+}
+.hx-vrow {
+  position: absolute;
+  left: 0;
+  right: 0;
+}
+.hx-row {
+  display: flex;
+  align-items: center;
+  height: 100%;
+  padding-left: 10px;
+  white-space: pre;
+  cursor: text;
+}
+.hx-row.loading {
+  color: var(--faint);
+}
+.hx-row.break {
+  border-top: 1px dashed var(--border);
+}
+.hx-row.differs .hx-off {
+  color: var(--different);
+}
+.hx-off {
+  flex: none;
+  margin-right: 2ch;
+  color: var(--faint);
+}
+.hx-hex,
+.hx-ascii {
+  display: flex;
+  flex: none;
+}
+.hx-b {
+  width: 2ch;
+  margin-right: 1ch;
+  text-align: center;
+}
+.hx-b.grp {
+  margin-right: 2ch;
+}
+.hx-ascii {
+  margin: 0 1ch;
+  color: var(--muted);
+}
+.hx-a {
+  width: 1ch;
+}
+.hx-mid {
+  flex: none;
+  width: 1px;
+  align-self: stretch;
+  margin: 0 2ch 0 1ch;
+  background: var(--border);
+}
+.hx-b.diff,
+.hx-a.diff {
+  background: var(--del-mark);
+  border-radius: 2px;
+}
+/* Bytes the other side has and this side doesn't. */
+.hx-b.gap,
+.hx-a.gap {
+  color: var(--faint);
+  background: var(--hatch), var(--chg-bg);
+}
+.hx-b.sel,
+.hx-a.sel {
+  background: var(--sel-bg-strong);
+  outline: 1px solid var(--accent-border);
+}
+.hx-b.cur,
+.hx-a.cur {
+  outline: 1px solid var(--accent-border-strong);
+}
+.hx-b.cur.focus,
+.hx-a.cur.focus {
+  outline: 2px solid var(--accent);
+}
+.hx-b .nib {
+  text-decoration: underline;
+  text-decoration-color: var(--accent);
+  text-underline-offset: 2px;
+}
+.hx-empty {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  pointer-events: none;
+}
+
+/* Toolbar options popover. */
+.hx-options-anchor {
+  position: relative;
+}
+.hex-session .toolbar .icon-btn.active,
+.hx-findbar .icon-btn.active {
+  color: var(--accent);
+  border-color: var(--accent);
+  background: var(--accent-tint);
+}
+.hx-options {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 4px);
+  z-index: 20;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 250px;
+  padding: 10px 12px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  box-shadow: 0 6px 20px var(--shadow);
+}
+.hx-options label {
+  justify-content: space-between;
+}
+.hx-options input[type="number"] {
+  width: 72px;
+}
+
+/* Find / Replace strip. */
+.hx-findbar {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 5px 10px;
+  border-bottom: 1px solid var(--border);
+  background: var(--panel);
+}
+.hx-find-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.hx-find-icon {
+  color: var(--muted);
+  flex-shrink: 0;
+}
+.hx-find-input {
+  flex: 0 1 320px;
+  min-width: 140px;
+  font-family: var(--mono);
+  font-size: 12.5px;
+}
+.hx-find-status {
+  color: var(--muted);
+  font-size: 12px;
+  white-space: nowrap;
+}

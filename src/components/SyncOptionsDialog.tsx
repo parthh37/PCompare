@@ -213,6 +213,26 @@ export function SyncOptionsDialog({ value, onApply, onClose }: Props) {
             </span>
           </label>
         </fieldset>
+
+        {/* bc5:file-ops — NTFS extras (Windows only) */}
+        {navigator.userAgent.includes("Windows") && (
+          <fieldset>
+            <legend>Windows</legend>
+            <label className="field check">
+              <input type="checkbox" checked={!!o.copyAcls} onChange={(e) => set("copyAcls", e.target.checked)} />
+              Copy permissions (NTFS owners and ACLs)
+            </label>
+            <label className="field check">
+              <input
+                type="checkbox"
+                checked={!!o.copyShortNames}
+                onChange={(e) => set("copyShortNames", e.target.checked)}
+              />
+              Copy short (8.3) names
+            </label>
+            <small className="muted">Best effort: copying owners and short names needs PCompare to run as administrator.</small>
+          </fieldset>
+        )}
       </div>
     </Modal>
   );

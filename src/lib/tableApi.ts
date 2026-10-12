@@ -4,8 +4,23 @@ import { invoke } from "@tauri-apps/api/core";
 
 export type SourceFormat = "delimited" | "workbook" | "html";
 
+/** One manual column-mapping entry: 0-based source columns (`null` = unmatched). */
+export interface ColumnPair {
+  left: number | null;
+  right: number | null;
+}
+
 export interface TableCompareOptions {
   hasHeader: boolean;
+  /** Per-side override of `hasHeader`; `null` follows it. */
+  leftHeader: boolean | null;
+  rightHeader: boolean | null;
+  /** Explicit column pairing in display order; `null` pairs by header name / position. */
+  columnMapping: ColumnPair[] | null;
+  /** Sort both sides before aligning rows. */
+  sortRows: boolean;
+  /** Indices into `TableCompareResult.columns`; empty sorts on all columns. */
+  sortColumns: number[];
   /** Indices into `TableCompareResult.columns`. */
   keyColumns: number[];
   /** Indices into `TableCompareResult.columns`. */
@@ -14,6 +29,8 @@ export interface TableCompareOptions {
   trimWhitespace: boolean;
   /** `null` compares cells as text; a number compares numeric cells within that tolerance. */
   numericTolerance: number | null;
+  /** `null` compares dates as text; seconds of slack for cells that both parse as dates / times. */
+  dateTolerance: number | null;
   /** Single character; `null` sniffs among `, ; Tab |`. */
   delimiter: string | null;
   leftSheet: number | null;
@@ -71,9 +88,45 @@ export interface TableCompareResult {
   stats: TableStats;
   identical: boolean;
   truncated: boolean;
+  /** Column indices rows were sorted on before aligning; `null` when not sorted. */
+  sortedBy: number[] | null;
+}
+
+/** Column choices that belong to one sheet pair (indices into that pair's columns). */
+export interface SheetColumns {
+  leftSheet: number | null;
+  rightSheet: number | null;
+  keyColumns: number[];
+  ignoredColumns: number[];
+  columnMapping: ColumnPair[] | null;
+  sortColumns: number[];
+}
+
+export interface SheetComparison {
+  left: number | null;
+  right: number | null;
+  leftLabel: string | null;
+  rightLabel: string | null;
+  /** Paired by name rather than by position / not at all. */
+  byName: boolean;
+  stats: TableStats | null;
+  /** Important row differences, or every row of an unpaired sheet. */
+  differences: number;
+  identical: boolean;
+  truncated: boolean;
+  error: string | null;
+}
+
+export interface SheetsCompareResult {
+  leftFormat: SourceFormat;
+  rightFormat: SourceFormat;
+  sheets: SheetComparison[];
+  identical: boolean;
 }
 
 export const tableApi = {
   compareTables: (left: string, right: string, options: TableCompareOptions) =>
     invoke<TableCompareResult>("compare_tables", { left, right, options }),
+  compareSheets: (left: string, right: string, options: TableCompareOptions, columns: SheetColumns[]) =>
+    invoke<SheetsCompareResult>("compare_table_sheets", { left, right, options, columns }),
 };
