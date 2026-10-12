@@ -253,6 +253,9 @@ export const isRemote = (path: string) => path.toLowerCase().startsWith(REMOTE_S
 export const api = {
   pathKind: (path: string) => invoke<PathKind>("path_kind", { path }),
   launchArgs: () => invoke<string[]>("launch_args"),
+  /** "Select Left Side for Compare" — shared with the Explorer context menu. */
+  getLeftSelection: () => invoke<string | null>("get_left_selection"),
+  setLeftSelection: (path: string | null) => invoke<void>("set_left_selection", { path }),
   compareTextFiles: (left: string, right: string, options: TextDiffOptions) =>
     invoke<TextFileCompare>("compare_text_files", { left, right, options }),
   compareFolders: (left: string, right: string, options: FolderCompareOptions) =>
