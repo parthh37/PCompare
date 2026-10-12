@@ -274,7 +274,7 @@ export function RegistryCompare({
   const [filter, setFilter] = useState<Filter>(settings?.filter ?? "all");
   const reportSettings = useRef(onSettingsChange);
   reportSettings.current = onSettingsChange;
-  useEffect(() => reportSettings.current?.({ filter }), [filter]);
+  useEffect(() => void reportSettings.current?.({ filter }), [filter]);
 
   const [result, setResult] = useState<RegistryCompareResult | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -302,7 +302,7 @@ export function RegistryCompare({
 
   const reportDirty = useRef(onDirtyChange);
   reportDirty.current = onDirtyChange;
-  useEffect(() => reportDirty.current?.(dirty), [dirty]);
+  useEffect(() => void reportDirty.current?.(dirty), [dirty]);
 
   // Edits belong to the files they were made against.
   useEffect(() => {

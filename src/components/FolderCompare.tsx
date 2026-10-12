@@ -194,7 +194,7 @@ export function FolderCompare({
   const update = (patch: Partial<FolderSettings>) => setCfg((c) => ({ ...c, ...patch }));
   const reportSettings = useRef(onSettingsChange);
   reportSettings.current = onSettingsChange;
-  useEffect(() => reportSettings.current?.(cfg), [cfg]);
+  useEffect(() => void reportSettings.current?.(cfg), [cfg]);
 
   const [excludeText, setExcludeText] = useState(cfg.exclude);
   const [nameQuery, setNameQuery] = useState("");
