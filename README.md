@@ -20,6 +20,7 @@ A fast, modern file & folder comparison tool for Windows and macOS — inspired 
 | **Registry Compare** | `.reg` exports (REGEDIT4 and v5, UTF-16) or live keys such as `HKLM\Software\Vendor` on Windows · key tree with status plus value-by-value differences |
 | **Version Compare** | `.exe`/`.dll` version resources (fixed info and all string tables) plus PE header facts: architecture, timestamp, subsystem, ASLR/DEP/CFG, signature presence |
 | **MP3 Compare** | Tags (ID3v1/v2, APE, Vorbis, MP4) of MP3, FLAC, M4A, OGG/Opus, WAV and AIFF · audio properties · embedded cover art |
+| **Database Compare** | SQL Delta–style **Schema Compare** and **Data Compare** for **SQL Server**, **MySQL / MariaDB**, **PostgreSQL** and **SQLite** · tables (columns, keys, indexes, foreign keys, checks), views, procedures, functions, triggers and sequences, with side-by-side DDL · rows matched by primary key (or a unique index / chosen key) with cell-level differences · **sync scripts** in the target's dialect (dependency-ordered, transactional, SQLite table rebuilds) to copy, save or run on either side · saved connections with passwords in the OS keychain · SQL Server Windows authentication and named instances |
 | **Saved sessions** | Name and save any comparison (Ctrl+Shift+S) — paths plus view settings · reopen, rename, delete from Home |
 | **Connection profiles** | Amazon S3 & S3-compatible (R2, MinIO, Wasabi…), Azure Blob, Google Cloud Storage, Backblaze B2, FTP/FTPS, SFTP, WebDAV, OneDrive, Dropbox, Google Drive · secrets kept in the OS keychain · use `remote://<profile>/path` (or the globe button) on either side of any compare |
 | **Auto-refresh** | Folder, text and hex sessions re-compare by themselves when either side changes on disk (OS file watcher, debounced, ignores excluded folders); remote sides are polled every 30 s |
@@ -112,6 +113,7 @@ crates/pcompare-picture/ Picture compare (image crate)
 crates/pcompare-sync/    Folder sync planning, fail-safe execution (retries, locked files, rollback) and 3-way folder merge
 crates/pcompare-index/   Embedded SQLite scan database: checksum cache, two-way sync baselines, job journal
 crates/pcompare-meta/    Registry (.reg / live), executable version (pelite) and audio tag (lofty) compare
+crates/pcompare-db/      Database schema/data compare + sync scripts (sqlx: MySQL/PostgreSQL/SQLite, tiberius: SQL Server)
 src-tauri/               Tauri shell exposing the engines as commands
 src/                     React + TypeScript UI
 ```
@@ -127,6 +129,20 @@ These use OAuth sign-in, which needs an app registration you control:
 ### Testing against live servers
 
 `cargo test -p pcompare-remote --test live` is skipped unless `PCOMPARE_LIVE_PROFILES` points at a JSON list of profiles; see the header of `crates/pcompare-remote/tests/live.rs` for the format and fixture layout.
+
+Database Compare's SQLite tests always run. The MySQL, PostgreSQL and SQL Server tests (`crates/pcompare-db/tests/live_*.rs` and the end-to-end `roundtrip.rs`, which syncs two databases and expects an identical re-compare) run when `PCOMPARE_LIVE_MYSQL`, `PCOMPARE_LIVE_POSTGRES` or `PCOMPARE_LIVE_MSSQL` hold a connection as JSON. Point them at scratch servers, because they create and drop databases:
+
+```bash
+docker run -d --name pcompare-mssql -e ACCEPT_EULA=Y -e 'MSSQL_SA_PASSWORD=Pcompare!2024' -p 1433:1433 mcr.microsoft.com/mssql/server:2022-latest
+```
+
+```bash
+PCOMPARE_LIVE_MSSQL='{"engine":"mssql","host":"127.0.0.1","port":1433,"user":"sa","password":"Pcompare!2024","trustServerCertificate":true,"database":"master"}' cargo test -p pcompare-db --test live_mssql -- --nocapture
+```
+
+### Data compare rules
+
+Cells are matched by `values_equal` in `crates/pcompare-db/src/value.rs`. Numbers compare by value across types (`bit` 1 = `tinyint(1)` 1, `12.50` = `12.5`), and NULL only equals NULL. Everything else is opt-in from the Data options dialog: ignore case, trim whitespace (CHAR padding), a numeric tolerance, and a date-time precision (SQL Server `datetime` keeps about 3 fractional digits, MySQL and PostgreSQL keep 6).
 
 ### Use as a git difftool
 

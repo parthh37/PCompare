@@ -23,6 +23,7 @@ pub const SESSION_KINDS: &[&str] = &[
     "registry",
     "version",
     "mp3",
+    "database",
 ];
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

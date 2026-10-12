@@ -9,7 +9,8 @@ repository.workspace = true
 [dependencies]
 pcompare-core = { path = "../pcompare-core" }
 pcompare-sync = { path = "../pcompare-sync" }
-rusqlite = { version = "0.40", features = ["bundled"] }
+# 0.39 shares libsqlite3-sys 0.37 with sqlx (pcompare-db); only one crate may link sqlite3.
+rusqlite = { version = "0.39", features = ["bundled"] }
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
