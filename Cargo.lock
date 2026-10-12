@@ -4947,7 +4947,7 @@ dependencies = [
 
 [[package]]
 name = "pcompare-archive"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "bzip2",
  "chrono",
@@ -4966,7 +4966,7 @@ dependencies = [
 
 [[package]]
 name = "pcompare-convert"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "cfb",
  "encoding_rs",
@@ -5094,7 +5094,7 @@ dependencies = [
 
 [[package]]
 name = "pcompare-report"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "chrono",
  "pcompare-core",
@@ -5105,7 +5105,7 @@ dependencies = [
 
 [[package]]
 name = "pcompare-script"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "chrono",
  "pcompare-core",
