@@ -4695,6 +4695,7 @@ dependencies = [
  "notify",
  "notify-debouncer-mini",
  "pcompare-core",
+ "pcompare-db",
  "pcompare-merge",
  "pcompare-meta",
  "pcompare-picture",
