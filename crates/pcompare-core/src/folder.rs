@@ -308,12 +308,19 @@ pub fn timestamps_match(
     right_ms: Option<i64>,
     opts: &FolderCompareOptions,
 ) -> bool {
-    // TODO(you): implement the tolerance policy. See the design notes in the
-    // PR / chat: consider `opts.time_tolerance_secs`, `opts.ignore_dst_shift`,
-    // and what to do when one side has no timestamp at all.
-    let _ = opts;
-    left_ms == right_ms
+    // A side without a timestamp (FTP without MLSD, S3 prefixes) only matches
+    // another missing one: unknown vs known is treated as a difference, which
+    // keeps a changed same-size file from passing as Same.
+    let (Some(l), Some(r)) = (left_ms, right_ms) else {
+        return left_ms.is_none() && right_ms.is_none();
+    };
+    let tolerance = opts.time_tolerance_secs.saturating_mul(1000);
+    let diff = l.abs_diff(r);
+    diff <= tolerance || (opts.ignore_dst_shift && diff.abs_diff(HOUR_MS) <= tolerance)
 }
+
+/// FAT/exFAT store local time, so a DST change shifts every file by an hour.
+const HOUR_MS: u64 = 3_600_000;
 
 fn newer_side(l: &EntryMeta, r: &EntryMeta, opts: &FolderCompareOptions) -> Option<Side> {
     match (l.modified_ms, r.modified_ms) {
@@ -694,7 +701,7 @@ pub fn compare_folders_with(
 mod timestamp_tests {
     use super::*;
 
-    const HOUR_MS: i64 = 3_600_000;
+    const HOUR_MS: i64 = super::HOUR_MS as i64;
 
     #[test]
     fn tolerance_absorbs_fat_rounding() {
@@ -715,5 +722,15 @@ mod timestamp_tests {
         assert!(timestamps_match(Some(t), Some(t + HOUR_MS), &opts));
         assert!(timestamps_match(Some(t + HOUR_MS + 1_500), Some(t), &opts));
         assert!(!timestamps_match(Some(t), Some(t + 2 * HOUR_MS), &opts));
+    }
+
+    #[test]
+    fn missing_timestamps_only_match_each_other() {
+        let opts = FolderCompareOptions::default();
+        assert!(timestamps_match(None, None, &opts));
+        assert!(!timestamps_match(Some(0), None, &opts));
+        assert!(!timestamps_match(None, Some(0), &opts));
+        // Extreme values must not overflow.
+        assert!(!timestamps_match(Some(i64::MIN), Some(i64::MAX), &opts));
     }
 }
