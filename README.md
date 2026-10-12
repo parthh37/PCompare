@@ -38,7 +38,7 @@ A fast, modern file & folder comparison tool for Windows and macOS — inspired 
 - [x] Ignore rules (regex-defined unimportant text) · [x] language grammars (comments, strings)
 - [x] **Table / CSV compare** with key columns
 - [x] **Image compare** (side-by-side, overlay, pixel-diff, tolerance)
-- [ ] Archive compare (zip / 7z / tar as folders)
+- [x] Archive compare (zip / 7z / tar as folders), folder snapshots, Subversion sides
 - [x] Saved sessions
 - [x] Workspaces (save all open tabs), file-format rules per extension
 - [x] HTML / text reports, folder compare reports
