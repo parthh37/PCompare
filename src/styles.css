@@ -1096,6 +1096,21 @@ textarea:focus {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.update-status {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+.update-status > span {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.update-status > button {
+  white-space: nowrap;
+}
 .update-banner progress {
   flex: 1;
   max-width: 260px;
@@ -1129,9 +1144,6 @@ button,
 }
 .ic-folder {
   color: #fbbf24;
-}
-.ic-file {
-  color: var(--muted);
 }
 .rb-name {
   display: inline-flex;
@@ -1179,4 +1191,100 @@ button,
   color: var(--muted);
   text-transform: uppercase;
   letter-spacing: 0.04em;
+}
+
+/* ---------- Beyond Compare–style toolbar and icons ---------- */
+.bc-toolbar {
+  display: flex;
+  align-items: stretch;
+  gap: 2px;
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--border);
+  background: linear-gradient(var(--panel-2), var(--panel));
+  flex-wrap: wrap;
+}
+.tool-btn {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  min-width: 54px;
+  padding: 4px 6px 3px;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  background: none;
+  font-size: 11px;
+  color: var(--text);
+}
+.tool-btn:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.06);
+  border-color: var(--border);
+}
+.tool-btn.active {
+  background: rgba(91, 156, 255, 0.18);
+  border-color: rgba(91, 156, 255, 0.55);
+}
+.tool-btn:disabled {
+  opacity: 0.4;
+}
+.tool-btn:disabled .tool-icon {
+  filter: grayscale(1);
+}
+.bc-toolbar .more-filters {
+  align-self: center;
+  margin: 0 4px;
+}
+.tool-sep {
+  width: 1px;
+  margin: 4px 5px;
+  background: var(--border);
+}
+.toolbar.filterbar {
+  padding: 5px 10px;
+}
+.file-icon,
+.tool-icon {
+  display: block;
+  flex-shrink: 0;
+}
+.ctx-menu button.ctx-icon {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+/* Older of two differing files: grey, as in Beyond Compare (the newer stays red). */
+.s-different .fcell.name.older,
+.s-different .fcell.older {
+  color: var(--muted);
+}
+/* Only one folder chosen: a plain listing, not orphan-purple on hatching. */
+.one-sided .fcell.absent {
+  background: none;
+}
+.one-sided .s-leftOnly .name,
+.one-sided .s-rightOnly .name {
+  color: var(--text);
+}
+.left-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  margin-right: 6px;
+  padding: 2px 4px 2px 7px;
+  font-size: 12px;
+  border: 1px solid rgba(91, 156, 255, 0.5);
+  border-radius: 999px;
+  background: rgba(91, 156, 255, 0.12);
+  max-width: 260px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.left-chip button {
+  display: inline-flex;
+  padding: 2px;
+  border: none;
+  background: none;
+  border-radius: 50%;
 }

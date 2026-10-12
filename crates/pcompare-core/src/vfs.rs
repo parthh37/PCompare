@@ -33,6 +33,24 @@ pub trait Vfs: Send + Sync {
 /// The machine's own file system.
 pub struct LocalFs;
 
+/// A file system with nothing in it. Stands in for the side of a folder
+/// compare that has no folder chosen yet, so the other side lists on its own.
+pub struct EmptyFs;
+
+impl Vfs for EmptyFs {
+    fn read_dir(&self, _dir: &str) -> Result<Vec<VfsEntry>> {
+        Ok(Vec::new())
+    }
+
+    fn open(&self, path: &str) -> Result<Box<dyn Read + Send>> {
+        Err(CoreError::io(path, std::io::ErrorKind::NotFound.into()))
+    }
+
+    fn join(&self, dir: &str, name: &str) -> String {
+        format!("{dir}/{name}")
+    }
+}
+
 pub(crate) fn meta_from_std(m: &Metadata) -> EntryMeta {
     let modified_ms = m
         .modified()

@@ -1,6 +1,7 @@
 import { getCurrentWebview } from "@tauri-apps/api/webview";
-import { CircleArrowUp, Globe, Plus, Save, X } from "lucide-react";
+import { Globe, Plus, Save, Settings, X } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
+import { AppSettingsDialog } from "./components/AppSettingsDialog";
 import { DbCompare } from "./components/DbCompare";
 import { FolderCompare } from "./components/FolderCompare";
 import { FolderMerge } from "./components/FolderMerge";
@@ -13,6 +14,7 @@ import { Profiles } from "./components/Profiles";
 import { RegistryCompare } from "./components/RegistryCompare";
 import { SaveSessionDialog } from "./components/SaveSessionDialog";
 import { SessionIcon } from "./components/SessionIcon";
+import { ToolIcon } from "./components/icons";
 import { TableCompare } from "./components/TableCompare";
 import { TextCompare } from "./components/TextCompare";
 import { TextMerge } from "./components/TextMerge";
@@ -30,7 +32,7 @@ import {
   type SessionKind,
 } from "./lib/sessions";
 import { ShellContext } from "./lib/shell";
-import { autoUpdateEnabled, setAutoUpdateEnabled, useUpdater } from "./lib/useUpdater";
+import { useUpdater } from "./lib/useUpdater";
 
 export type { SessionKind } from "./lib/sessions";
 
@@ -52,8 +54,9 @@ export interface Tab {
 /** `dbNames` titles Database Compare tabs by connection name rather than `db://` id. */
 function tabTitle(t: Tab, dbNames: Record<string, string>): string {
   if (t.sessionName) return t.sessionName;
-  if (!isCompareKind(t.kind) || !t.left || !t.right) return SESSIONS[t.kind].label;
+  if (!isCompareKind(t.kind) || !(t.left || t.right)) return SESSIONS[t.kind].label;
   const label = (p: string) => (t.kind === "database" ? dbPathLabel(p, dbNames) : basename(p));
+  if (!t.left || !t.right) return label(t.left || t.right);
   const l = label(t.left);
   const r = label(t.right);
   return l === r ? l : `${l} ↔ ${r}`;
@@ -72,7 +75,7 @@ export default function App() {
   /** Tabs whose session reported unsaved edits. */
   const dirtyTabs = useRef(new Set<number>());
   const updater = useUpdater(setToast);
-  const [autoUpdate, setAutoUpdate] = useState(autoUpdateEnabled);
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const dbNames = useDbConnectionNames();
 
   const refreshSaved = useCallback(
@@ -115,19 +118,42 @@ export default function App() {
         }),
     );
 
-  /** Picks the session type from what the two paths are. */
+  /** Picks the session type from what the two paths are; `right` may be empty to open one side. */
   const openAuto = useCallback(
     async (left: string, right: string) => {
-      const [lk, rk] = await Promise.all([api.pathKind(left), api.pathKind(right)]);
+      // A missing side takes the other's kind, so one folder still opens a folder compare.
+      const [lk, rk] = await Promise.all([api.pathKind(left), api.pathKind(right || left)]);
       if (lk === "directory" && rk === "directory") return openTab("folder", left, right);
-      let kind = sessionForFiles(left, right);
+      let kind = sessionForFiles(left, right || left);
       // `.db` is ambiguous (Thumbs.db, BerkeleyDB...): only SQLite files open as databases.
-      if (kind === "hex" && extension(left) === "db" && extension(right) === "db") {
+      if (kind === "hex" && right && extension(left) === "db" && extension(right) === "db") {
         if (await dbApi.isSqlite([left, right]).catch(() => false)) kind = "database";
       }
       openTab(kind, left, right);
     },
     [openTab],
+  );
+
+  // "Select Left Side for Compare" lives in a file the Explorer menu also
+  // writes, so re-read it whenever the window regains focus.
+  const [leftSelection, setLeftSelection] = useState<string | null>(null);
+  useEffect(() => {
+    const load = () => api.getLeftSelection().then(setLeftSelection).catch(() => {});
+    load();
+    window.addEventListener("focus", load);
+    return () => window.removeEventListener("focus", load);
+  }, []);
+  const selectLeft = useCallback((path: string | null) => {
+    setLeftSelection(path);
+    api.setLeftSelection(path).catch((e) => setToast(errorMessage(e)));
+  }, []);
+  const compareToLeft = useCallback(
+    (path: string) => {
+      if (!leftSelection) return;
+      openAuto(leftSelection, path).catch((e) => setToast(errorMessage(e)));
+      selectLeft(null);
+    },
+    [leftSelection, openAuto, selectLeft],
   );
 
   const updateTab = (id: number, patch: Partial<Tab>) =>
@@ -151,8 +177,8 @@ export default function App() {
     api
       .launchArgs()
       .then(async ([left, right, base, output]) => {
-        if (!left || !right) return;
-        if (!base) return openAuto(left, right);
+        if (!left) return;
+        if (!base) return openAuto(left, right ?? "");
         const kind = (await api.pathKind(base)) === "directory" ? "folderMerge" : "merge";
         openTab(kind, left, right, { base, output: output ?? "" });
       })
@@ -164,9 +190,10 @@ export default function App() {
     let unlisten: (() => void) | undefined;
     getCurrentWebview()
       .onDragDropEvent((e) => {
-        if (e.payload.type === "drop" && e.payload.paths.length >= 2) {
-          openAuto(e.payload.paths[0], e.payload.paths[1]);
-        }
+        if (e.payload.type !== "drop") return;
+        const [first, second] = e.payload.paths;
+        if (second) return openAuto(first, second);
+        if (first) dropOne.current(first);
       })
       .then((u) => (unlisten = u))
       .catch(() => {});
@@ -174,6 +201,17 @@ export default function App() {
   }, [openAuto]);
 
   const activeTab = tabs.find((t) => t.id === active);
+
+  /** One dropped path fills the empty side of the active compare, or opens on its own. */
+  const dropOne = useRef((_path: string) => {});
+  dropOne.current = (path: string) => {
+    const t = activeTab;
+    if (t && isCompareKind(t.kind) && !SESSIONS[t.kind].threeWay && (!t.left || !t.right)) {
+      updateTab(t.id, t.left ? { right: path } : { left: path });
+    } else {
+      openAuto(path, "").catch((e) => setToast(errorMessage(e)));
+    }
+  };
   const canSave = canSaveTab(activeTab);
 
   useEffect(() => {
@@ -293,7 +331,7 @@ export default function App() {
   };
 
   return (
-    <ShellContext.Provider value={{ openProfiles }}>
+    <ShellContext.Provider value={{ openProfiles, leftSelection, selectLeft, compareToLeft }}>
       <div className="app">
         <nav className="tabbar">
           {tabs.map((t) => (
@@ -322,6 +360,15 @@ export default function App() {
             <Plus size={15} />
           </button>
           <span className="spacer" />
+          {leftSelection && (
+            <span className="left-chip" title={`Left side for compare:\n${leftSelection}\nRight-click another item → Compare to`}>
+              <ToolIcon name="selectLeft" size={14} />
+              Left: {basename(leftSelection)}
+              <button aria-label="Clear left side" onClick={() => selectLeft(null)}>
+                <X size={12} />
+              </button>
+            </span>
+          )}
           <button
             className="tab-action"
             title="Save session (Ctrl+Shift+S)"
@@ -333,13 +380,8 @@ export default function App() {
           <button className="tab-action" title="Connection profiles" onClick={openProfiles}>
             <Globe size={14} /> Profiles
           </button>
-          <button
-            className="tab-action"
-            title={`PCompare ${updater.version} — check for updates`}
-            disabled={updater.phase.kind === "checking" || updater.phase.kind === "downloading"}
-            onClick={updater.checkNow}
-          >
-            <CircleArrowUp size={14} /> {updater.phase.kind === "checking" ? "Checking…" : "Updates"}
+          <button className="tab-action" title="Settings and updates" onClick={() => setSettingsOpen(true)}>
+            <Settings size={14} /> Settings
           </button>
         </nav>
 
@@ -369,11 +411,8 @@ export default function App() {
                 <label className="check muted">
                   <input
                     type="checkbox"
-                    checked={autoUpdate}
-                    onChange={(e) => {
-                      setAutoUpdateEnabled(e.target.checked);
-                      setAutoUpdate(e.target.checked);
-                    }}
+                    checked={updater.autoCheck}
+                    onChange={(e) => updater.setAutoCheck(e.target.checked)}
                   />
                   Check automatically
                 </label>
@@ -411,6 +450,7 @@ export default function App() {
             }}
           />
         )}
+        {settingsOpen && <AppSettingsDialog updater={updater} onClose={() => setSettingsOpen(false)} />}
         {toast && <div className="toast">{toast}</div>}
       </div>
     </ShellContext.Provider>
