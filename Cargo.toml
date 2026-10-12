@@ -8,6 +8,7 @@ members = [
     "crates/pcompare-picture",
     "crates/pcompare-sync",
     "crates/pcompare-meta",
+    "crates/pcompare-db",
     "src-tauri",
 ]
 
