@@ -19,6 +19,7 @@
 //! corrupt is moved aside (`<name>.corrupt-<unix_ms>`) and replaced with a
 //! fresh one rather than deleted.
 
+pub mod automation; // automation
 pub mod baselines;
 pub mod checksums;
 pub mod jobs;
@@ -33,6 +34,7 @@ use pcompare_core::store::now_ms;
 use rusqlite::{Connection, ErrorCode};
 use serde::Serialize;
 
+pub use automation::{AutomationRun, NewRun, RunFinish, RunStatus, RunTrigger, TaskState}; // automation
 pub use checksums::CachedChecksums;
 pub use jobs::{JobDetail, JobJournal, JobOp, JobStatus, JobSummary, NewJob, OpState};
 
@@ -152,6 +154,42 @@ pub const MIGRATIONS: &[&str] = &[
         PRIMARY KEY (job_id, op_id)
     ) WITHOUT ROWID;
     "#,
+    // automation:engine
+    // v2: sync automation run history and per-task scheduler state (see
+    // `automation`). `notifications` is a JSON array of delivery results.
+    r#"
+    CREATE TABLE automation_runs (
+        id            TEXT PRIMARY KEY,
+        task_id       TEXT NOT NULL,
+        task_name     TEXT NOT NULL,
+        run_trigger   TEXT NOT NULL,
+        attempt       INTEGER NOT NULL,
+        status        TEXT NOT NULL,
+        started_ms    INTEGER NOT NULL,
+        finished_ms   INTEGER,
+        job_id        TEXT,
+        ops_total     INTEGER NOT NULL DEFAULT 0,
+        ops_done      INTEGER NOT NULL DEFAULT 0,
+        ops_failed    INTEGER NOT NULL DEFAULT 0,
+        conflicts     INTEGER NOT NULL DEFAULT 0,
+        bytes_copied  INTEGER NOT NULL DEFAULT 0,
+        message       TEXT,
+        notifications TEXT NOT NULL DEFAULT '[]'
+    );
+    CREATE INDEX automation_runs_by_task ON automation_runs (task_id, started_ms);
+    CREATE INDEX automation_runs_by_start ON automation_runs (started_ms);
+
+    CREATE TABLE automation_state (
+        task_id                   TEXT PRIMARY KEY,
+        last_run_ms               INTEGER,
+        last_status               TEXT,
+        last_success_ms           INTEGER,
+        consecutive_failures      INTEGER NOT NULL DEFAULT 0,
+        last_notified_ms          INTEGER,
+        last_notified_fingerprint TEXT
+    ) WITHOUT ROWID;
+    "#,
+    // automation:engine end
 ];
 
 /// Schema version this build writes.
