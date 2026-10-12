@@ -205,16 +205,18 @@ impl ExecReport {
     }
 }
 
-/// Whether a failure is worth retrying after a pause.
+/// Whether a failure is worth retrying after a pause. Every kind listed
+/// here costs a full retry cycle (~3.5 s with the default backoff) per file
+/// when the failure turns out to be permanent.
 ///
-/// TODO(you): decide which failures are transient. See the notes in the PR /
-/// session: every kind you add here costs up to ~15 s (with the default
-/// backoff) per affected file when the failure turns out to be permanent.
+/// Access denied is retried only on Windows, where it is usually fleeting —
+/// an antivirus scan, the search indexer, or a delete still pending — while
+/// elsewhere it means real permissions that no amount of waiting will fix.
 pub fn is_transient(kind: FailureKind) -> bool {
     matches!(
         kind,
         FailureKind::Locked | FailureKind::Network | FailureKind::SourceChanged | FailureKind::VerifyFailed
-    )
+    ) || (kind == FailureKind::AccessDenied && cfg!(windows))
 }
 
 /// Delay before retry number `retry` (1-based): exponential, capped.
@@ -1223,6 +1225,14 @@ mod tests {
         let huge = SyncOp { size: u64::MAX / 2, ..copy };
         let issues = preflight(&p.left, &p.right, &[huge]);
         assert!(issues.iter().any(|i| !i.blocking && i.message.contains("space")), "{issues:?}");
+    }
+
+    #[test]
+    fn access_denied_is_retried_only_on_windows() {
+        assert!(is_transient(FailureKind::Locked));
+        assert_eq!(is_transient(FailureKind::AccessDenied), cfg!(windows));
+        assert!(!is_transient(FailureKind::NotFound));
+        assert!(!is_transient(FailureKind::ChangedSincePreview));
     }
 
     #[test]
