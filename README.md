@@ -52,7 +52,7 @@ A fast, modern file & folder comparison tool for Windows and macOS — inspired 
 - [x] Syntax highlighting · [ ] semantic (AST-aware) code diff
 - [ ] Moved-block detection
 - [x] Office/PDF text extraction compare (docx, doc, odt, rtf, pdf)
-- [ ] Git integration: compare branches/commits, blame-aware view
+- [x] Git integration: compare branches/commits (`git:` / `hg:` sides), difftool / mergetool setup with `--wait` · [ ] blame-aware view <!-- araxis:vcs -->
 - [x] Watch mode — live re-compare on file change
 - [ ] AI-generated change summary of a diff
 - [x] Light theme & custom color schemes
@@ -163,7 +163,10 @@ Switches take Beyond Compare's spelling (`/name=value`, case-insensitive) or a G
 | `/fv=<viewer>`, `--viewer <kind>` | Open as a specific session: `text`, `hex`, `table`, `picture`, `folder`, `sync`, `merge`, `folderMerge`, `registry`, `version`, `mp3`, `database` (BC names such as `"Text Compare"` or `"Data Compare"` work too) |
 | `/title1=<text>`, `/title2=<text>`, `--title-left`, `--title-right` | Tab labels instead of the file names (handy for git's temporary files) |
 | `/readonly` (`/ro`), `/lro`, `/rro`, `--readonly[-left\|-right]` | Open sides read-only in Text Compare |
-| `/mergeoutput=<path>`, `--merge-output <path>` | Where a 3-way merge writes its result |
+| `/mergeoutput=<path>`, `--merge-output <path>` | Where a 3-way merge writes its result (implies `--wait`) |
+| `/wait`, `--wait` | Don't return until the comparison's tab is closed — also when PCompare is already running. Exit code `0`, or `1` for a merge whose output was never saved <!-- araxis:vcs --> |
+| `--base-first` | Merge paths come as `<base> <theirs> <yours> <merged>` (P4MERGE, svn `merge-tool-cmd`) <!-- araxis:vcs --> |
+| `-L <label>` | Labels the next side, as `svn diff --diff-cmd` passes them <!-- araxis:vcs --> |
 | `/qc[=<method>]`, `--quick-compare[=<method>]` | Compare headlessly and print one line. `rules` (default) applies the text rules to text files and compares other files byte by byte; `binary`, `crc` and `size` are stricter or quicker. Folders are compared recursively |
 | `@<file>`, `/silent` | Run a script (below); `/silent` prints only errors |
 | `--select-left <path>`, `--compare-to <path>` | Explorer's "Select Left Side" / "Compare to" |
@@ -229,25 +232,48 @@ sync create-empty mirror:left->right
 
 Scripts work on local folders; `printer` and `clipboard` outputs need the window.
 
-### Use as a git difftool
+<!-- araxis:vcs -->
+### Version control
+
+**Revisions as sides.** Any path field (and the command line) takes `git:<path>[@<revision>]` or
+`hg:<path>[@<revision>]`: a file or folder of a clone at that revision, read through the `git` / `hg` client and
+read-only. `git:C:\src\app\main.c@HEAD~1` against `C:\src\app\main.c` shows your uncommitted change;
+`git:/src/app@v1.2` against `git:/src/app@origin/main` compares two trees in Folder Compare. Without `@`, `HEAD`
+(git) or `.` (hg) is used. The branch button next to a path field picks a revision from the history.
+
+**git difftool / mergetool.** *Settings → Source control → Set up git…* shows these commands and runs them when you
+confirm (the path is the installed `pcompare` executable):
 
 ```bash
-git config --global diff.tool pcompare
-# $BASE is the file's name in the repository; the titles replace git's temporary file names.
-git config --global difftool.pcompare.cmd '"C:/Program Files/PCompare/pcompare.exe" /title1="$BASE (old)" /title2="$BASE (new)" "$LOCAL" "$REMOTE"'
-```
-
-To check whether two revisions differ without opening a window: `pcompare /qc "$LOCAL" "$REMOTE"` (exit code 0 or 1).
-
-### Use as a git mergetool
-
-The argument order matches Beyond Compare (`left right base output`):
-
-```bash
+git config --global difftool.pcompare.cmd '"C:/Program Files/PCompare/pcompare.exe" --wait "$LOCAL" "$REMOTE"'
+git config --global mergetool.pcompare.cmd '"C:/Program Files/PCompare/pcompare.exe" --wait "$LOCAL" "$REMOTE" "$BASE" "$MERGED"'
+git config --global mergetool.pcompare.trustExitCode true
+git config --global diff.tool pcompare     # optional: make it the default
 git config --global merge.tool pcompare
-git config --global mergetool.pcompare.cmd '"C:/Program Files/PCompare/pcompare.exe" "$LOCAL" "$REMOTE" "$BASE" /mergeoutput="$MERGED"'
-git config --global mergetool.pcompare.trustExitCode false
 ```
+
+`--wait` keeps the process alive until you close that tab, even with PCompare already open, so git doesn't delete
+its temporary files early; a merge closed without saving its output exits with 1, which `trustExitCode` reports as an
+unresolved merge. Add `/title1="$BASE (old)" /title2="$BASE (new)"` to the difftool command for readable tab names.
+To check whether two revisions differ without a window: `pcompare /qc "$LOCAL" "$REMOTE"` (exit code 0 or 1).
+
+**Mercurial, Perforce, Subversion.** The same Settings page has copy-paste snippets, e.g. for `~/.hgrc`:
+
+```ini
+[extdiff]
+cmd.pcompare = /Applications/PCompare.app/Contents/MacOS/PCompare
+opts.pcompare = --wait
+
+[merge-tools]
+pcompare.executable = /Applications/PCompare.app/Contents/MacOS/PCompare
+pcompare.args = --wait $local $other $base $output
+pcompare.gui = True
+```
+
+Perforce: `P4DIFF="pcompare --wait"`, `P4MERGE="pcompare --wait --base-first"`, or in P4V *Other application* with
+arguments `--wait %1 %2` (diff) and `--wait %2 %1 %b %r` (merge). Subversion: `svn diff --diff-cmd pcompare -x --wait`,
+and a two-line `merge-tool-cmd` script calling `pcompare --wait --base-first "$1" "$2" "$3" "$4"`.
+<!-- araxis:vcs end -->
 
 ## License
 

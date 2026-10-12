@@ -1,4 +1,5 @@
 import type { DialogFilter } from "@tauri-apps/plugin-dialog";
+import { embedInactive } from "../lib/embeddedPane"; // araxis:folder
 import {
   ArrowDown,
   ArrowDownWideNarrow,
@@ -440,6 +441,7 @@ export function TableCompare({ left, right, onPathsChange, settings, onSettingsC
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (!root.current?.offsetParent) return; // hidden tab
+      if (embedInactive(root.current)) return; // araxis:folder — split view: the folder list has the keys
       if (e.altKey && e.key === "ArrowDown") goDiff(diffIdx + 1);
       else if (e.altKey && e.key === "ArrowUp") goDiff(diffIdx - 1);
       else if (e.key === "F5") run();

@@ -1,6 +1,6 @@
 import { useState } from "react";
-import { ATTR, type ContentMethod, type WhitespaceMode } from "../lib/api";
-import { parseAlignRules, type CompareSettings } from "../lib/folderSettings";
+import { ATTR, type ContentMethod, type LargeFileMethod, type WhitespaceMode } from "../lib/api";
+import { COMPARE_PRESETS, NAMED_PRESETS, parseAlignRules, presetOf, type CompareSettings } from "../lib/folderSettings";
 import { Modal } from "./Modal";
 
 interface Props {
@@ -20,11 +20,15 @@ const ATTR_FILTERS: { bit: number; label: string }[] = [
 
 const CONTENT_METHODS: { value: ContentMethod; label: string; help: string }[] = [
   { value: "off", label: "Off", help: "Only the quick tests decide." },
-  { value: "binary", label: "Binary", help: "Byte-for-byte; stops at the first difference. Fastest content check." },
+  {
+    value: "binary",
+    label: "Binary (byte-by-byte)",
+    help: "Byte-for-byte; stops at the first difference. Fastest content check.",
+  },
   { value: "crc", label: "CRC-32", help: "Reads both files fully and shows their checksums." },
   {
     value: "rules",
-    label: "Rules-based",
+    label: "Rules-based (thorough)",
     help: "Compares text with the rules tab: encoding, line endings, whitespace, case and ignored patterns can be unimportant (shown as ≈ similar). Binary files fall back to binary.",
   },
   {
@@ -32,6 +36,12 @@ const CONTENT_METHODS: { value: ContentMethod; label: string; help: string }[] =
     label: "Exe/dll version",
     help: "Executables and libraries with the same version resource are the same even if their bytes differ. Other files fall back to binary.",
   },
+];
+
+const LARGE_FILE_METHODS: { value: LargeFileMethod; label: string }[] = [
+  { value: "binary", label: "Binary (byte-by-byte)" },
+  { value: "size", label: "Size only" },
+  { value: "sizeTimestamp", label: "Size and timestamp" },
 ];
 
 /** Beyond Compare-style session settings: comparison, filters, text rules. */
@@ -44,6 +54,7 @@ export function FolderSettingsDialog({ value, onApply, onClose }: Props) {
   const toggleAttr = (bit: number, on: boolean) =>
     setS((p) => ({ ...p, excludeAttributes: on ? p.excludeAttributes | bit : p.excludeAttributes & ~bit }));
   const badRules = parseAlignRules(s.alignRules).invalid;
+  const preset = presetOf(s);
 
   return (
     <Modal
@@ -82,6 +93,29 @@ export function FolderSettingsDialog({ value, onApply, onClose }: Props) {
 
       {page === "comparison" && (
         <div className="settings-grid">
+          <fieldset className="fs-presets">
+            <legend>Comparison type</legend>
+            <div className="seg-control">
+              {NAMED_PRESETS.map((p) => (
+                <button
+                  key={p.key}
+                  className={preset === p.key ? "active" : ""}
+                  title={p.help}
+                  onClick={() => {
+                    const { compareSize, compareTimestamp, content } = COMPARE_PRESETS[p.key];
+                    setS((cur) => ({ ...cur, compareSize, compareTimestamp, content }));
+                  }}
+                >
+                  {p.name}
+                </button>
+              ))}
+            </div>
+            <small className="muted">
+              {NAMED_PRESETS.find((p) => p.key === preset)?.help ??
+                "Custom: the quick tests and content method below don’t match a named type."}
+            </small>
+          </fieldset>
+
           <fieldset>
             <legend>Quick tests</legend>
             <label className="field check">
@@ -156,6 +190,42 @@ export function FolderSettingsDialog({ value, onApply, onClose }: Props) {
             <small className="muted">
               When on, contents decide (identical files with different timestamps are “same”). When off, files must
               pass both.
+            </small>
+            <div className="field-row fs-large">
+              <label className="field check">
+                <input
+                  type="checkbox"
+                  checked={s.largeFileThresholdMb != null}
+                  disabled={s.content === "off"}
+                  onChange={(e) => set("largeFileThresholdMb", e.target.checked ? 100 : null)}
+                />
+                For files larger than
+              </label>
+              <input
+                type="number"
+                min={0}
+                step="any"
+                aria-label="Size threshold in MB"
+                value={s.largeFileThresholdMb ?? ""}
+                disabled={s.content === "off" || s.largeFileThresholdMb == null}
+                onChange={(e) => set("largeFileThresholdMb", num(e.target.value) ?? 0)}
+              />
+              <span>MB use</span>
+              <select
+                value={s.largeFileMethod}
+                disabled={s.content === "off" || s.largeFileThresholdMb == null}
+                onChange={(e) => set("largeFileMethod", e.target.value as LargeFileMethod)}
+              >
+                {LARGE_FILE_METHODS.map((m) => (
+                  <option key={m.value} value={m.value}>
+                    {m.label}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <small className="muted">
+              Keeps a thorough comparison fast on big files: above the size, the pair is compared byte-by-byte (or by
+              metadata alone) instead of being decoded as text.
             </small>
           </fieldset>
         </div>

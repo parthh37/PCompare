@@ -36,3 +36,90 @@
   color: var(--danger-text);
   white-space: normal;
 }
+.report-bookmarks {
+  margin-top: 8px;
+  font-size: 12px;
+}
+.report-print {
+  margin: 12px 0 0;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 8px 12px 10px;
+}
+.report-print legend {
+  padding: 0 4px;
+  font-weight: 600;
+}
+.report-template {
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+.report-template > span {
+  width: 52px;
+  flex: none;
+}
+.report-template input {
+  flex: 1;
+  min-width: 0;
+  font-family: var(--mono);
+  font-size: 12px;
+}
+.report-tokens {
+  display: block;
+  margin: 0 0 6px 60px;
+}
+
+/* Print preview: the report on a white sheet at the paper's printable width. */
+.modal.report-preview {
+  width: min(1000px, 96vw);
+  height: 92vh;
+  max-height: 92vh;
+}
+.report-pages {
+  margin-left: auto;
+  margin-right: 8px;
+  font-weight: normal;
+  font-size: 12px;
+}
+.report-preview-body {
+  flex: 1;
+  background: rgba(0, 0, 0, 0.18);
+}
+.report-sheet {
+  --sheet-pad-y: 53px; /* 14mm top margin */
+  position: relative;
+  box-sizing: content-box;
+  margin: 0 auto;
+  padding: var(--sheet-pad-y) 45px; /* 14mm × 12mm, the @page margins */
+  background: #fff;
+  box-shadow: 0 1px 8px rgba(0, 0, 0, 0.35);
+}
+.report-sheet iframe {
+  display: block;
+  border: 0;
+  background: #fff;
+}
+.report-guide {
+  position: absolute;
+  left: 0;
+  right: 0;
+  border-top: 2px dashed rgba(217, 119, 6, 0.6);
+  pointer-events: none;
+}
+.report-guide span {
+  position: absolute;
+  right: 6px;
+  top: -18px;
+  padding: 0 4px;
+  font-size: 10px;
+  color: #b45309;
+  background: #fff;
+}
+.report-paper {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+}

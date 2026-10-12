@@ -1,11 +1,13 @@
 //! Text comparison reports: side-by-side or unified layouts as HTML (with
-//! the app's diff colours and intra-line highlights) or plain text, and
-//! unified patches.
+//! the app's diff colours, intra-line highlights and bookmark comments), an
+//! HTML slideshow or plain text; unified patches, classic `diff` output and
+//! XML.
 
 use crate::html::{self, escape, Style};
-use crate::{display_width, expand_tabs, pad};
+use crate::{display_width, expand_tabs, pad, xml};
 use pcompare_core::text::{DiffRow, RowKind, Segment, TextDiffResult};
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::fmt::Write;
 use std::ops::Range;
 
@@ -29,6 +31,54 @@ pub enum TextReportFormat {
     /// A unified diff (`--- / +++ / @@`) that `patch` and `git apply` read;
     /// ignores the layout and always shows `context` lines around changes.
     Patch,
+    /// Classic (normal) `diff` output: `3c3`, `5a6,7`, `8d7` commands with
+    /// `< ` / `> ` lines and no context; `patch` reads it too.
+    #[serde(alias = "normal")]
+    NormalDiff,
+    /// Summary counts and every difference as XML (schema in [`crate::xml`]).
+    Xml,
+    /// A self-contained HTML page showing one difference at a time, with its
+    /// context lines, Prev/Next buttons and the ←/→ keys.
+    Slideshow,
+}
+
+/// Side of a bookmarked line.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum BookmarkSide {
+    Left,
+    Right,
+}
+
+/// A bookmarked line (1-based) with an optional comment, shown as an
+/// annotation in HTML reports (and listed in XML ones).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TextBookmark {
+    pub side: BookmarkSide,
+    pub line: usize,
+    #[serde(default)]
+    pub comment: Option<String>,
+}
+
+impl TextBookmark {
+    fn comment(&self) -> Option<&str> {
+        self.comment
+            .as_deref()
+            .map(str::trim)
+            .filter(|c| !c.is_empty())
+    }
+
+    fn label(&self) -> String {
+        format!("{} line {}", side_name(self.side), self.line)
+    }
+}
+
+fn side_name(side: BookmarkSide) -> &'static str {
+    match side {
+        BookmarkSide::Left => "Left",
+        BookmarkSide::Right => "Right",
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -82,14 +132,33 @@ pub struct TextSection<'a> {
 /// Renders `sections` in the format and layout `opts` asks for. `generated`
 /// is the "produced" stamp (empty to leave it out).
 pub fn render(sections: &[TextSection], opts: &TextReportOptions, generated: &str) -> String {
+    render_annotated(sections, opts, &[], generated)
+}
+
+/// [`render`] with bookmarks: HTML and slideshow reports mark the lines and
+/// show their comments (HTML also lists them, and its differences-only view
+/// keeps bookmarked lines visible); XML lists them. They apply to every
+/// section (reports from the app have one).
+pub fn render_annotated(
+    sections: &[TextSection],
+    opts: &TextReportOptions,
+    bookmarks: &[TextBookmark],
+    generated: &str,
+) -> String {
     match opts.format {
-        TextReportFormat::Html => render_html(sections, opts, generated),
+        TextReportFormat::Html => render_html(sections, opts, bookmarks, generated),
         TextReportFormat::Text => render_text(sections, opts, generated),
         TextReportFormat::Patch => sections.iter().map(|s| patch(s, opts)).collect(),
+        TextReportFormat::NormalDiff => sections
+            .iter()
+            .map(|s| normal_diff(s, opts, sections.len() > 1))
+            .collect(),
+        TextReportFormat::Xml => render_xml(sections, opts, bookmarks, generated),
+        TextReportFormat::Slideshow => crate::slides::render(sections, opts, bookmarks, generated),
     }
 }
 
-fn title(opts: &TextReportOptions) -> &str {
+pub(crate) fn title(opts: &TextReportOptions) -> &str {
     if opts.title.trim().is_empty() {
         "Text Compare"
     } else {
@@ -99,13 +168,13 @@ fn title(opts: &TextReportOptions) -> &str {
 
 // ---------- shared helpers ----------
 
-fn joined(side: &Option<Vec<Segment>>) -> Option<String> {
+pub(crate) fn joined(side: &Option<Vec<Segment>>) -> Option<String> {
     side.as_ref()
         .map(|segs| segs.iter().map(|s| s.text.as_str()).collect())
 }
 
 /// Whether a row is a difference worth reporting.
-fn is_difference(row: &DiffRow, ignore_unimportant: bool) -> bool {
+pub(crate) fn is_difference(row: &DiffRow, ignore_unimportant: bool) -> bool {
     match row.kind {
         RowKind::Equal => false,
         RowKind::Unimportant => !ignore_unimportant,
@@ -144,8 +213,56 @@ fn shown_ranges(
     out
 }
 
+/// Each run of consecutive differences (per [`is_difference`]); there are as
+/// many as the summary's difference sections.
+pub(crate) fn difference_blocks(rows: &[DiffRow], ignore_unimportant: bool) -> Vec<Range<usize>> {
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < rows.len() {
+        if !is_difference(&rows[i], ignore_unimportant) {
+            i += 1;
+            continue;
+        }
+        let start = i;
+        while i < rows.len() && is_difference(&rows[i], ignore_unimportant) {
+            i += 1;
+        }
+        out.push(start..i);
+    }
+    out
+}
+
+/// What a block of differences does, as XML and slideshows name it.
+pub(crate) fn block_kind(block: &[DiffRow]) -> &'static str {
+    if block.iter().all(|r| r.kind == RowKind::LeftOnly) {
+        "leftOnly"
+    } else if block.iter().all(|r| r.kind == RowKind::RightOnly) {
+        "rightOnly"
+    } else if block.iter().all(|r| r.kind == RowKind::Unimportant) {
+        "unimportant"
+    } else {
+        "changed"
+    }
+}
+
+/// First line number and count of one side within `block`; a side with no
+/// lines there gives the line before it (0 at the top), as patches do.
+pub(crate) fn block_span(
+    rows: &[DiffRow],
+    block: &Range<usize>,
+    pick: fn(&DiffRow) -> Option<usize>,
+) -> (usize, usize) {
+    let lines = &rows[block.clone()];
+    let count = lines.iter().filter(|r| pick(r).is_some()).count();
+    let start = lines
+        .iter()
+        .find_map(pick)
+        .unwrap_or_else(|| rows[..block.start].iter().rev().find_map(pick).unwrap_or(0));
+    (start, count)
+}
+
 /// Counts for the summary line, honouring "ignore unimportant".
-struct Summary {
+pub(crate) struct Summary {
     sections: usize,
     changed: usize,
     left_only: usize,
@@ -153,7 +270,7 @@ struct Summary {
     unimportant: usize,
 }
 
-fn summarize(diff: &TextDiffResult, ignore_unimportant: bool) -> Summary {
+pub(crate) fn summarize(diff: &TextDiffResult, ignore_unimportant: bool) -> Summary {
     let mut s = Summary {
         sections: 0,
         changed: 0,
@@ -179,7 +296,7 @@ fn summarize(diff: &TextDiffResult, ignore_unimportant: bool) -> Summary {
     s
 }
 
-fn summary_text(s: &Summary, ignore_unimportant: bool) -> String {
+pub(crate) fn summary_text(s: &Summary, ignore_unimportant: bool) -> String {
     if s.sections == 0 {
         return if s.unimportant > 0 && ignore_unimportant {
             format!(
@@ -208,7 +325,7 @@ fn hidden_label(n: usize) -> String {
     format!("{n} unchanged line{}", if n == 1 { "" } else { "s" })
 }
 
-fn no(n: Option<usize>) -> String {
+pub(crate) fn no(n: Option<usize>) -> String {
     n.map(|n| n.to_string()).unwrap_or_default()
 }
 
@@ -250,7 +367,103 @@ fn row_marker(kind: RowKind) -> &'static str {
     }
 }
 
-fn render_html(sections: &[TextSection], opts: &TextReportOptions, generated: &str) -> String {
+/// Bookmarks by line, for marking line numbers and adding comment rows.
+pub(crate) struct Notes<'a> {
+    marks: HashMap<(BookmarkSide, usize), &'a TextBookmark>,
+    /// Prefix of the `id`s given to bookmarked line numbers (for links from
+    /// the comment list); `None` for no ids.
+    ids: Option<String>,
+}
+
+impl<'a> Notes<'a> {
+    pub(crate) fn new(bookmarks: &'a [TextBookmark], ids: Option<String>) -> Self {
+        let mut marks: HashMap<_, &TextBookmark> = HashMap::new();
+        for b in bookmarks {
+            // A duplicate keeps whichever has a comment.
+            let e = marks.entry((b.side, b.line)).or_insert(b);
+            if e.comment().is_none() {
+                *e = b;
+            }
+        }
+        Self { marks, ids }
+    }
+
+    fn get(&self, side: BookmarkSide, n: Option<usize>) -> Option<&'a TextBookmark> {
+        n.and_then(|n| self.marks.get(&(side, n)).copied())
+    }
+
+    fn marked(&self, row: &DiffRow) -> bool {
+        self.get(BookmarkSide::Left, row.left_no).is_some()
+            || self.get(BookmarkSide::Right, row.right_no).is_some()
+    }
+
+    fn anchor(&self, side: BookmarkSide, n: usize) -> Option<String> {
+        let tag = if side == BookmarkSide::Left { 'l' } else { 'r' };
+        self.ids.as_ref().map(|p| format!("{p}bm-{tag}{n}"))
+    }
+
+    /// A line-number cell, marked (and anchored) when bookmarked.
+    fn ln(&self, side: BookmarkSide, n: Option<usize>) -> String {
+        match (n, self.get(side, n)) {
+            (Some(n), Some(b)) => {
+                let id = self
+                    .anchor(side, n)
+                    .map(|a| format!(" id=\"{a}\""))
+                    .unwrap_or_default();
+                let tip = b.comment().map(escape).unwrap_or_else(|| "Bookmark".into());
+                format!("<td class=\"ln bm\"{id} title=\"{tip}\">{n}</td>")
+            }
+            _ => format!("<td class=\"ln\">{}</td>", no(n)),
+        }
+    }
+
+    /// Comment rows for the bookmarks on these lines (left first).
+    fn rows(&self, out: &mut String, left: Option<usize>, right: Option<usize>, cols: usize) {
+        for (side, n) in [(BookmarkSide::Left, left), (BookmarkSide::Right, right)] {
+            if let Some(b) = self.get(side, n) {
+                if let Some(c) = b.comment() {
+                    let _ = writeln!(
+                        out,
+                        "<tr class=\"note\"><td colspan=\"{cols}\"><span class=\"tag\">{}</span>{}</td></tr>",
+                        escape(&b.label()),
+                        escape(c)
+                    );
+                }
+            }
+        }
+    }
+
+    /// The "Comments" list: every bookmark, linked to its line.
+    fn list(&self, out: &mut String) {
+        if self.marks.is_empty() {
+            return;
+        }
+        let mut all: Vec<&TextBookmark> = self.marks.values().copied().collect();
+        all.sort_by_key(|b| (b.side, b.line));
+        out.push_str("<h3>Comments</h3>\n<ul class=\"comments\">\n");
+        for b in all {
+            let label = match self.anchor(b.side, b.line) {
+                Some(a) => format!("<a href=\"#{a}\">{}</a>", escape(&b.label())),
+                None => escape(&b.label()),
+            };
+            let _ = writeln!(
+                out,
+                "<li><span class=\"tag\">{label}</span>{}</li>",
+                b.comment()
+                    .map(escape)
+                    .unwrap_or_else(|| "<span class=\"note-empty\">(bookmark)</span>".into())
+            );
+        }
+        out.push_str("</ul>\n");
+    }
+}
+
+fn render_html(
+    sections: &[TextSection],
+    opts: &TextReportOptions,
+    bookmarks: &[TextBookmark],
+    generated: &str,
+) -> String {
     let title = title(opts);
     let mut body = format!("<h1>{}</h1>\n", escape(title));
     if !generated.is_empty() {
@@ -260,7 +473,7 @@ fn render_html(sections: &[TextSection], opts: &TextReportOptions, generated: &s
             escape(generated)
         );
     }
-    for s in sections {
+    for (n, s) in sections.iter().enumerate() {
         if sections.len() > 1 {
             let _ = writeln!(
                 body,
@@ -280,16 +493,25 @@ fn render_html(sections: &[TextSection], opts: &TextReportOptions, generated: &s
             "<div class=\"stats\">{}</div>",
             escape(&summary_text(&summary, opts.ignore_unimportant))
         );
+        let ids = if sections.len() > 1 {
+            format!("s{}-", n + 1)
+        } else {
+            String::new()
+        };
+        let notes = Notes::new(bookmarks, Some(ids));
+        // Bookmarked lines stay visible in a differences-only report.
         let ranges = shown_ranges(&s.diff.rows, !opts.differences_only, opts.context, |r| {
-            is_difference(r, opts.ignore_unimportant)
+            is_difference(r, opts.ignore_unimportant) || notes.marked(r)
         });
-        if ranges.is_empty() {
-            continue;
+        if !ranges.is_empty() {
+            match opts.layout {
+                TextLayout::SideBySide => {
+                    side_by_side_html(&mut body, s.diff, &ranges, opts, &notes, true)
+                }
+                TextLayout::Unified => unified_html(&mut body, s.diff, &ranges, opts, &notes, true),
+            }
         }
-        match opts.layout {
-            TextLayout::SideBySide => side_by_side_html(&mut body, s.diff, &ranges, opts),
-            TextLayout::Unified => unified_html(&mut body, s.diff, &ranges, opts),
-        }
+        notes.list(&mut body);
     }
     html::page(
         title,
@@ -312,36 +534,50 @@ fn gap_row(out: &mut String, n: usize, cols: usize) {
     }
 }
 
+/// Emits each range, with separators for the rows between them (and, with
+/// `edges`, before the first and after the last).
 fn for_each_range(
     out: &mut String,
     rows: usize,
     ranges: &[Range<usize>],
     cols: usize,
+    edges: bool,
     mut emit: impl FnMut(&mut String, Range<usize>),
 ) {
-    let mut next = 0;
+    let mut next = if edges {
+        0
+    } else {
+        ranges.first().map_or(0, |r| r.start)
+    };
     for r in ranges {
         gap_row(out, r.start - next, cols);
         next = r.end;
         emit(out, r.clone());
     }
-    gap_row(out, rows - next, cols);
+    if edges {
+        gap_row(out, rows - next, cols);
+    }
 }
 
-fn side_by_side_html(
+/// Side-by-side table of `ranges`; `edges` adds the "unchanged lines"
+/// separators before the first and after the last range.
+pub(crate) fn side_by_side_html(
     out: &mut String,
     diff: &TextDiffResult,
     ranges: &[Range<usize>],
     opts: &TextReportOptions,
+    notes: &Notes,
+    edges: bool,
 ) {
     let cols = if opts.line_numbers { 5 } else { 3 };
     out.push_str("<table class=\"diff sbs\">\n");
-    for_each_range(out, diff.rows.len(), ranges, cols, |out, range| {
+    for_each_range(out, diff.rows.len(), ranges, cols, edges, |out, range| {
         for row in &diff.rows[range] {
             let marks = matches!(row.kind, RowKind::Changed | RowKind::Unimportant);
-            let _ = write!(out, "<tr class=\"{}\">", row_class(row.kind));
+            let bm = if notes.marked(row) { " bm" } else { "" };
+            let _ = write!(out, "<tr class=\"{}{bm}\">", row_class(row.kind));
             if opts.line_numbers {
-                let _ = write!(out, "<td class=\"ln\">{}</td>", no(row.left_no));
+                out.push_str(&notes.ln(BookmarkSide::Left, row.left_no));
             }
             let _ = write!(
                 out,
@@ -350,23 +586,27 @@ fn side_by_side_html(
                 row_marker(row.kind)
             );
             if opts.line_numbers {
-                let _ = write!(out, "<td class=\"ln\">{}</td>", no(row.right_no));
+                out.push_str(&notes.ln(BookmarkSide::Right, row.right_no));
             }
             let _ = writeln!(
                 out,
                 "<td class=\"t r\">{}</td></tr>",
                 segments_html(&row.right, marks)
             );
+            notes.rows(out, row.left_no, row.right_no, cols);
         }
     });
     out.push_str("</table>\n");
 }
 
-fn unified_html(
+/// Unified table of `ranges` (see [`side_by_side_html`]).
+pub(crate) fn unified_html(
     out: &mut String,
     diff: &TextDiffResult,
     ranges: &[Range<usize>],
     opts: &TextReportOptions,
+    notes: &Notes,
+    edges: bool,
 ) {
     let cols = if opts.line_numbers { 4 } else { 2 };
     let line = |out: &mut String,
@@ -375,22 +615,22 @@ fn unified_html(
                 r: Option<usize>,
                 sign: &str,
                 text: String| {
-        let _ = write!(out, "<tr class=\"{class}\">");
+        let marked = notes.get(BookmarkSide::Left, l).is_some()
+            || notes.get(BookmarkSide::Right, r).is_some();
+        let bm = if marked { " bm" } else { "" };
+        let _ = write!(out, "<tr class=\"{class}{bm}\">");
         if opts.line_numbers {
-            let _ = write!(
-                out,
-                "<td class=\"ln\">{}</td><td class=\"ln\">{}</td>",
-                no(l),
-                no(r)
-            );
+            out.push_str(&notes.ln(BookmarkSide::Left, l));
+            out.push_str(&notes.ln(BookmarkSide::Right, r));
         }
         let _ = writeln!(
             out,
             "<td class=\"sign\">{sign}</td><td class=\"t\">{text}</td></tr>"
         );
+        notes.rows(out, l, r, cols);
     };
     out.push_str("<table class=\"diff uni\">\n");
-    for_each_range(out, diff.rows.len(), ranges, cols, |out, range| {
+    for_each_range(out, diff.rows.len(), ranges, cols, edges, |out, range| {
         let rows = &diff.rows[range];
         let mut i = 0;
         while i < rows.len() {
@@ -682,6 +922,191 @@ fn patch(s: &TextSection, opts: &TextReportOptions) -> String {
     out
 }
 
+// ---------- normal diff ----------
+
+/// `n` or `first,last` for a normal-diff command.
+fn diff_range(lines: &[(usize, String)]) -> String {
+    match (lines.first(), lines.last()) {
+        (Some(a), Some(b)) if a.0 != b.0 => format!("{},{}", a.0, b.0),
+        (Some(a), _) => a.0.to_string(),
+        _ => String::new(),
+    }
+}
+
+/// One file pair as classic `diff` output; empty when there is nothing to
+/// change. `header` adds a `diff left right` line (several pairs).
+fn normal_diff(s: &TextSection, opts: &TextReportOptions, header: bool) -> String {
+    let rows = &s.diff.rows;
+    let ignore = opts.ignore_unimportant;
+    let mut out = String::new();
+    // Last line of each side before the current block.
+    let (mut last_l, mut last_r) = (0, 0);
+    let mut i = 0;
+    while i < rows.len() {
+        if !patch_change(&rows[i], ignore) {
+            last_l = rows[i].left_no.unwrap_or(last_l);
+            last_r = rows[i].right_no.unwrap_or(last_r);
+            i += 1;
+            continue;
+        }
+        let start = i;
+        while i < rows.len() && patch_change(&rows[i], ignore) {
+            i += 1;
+        }
+        let block = &rows[start..i];
+        let left: Vec<(usize, String)> = block
+            .iter()
+            .filter_map(|r| Some((r.left_no?, joined(&r.left)?)))
+            .collect();
+        let right: Vec<(usize, String)> = block
+            .iter()
+            .filter_map(|r| Some((r.right_no?, joined(&r.right)?)))
+            .collect();
+        let command = match (left.is_empty(), right.is_empty()) {
+            (false, true) => format!("{}d{last_r}", diff_range(&left)),
+            (true, false) => format!("{last_l}a{}", diff_range(&right)),
+            _ => format!("{}c{}", diff_range(&left), diff_range(&right)),
+        };
+        let _ = writeln!(out, "{command}");
+        for (_, t) in &left {
+            let _ = writeln!(out, "< {t}");
+        }
+        if !left.is_empty() && !right.is_empty() {
+            out.push_str("---\n");
+        }
+        for (_, t) in &right {
+            let _ = writeln!(out, "> {t}");
+        }
+        last_l = left.last().map_or(last_l, |l| l.0);
+        last_r = right.last().map_or(last_r, |r| r.0);
+    }
+    if header && !out.is_empty() {
+        out.insert_str(0, &format!("diff {} {}\n", s.left, s.right));
+    }
+    out
+}
+
+// ---------- XML ----------
+
+fn render_xml(
+    sections: &[TextSection],
+    opts: &TextReportOptions,
+    bookmarks: &[TextBookmark],
+    generated: &str,
+) -> String {
+    let mut out = String::from(xml::DECLARATION);
+    let _ = write!(
+        out,
+        "<textReport version=\"1\" generator=\"PCompare\" title=\"{}\"",
+        xml::attr(title(opts))
+    );
+    if !generated.is_empty() {
+        let _ = write!(out, " produced=\"{}\"", xml::attr(generated));
+    }
+    out.push_str(">\n");
+    let layout = match opts.layout {
+        TextLayout::SideBySide => "sideBySide",
+        TextLayout::Unified => "unified",
+    };
+    let _ = writeln!(
+        out,
+        "  <options layout=\"{layout}\" ignoreUnimportant=\"{}\" context=\"{}\" differencesOnly=\"{}\"/>",
+        opts.ignore_unimportant, opts.context, opts.differences_only
+    );
+    for s in sections {
+        let name = if sections.len() > 1 { s.name } else { "" };
+        xml_comparison(&mut out, s, name, opts, bookmarks, "  ");
+    }
+    out.push_str("</textReport>\n");
+    out
+}
+
+/// One `<comparison>` element (shared with folder XML reports), indented by
+/// `indent`.
+pub(crate) fn xml_comparison(
+    out: &mut String,
+    s: &TextSection,
+    name: &str,
+    opts: &TextReportOptions,
+    bookmarks: &[TextBookmark],
+    indent: &str,
+) {
+    let rows = &s.diff.rows;
+    let ignore = opts.ignore_unimportant;
+    if name.is_empty() {
+        let _ = writeln!(out, "{indent}<comparison>");
+    } else {
+        let _ = writeln!(out, "{indent}<comparison name=\"{}\">", xml::attr(name));
+    }
+    let lines = |pick: fn(&DiffRow) -> Option<usize>| rows.iter().filter_map(pick).count();
+    let _ = writeln!(
+        out,
+        "{indent}  <left path=\"{}\" lines=\"{}\"/>\n{indent}  <right path=\"{}\" lines=\"{}\"/>",
+        xml::attr(s.left),
+        lines(|r| r.left_no),
+        xml::attr(s.right),
+        lines(|r| r.right_no)
+    );
+    let sum = summarize(s.diff, ignore);
+    let _ = writeln!(
+        out,
+        "{indent}  <summary differences=\"{}\" changed=\"{}\" leftOnly=\"{}\" rightOnly=\"{}\" unimportant=\"{}\"/>",
+        sum.sections, sum.changed, sum.left_only, sum.right_only, sum.unimportant
+    );
+    for (n, block) in difference_blocks(rows, ignore).into_iter().enumerate() {
+        let (ls, lc) = block_span(rows, &block, |r| r.left_no);
+        let (rs, rc) = block_span(rows, &block, |r| r.right_no);
+        let _ = writeln!(
+            out,
+            "{indent}  <difference index=\"{}\" kind=\"{}\" leftStart=\"{ls}\" leftCount=\"{lc}\" rightStart=\"{rs}\" rightCount=\"{rc}\">",
+            n + 1,
+            block_kind(&rows[block.clone()])
+        );
+        let block_rows = &rows[block];
+        let sides = block_rows
+            .iter()
+            .map(|r| ("left", r.left_no, &r.left))
+            .chain(block_rows.iter().map(|r| ("right", r.right_no, &r.right)));
+        for (side, n, text) in sides {
+            if let (Some(n), Some(t)) = (n, joined(text)) {
+                let _ = writeln!(
+                    out,
+                    "{indent}    <line side=\"{side}\" n=\"{n}\">{}</line>",
+                    xml::text(&t)
+                );
+            }
+        }
+        let _ = writeln!(out, "{indent}  </difference>");
+    }
+    let mut marks: Vec<&TextBookmark> = bookmarks.iter().collect();
+    marks.sort_by_key(|b| (b.side, b.line));
+    for b in marks {
+        let side = if b.side == BookmarkSide::Left {
+            "left"
+        } else {
+            "right"
+        };
+        match b.comment() {
+            Some(c) => {
+                let _ = writeln!(
+                    out,
+                    "{indent}  <bookmark side=\"{side}\" line=\"{}\">{}</bookmark>",
+                    b.line,
+                    xml::text(c)
+                );
+            }
+            None => {
+                let _ = writeln!(
+                    out,
+                    "{indent}  <bookmark side=\"{side}\" line=\"{}\"/>",
+                    b.line
+                );
+            }
+        }
+    }
+    let _ = writeln!(out, "{indent}</comparison>");
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -899,5 +1324,144 @@ mod tests {
         assert!(h.contains("The files are identical"));
         let t = render(&sections, &opts(|o| o.format = TextReportFormat::Text), "");
         assert!(t.contains("dir/one.txt\nLeft:  a.txt") && t.contains(&"=".repeat(78)));
+    }
+
+    #[test]
+    fn normal_diff_matches_gnu_output() {
+        let d = diff(LEFT, RIGHT);
+        let o = opts(|o| o.format = TextReportFormat::NormalDiff);
+        assert_eq!(
+            render(&[section(&d)], &o, ""),
+            "3c3\n< three\n---\n> THREE!\n8a9\n> nine\n"
+        );
+        // Deletions name the line they follow on the right; ranges use first,last.
+        let d = diff("a\nb\nc\nd\ne\n", "a\nd\ne\nX\nY\n");
+        assert_eq!(
+            render(&[section(&d)], &o, ""),
+            "2,3d1\n< b\n< c\n5a4,5\n> X\n> Y\n"
+        );
+        let d = diff("1\n2\n3\n4\n", "1\nA\nB\n4\n");
+        assert_eq!(
+            render(&[section(&d)], &o, ""),
+            "2,3c2,3\n< 2\n< 3\n---\n> A\n> B\n"
+        );
+        let same = diff("x\n", "x\n");
+        assert_eq!(render(&[section(&same)], &o, ""), "");
+    }
+
+    #[test]
+    fn xml_report_is_well_formed_and_complete() {
+        let d = diff(
+            "keep\n<old> & \"q\"\nsame\n",
+            "keep\n<new> & 'q'\nsame\nadded\n",
+        );
+        let marks = [
+            TextBookmark {
+                side: BookmarkSide::Left,
+                line: 2,
+                comment: Some("check </comparison> & co".into()),
+            },
+            TextBookmark {
+                side: BookmarkSide::Right,
+                line: 4,
+                comment: None,
+            },
+        ];
+        let x = render_annotated(
+            &[section(&d)],
+            &opts(|o| {
+                o.format = TextReportFormat::Xml;
+                o.title = "A \"title\" <x>".into();
+            }),
+            &marks,
+            "2026-01-01 10:00",
+        );
+        let names = crate::xml::tests::parse(&x);
+        assert_eq!(names.iter().filter(|n| *n == "difference").count(), 2);
+        assert_eq!(names.iter().filter(|n| *n == "bookmark").count(), 2);
+        assert_eq!(names[0], "textReport");
+        assert!(
+            x.starts_with("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<textReport version=\"1\"")
+        );
+        assert!(x.contains("title=\"A &quot;title&quot; &lt;x&gt;\""), "{x}");
+        assert!(x.contains("<summary differences=\"2\" changed=\"1\" leftOnly=\"0\" rightOnly=\"1\" unimportant=\"0\"/>"), "{x}");
+        assert!(x.contains("<difference index=\"1\" kind=\"changed\" leftStart=\"2\" leftCount=\"1\" rightStart=\"2\" rightCount=\"1\">"));
+        assert!(
+            x.contains("<line side=\"left\" n=\"2\">&lt;old&gt; &amp; \"q\"</line>"),
+            "{x}"
+        );
+        assert!(x.contains("<difference index=\"2\" kind=\"rightOnly\" leftStart=\"3\" leftCount=\"0\" rightStart=\"4\" rightCount=\"1\">"));
+        assert!(x.contains("<bookmark side=\"right\" line=\"4\"/>"));
+        // Several pairs: one named comparison each.
+        let same = diff("x\n", "x\n");
+        let two = [
+            TextSection {
+                name: "one",
+                ..section(&same)
+            },
+            TextSection {
+                name: "two & three",
+                ..section(&d)
+            },
+        ];
+        let x = render(&two, &opts(|o| o.format = TextReportFormat::Xml), "");
+        assert_eq!(
+            crate::xml::tests::parse(&x)
+                .iter()
+                .filter(|n| *n == "comparison")
+                .count(),
+            2
+        );
+        assert!(x.contains("<comparison name=\"two &amp; three\">"));
+    }
+
+    #[test]
+    fn html_shows_bookmark_comments_and_keeps_them_in_differences_only() {
+        let left: String = (1..=20).map(|i| format!("line {i}\n")).collect();
+        let right = left.replace("line 10\n", "line ten\n");
+        let d = diff(&left, &right);
+        let marks = [
+            TextBookmark {
+                side: BookmarkSide::Left,
+                line: 2,
+                comment: Some("why <this>?".into()),
+            },
+            TextBookmark {
+                side: BookmarkSide::Right,
+                line: 10,
+                comment: None,
+            },
+        ];
+        let h = render_annotated(
+            &[section(&d)],
+            &opts(|o| {
+                o.differences_only = true;
+                o.context = 0;
+            }),
+            &marks,
+            "",
+        );
+        assert!(
+            h.contains("<td class=\"ln bm\" id=\"bm-l2\" title=\"why &lt;this&gt;?\">2</td>"),
+            "{h}"
+        );
+        assert!(h.contains("<tr class=\"note\"><td colspan=\"5\"><span class=\"tag\">Left line 2</span>why &lt;this&gt;?</td></tr>"), "{h}");
+        assert!(h.contains("<tr class=\"chg bm\">"));
+        assert!(h.contains("<h3>Comments</h3>"));
+        assert!(h.contains("<a href=\"#bm-l2\">Left line 2</a>"));
+        assert!(h.contains("<a href=\"#bm-r10\">Right line 10</a>"));
+        // Unified layout marks the right-side line on its added row.
+        let u = render_annotated(
+            &[section(&d)],
+            &opts(|o| o.layout = TextLayout::Unified),
+            &marks,
+            "",
+        );
+        assert!(
+            u.contains(
+                "<tr class=\"add bm\"><td class=\"ln\"></td><td class=\"ln bm\" id=\"bm-r10\""
+            ),
+            "{u}"
+        );
     }
 }

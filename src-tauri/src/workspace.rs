@@ -114,6 +114,14 @@ fn absolutize(paths: Vec<String>, cwd: &str) -> Vec<String> {
     paths
         .into_iter()
         .map(|p| {
+            // araxis:vcs — `git:repo@HEAD~1` anchors the working-tree path inside.
+            if pcompare_archive::vcs::is_vcs(&p) {
+                let anchored = (!cwd.is_empty())
+                    .then(|| pcompare_archive::vcs::with_base_dir(&p, Path::new(cwd)))
+                    .flatten();
+                return anchored.unwrap_or(p);
+            }
+            // araxis:vcs end
             // `remote://…`, `db://…` and other URLs are never file-relative.
             if p.contains("://") || Path::new(&p).is_absolute() || cwd.is_empty() {
                 p
@@ -137,6 +145,11 @@ pub fn on_second_instance(app: &AppHandle, argv: Vec<String>, cwd: String) {
         let _ = window.show();
         let _ = window.set_focus();
     }
+    // araxis:vcs — this window answers for a `--wait` launch.
+    if let Some(token) = launch.wait_token.as_deref() {
+        crate::vcs::register(token);
+    }
+    // araxis:vcs end
     if !launch.paths.is_empty() {
         let _ = app.emit(OPEN_PATHS_EVENT, launch); // bc5:reports-script
     }

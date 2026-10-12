@@ -35,6 +35,17 @@ pub struct LaunchOptions {
     /// `--compare-to <path>`: pair with the remembered left side.
     #[serde(skip)]
     pub compare_to: Option<String>,
+    // araxis:vcs
+    /// `--wait` / `/wait`: block until the tab closes (vcs.rs).
+    #[serde(skip)]
+    pub wait: bool,
+    /// Set by the waiting process on the launch it forwards; the tab reports
+    /// back under it when it closes.
+    pub wait_token: Option<String>,
+    /// `--base-first`: paths come as `base theirs yours merged` (P4MERGE).
+    #[serde(skip)]
+    pub base_first: bool,
+    // araxis:vcs end
 }
 
 /// A parsed command line.
@@ -73,6 +84,10 @@ Options (Beyond Compare spellings in brackets):
   --readonly             [/readonly, /ro] open both sides read-only
   --readonly-left        [/lro]  --readonly-right [/rro]
   --merge-output <path>  [/mergeoutput=<path>] where a merge writes its result
+  --wait                 [/wait] don't return until the comparison's tab is closed
+                         (implied by --merge-output); for git difftool / mergetool
+  --base-first           paths are <base> <theirs> <yours> <merged> (P4MERGE order)
+  -L <label>             label the next side (svn --diff-cmd passes these)
   --quick-compare[=<m>]  [/qc[=<m>]] compare headlessly, m = size, crc, binary or rules
                          (default rules: text rules for text files, bytes otherwise)
   --silent               [/silent] scripts: print only errors
@@ -83,6 +98,7 @@ Options (Beyond Compare spellings in brackets):
 Exit codes:
   quick compare  0 = same (or only unimportant differences), 1 = different, 2 = error
   script         0 = success, 1 = some commands failed, 2 = unreadable or invalid script
+  --wait         0 = closed (merges: the output was saved), 1 = merge output not saved
 ";
 
 /// Session kinds the UI knows, by the names `--viewer` accepts.
@@ -133,6 +149,7 @@ fn switch(arg: &str) -> Option<Switch<'_>> {
         "mergeoutput",
         "qc",
         "silent",
+        "wait", // araxis:vcs
         "?",
         "h",
         "help",
@@ -217,6 +234,20 @@ pub fn parse(args: &[String]) -> Result<Invocation, String> {
                 );
             }
             "silent" => silent = true,
+            // araxis:vcs
+            "wait" => opts.wait = true,
+            "wait-token" => opts.wait_token = Some(take(&mut i, &sw, "a token")?),
+            "base-first" => opts.base_first = true,
+            // `-L <label>` (diff -L, svn --diff-cmd): left label, then right.
+            "l" => {
+                let label = take(&mut i, &sw, "a label")?;
+                if opts.title_left.is_none() {
+                    opts.title_left = Some(label);
+                } else if opts.title_right.is_none() {
+                    opts.title_right = Some(label);
+                }
+            }
+            // araxis:vcs end
             "compare-to" => opts.compare_to = Some(take(&mut i, &sw, "a path")?),
             // Handled before parsing (records the path and exits).
             "select-left" => {
@@ -265,6 +296,14 @@ pub fn resolve(mut opts: LaunchOptions, left_selection: Option<String>) -> Launc
             _ => vec![target],
         };
     }
+    // araxis:vcs — `base theirs yours merged [extra…]` → `yours theirs base merged`.
+    if opts.base_first && opts.paths.len() >= 3 {
+        let mut p = std::mem::take(&mut opts.paths);
+        p.truncate(4);
+        p.swap(0, 2);
+        opts.paths = p;
+    }
+    // araxis:vcs end
     if let Some(out) = opts.merge_output.clone() {
         // `/mergeoutput=` names the merge result: the 4th path.
         if opts.paths.len() >= 3 {
@@ -395,6 +434,24 @@ mod tests {
         );
         assert_eq!(o.paths, args(&["l", "r", "base", "new"]));
     }
+
+    // araxis:vcs
+    #[test]
+    fn vcs_tool_switches() {
+        let o = gui(&["/wait", "a", "b"]);
+        assert!(o.wait && o.wait_token.is_none());
+        assert_eq!(o.paths, args(&["a", "b"]));
+        assert_eq!(gui(&["--wait-token=t1", "a"]).wait_token.as_deref(), Some("t1"));
+        // P4MERGE: base theirs yours merged → yours theirs base merged.
+        let o = resolve(gui(&["--base-first", "B", "T", "Y", "M", "wc"]), None);
+        assert_eq!(o.paths, args(&["Y", "T", "B", "M"]));
+        // svn --diff-cmd: `-u -L left -L right f1 f2`.
+        let o = gui(&["-u", "-L", "a.c (rev 3)", "-L", "a.c (working copy)", "f1", "f2"]);
+        assert_eq!(o.paths, args(&["f1", "f2"]));
+        assert_eq!(o.title_left.as_deref(), Some("a.c (rev 3)"));
+        assert_eq!(o.title_right.as_deref(), Some("a.c (working copy)"));
+    }
+    // araxis:vcs end
 
     #[test]
     fn compare_to_pairs_with_the_selected_left() {

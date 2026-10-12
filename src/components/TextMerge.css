@@ -252,3 +252,80 @@
   background: var(--warn);
   box-shadow: none;
 }
+
+/* Resolved changes (merged, taken, or marked by hand) are dimmed; pending ones keep full colour. */
+.mrow.resolved:not(.m-stable) .tm-cell:not(.absent) {
+  opacity: 0.55;
+}
+.mrow.resolved.current .tm-cell:not(.absent) {
+  opacity: 0.8;
+}
+.mrow.pending .ln {
+  color: var(--accent);
+}
+.statusbar .tm-pending {
+  color: var(--accent);
+}
+
+/* Changed characters inside changed lines (against the base). */
+.tm-cell .tm-ch {
+  border-radius: 2px;
+  background: var(--add-mark);
+}
+.tm-cell.base .tm-ch {
+  background: var(--del-mark);
+}
+.tm-cell.conf .tm-ch {
+  background: rgba(242, 119, 122, 0.38);
+}
+
+/* Edit markers: where each output line came from. */
+.tm-gutter {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 4px;
+  overflow: hidden;
+  pointer-events: none;
+}
+.tm-gutter > div {
+  position: relative;
+}
+.tm-gm {
+  position: absolute;
+  left: 0;
+  width: 4px;
+}
+.o-auto {
+  background: var(--ok);
+}
+.o-left {
+  background: var(--accent);
+}
+.o-right {
+  background: #b07cf0;
+}
+.o-base {
+  background: var(--muted);
+}
+.o-edit {
+  background: var(--warn);
+}
+.tm-legend {
+  margin-left: auto;
+  display: inline-flex;
+  gap: 10px;
+  color: var(--muted);
+}
+.tm-legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.tm-swatch {
+  display: inline-block;
+  width: 4px;
+  height: 11px;
+  border-radius: 1px;
+}

@@ -1,5 +1,18 @@
 import { save as saveDialog } from "@tauri-apps/plugin-dialog";
-import { ArrowDown, ArrowDownToLine, ArrowUp, GitMerge, ListFilter, RefreshCw, Save } from "lucide-react";
+import {
+  ArrowDown,
+  ArrowDownToLine,
+  ArrowUp,
+  CheckCheck,
+  CircleDashed,
+  GitMerge,
+  ListFilter,
+  Redo2,
+  RefreshCw,
+  Save,
+  Undo2,
+  WandSparkles,
+} from "lucide-react";
 import {
   useCallback,
   useEffect,
@@ -12,13 +25,24 @@ import {
   type WheelEvent,
 } from "react";
 import { DEFAULT_TEXT_OPTIONS, errorMessage, isRemote, type TextDiffOptions, type WhitespaceMode } from "../lib/api";
+import { alignChars } from "../lib/charAlign";
 import { formatSize } from "../lib/format";
-import { mergeApi, type ChunkKind, type MergeChunk, type MergeLoad, type TextDocument } from "../lib/mergeApi";
+import { matches as keyMatches, shortcutLabel } from "../lib/keymap";
+import {
+  mergeApi,
+  type ChunkKind,
+  type LineRange,
+  type MergeChunk,
+  type MergeLoad,
+  type TextDocument,
+} from "../lib/mergeApi";
+import { composeRuns, type StyledRange } from "../lib/textRuns";
 import type { MergePaths, MergeProps } from "../lib/sessionProps";
 import { PathField } from "./PathField";
 import { IgnoreRulesDialog } from "./TextCompare";
 import { VirtualList, type VirtualListHandle } from "./VirtualList";
 import "./TextMerge.css";
+import { isComposing } from "../lib/ime"; // araxis:text-view araxis:text-view end
 
 const ROW_HEIGHT = 20;
 const CHAR_WIDTH = 7.8;
@@ -33,6 +57,8 @@ export interface MergeSettings {
   options: TextDiffOptions;
   /** Fraction of the body height given to the three input panes. */
   split: number;
+  /** What the output starts as: merged automatically (default) or the base only. */
+  start?: StartMode;
 }
 
 type Resolution = "left" | "right" | "leftRight" | "rightLeft" | "base" | "conflict";
@@ -47,18 +73,84 @@ const RESOLUTIONS: { id: Resolution; label: string; title: string }[] = [
 
 type Pane = "left" | "base" | "right";
 
+/** What the output starts as after loading: every change merged automatically, or the base text only. */
+export type StartMode = "auto" | "base";
+
+/** Where an output line came from, shown by the edit markers in the output's margin ("" = untouched). */
+type Origin = "" | "auto" | "left" | "right" | "base" | "edit";
+const ORIGIN_LEGEND: { id: Exclude<Origin, "">; label: string; title: string }[] = [
+  { id: "auto", label: "Auto", title: "Merged automatically (a change made on one side only)" },
+  { id: "left", label: "Left", title: "Taken or copied from the left file" },
+  { id: "right", label: "Right", title: "Taken or copied from the right file" },
+  { id: "base", label: "Base", title: "Taken or copied from the base (ancestor) file" },
+  { id: "edit", label: "Edited", title: "Typed or changed by hand in the output" },
+];
+
+/** How a change chunk's current output came about. */
+type ChunkState =
+  | "pending" // not merged yet: the output still holds the base text
+  | "auto" // merged automatically
+  | "taken" // a side (or base, or both) chosen with Take / Copy to output
+  | "conflict" // between conflict markers
+  | "edited"; // changed by hand
+
 /** Output lines `[start, end)` that a chunk currently occupies. */
 interface Region {
   start: number;
   end: number;
 }
 
-/** A programmatic output edit: lines `[start, oldEnd)` became `[start, newEnd)`, inside chunk `chunk`'s region. */
+/** The output and everything tracked alongside it; undo snapshots are copies of this. */
+interface OutState {
+  text: string;
+  regions: Region[];
+  /** One per output line (`text.split("\n")`). */
+  origins: Origin[];
+  /** One per chunk. */
+  states: ChunkState[];
+  /** Chunks marked resolved (true) or unresolved (false) by hand; overrides what the output implies. */
+  marks: Record<number, boolean>;
+}
+const EMPTY_OUT: OutState = { text: "", regions: [], origins: [""], states: [], marks: {} };
+
+/** One undoable step: the state before it. */
+interface Step {
+  label: string;
+  snap: OutState;
+}
+const MAX_UNDO = 200;
+/** Keystrokes closer together than this undo as one "Typing" step. */
+const TYPING_PAUSE_MS = 1500;
+
+/**
+ * A programmatic output edit: lines `[start, oldEnd)` became `[start, newEnd)`,
+ * inside chunk `chunk`'s region, with where the new lines came from.
+ */
 interface RegionEdit {
   chunk: number;
   start: number;
   oldEnd: number;
   newEnd: number;
+  origins: Origin[];
+  state: ChunkState;
+  label: string;
+}
+
+/** Old lines `[p, q)` became new lines `[p, q2)`. */
+interface LineDiff {
+  p: number;
+  q: number;
+  q2: number;
+}
+
+/** The changed line range between two texts, from their common leading and trailing lines. */
+function lineDiff(a: string[], b: string[]): LineDiff {
+  const min = Math.min(a.length, b.length);
+  let p = 0;
+  while (p < min && a[p] === b[p]) p++;
+  let s = 0;
+  while (s < min - p && a[a.length - 1 - s] === b[b.length - 1 - s]) s++;
+  return { p, q: a.length - s, q2: b.length - s };
 }
 
 /** Lines picked in one input pane (pane line indices; `anchor` is where the pick started). */
@@ -68,22 +160,112 @@ interface LineSelection {
   focus: number;
 }
 
-const rangeLen = (r: { start: number; end: number }) => r.end - r.start;
+const takeLines = (doc: TextDocument | null, r: LineRange) => (doc ? doc.lines.slice(r.start, r.end) : []);
+const conflictLines = (n: number, left: string[], right: string[]) => [
+  `<<<<<<< Left #${n}`,
+  ...left,
+  SEPARATOR,
+  ...right,
+  `>>>>>>> Right #${n}`,
+];
 
-/** Where each chunk lands in the freshly rendered output (mirrors pcompare-merge's `render_output`). */
-function initialRegions(chunks: MergeChunk[]): Region[] {
+/**
+ * A chunk's output lines when merged automatically (mirrors pcompare-merge's
+ * `render_output`) or left at the base, with their origin and state.
+ */
+function chunkOutput(c: MergeChunk, d: MergeLoad, mode: StartMode): { lines: string[]; origin: Origin; state: ChunkState } {
+  if (c.kind === "stable") return { lines: takeLines(d.left, c.left), origin: "", state: "auto" };
+  if (mode === "base") return { lines: takeLines(d.base, c.base), origin: "", state: "pending" };
+  if (c.kind === "conflict")
+    return {
+      lines: conflictLines(c.conflict ?? 0, takeLines(d.left, c.left), takeLines(d.right, c.right)),
+      origin: "",
+      state: "conflict",
+    };
+  const lines = c.kind === "rightChanged" ? takeLines(d.right, c.right) : takeLines(d.left, c.left);
+  return { lines, origin: "auto", state: "auto" };
+}
+
+/** The output as loaded: every chunk merged automatically, or every change left at the base. */
+function buildOut(d: MergeLoad, mode: StartMode): OutState {
+  const lines: string[] = [];
+  const origins: Origin[] = [];
+  const regions: Region[] = [];
+  const states: ChunkState[] = [];
+  for (const c of d.merge.chunks) {
+    const o = chunkOutput(c, d, mode);
+    regions.push({ start: lines.length, end: lines.length + o.lines.length });
+    for (const l of o.lines) {
+      lines.push(l);
+      origins.push(o.origin);
+    }
+    states.push(o.state);
+  }
+  // The backend decided whether the merged file ends with a line break.
+  const trailing = d.output.endsWith("\n") && lines.length > 0;
+  if (trailing || !lines.length) origins.push("");
+  return { text: lines.join("\n") + (trailing ? "\n" : ""), regions, origins, states, marks: {} };
+}
+
+/**
+ * The automatic merge as one step: every chunk still pending (base text)
+ * gets its one-sided change, conflicts get their markers. Chunks already
+ * taken or edited are left alone.
+ */
+function autoMerge(d: MergeLoad, cur: OutState): OutState {
+  const old = cur.text.split("\n");
+  const lines: string[] = [];
+  const origins: Origin[] = [];
+  const regions: Region[] = [];
+  const states = cur.states.slice();
+  const copy = (from: number, to: number) => {
+    for (let i = from; i < to; i++) {
+      lines.push(old[i]);
+      origins.push(cur.origins[i] ?? "");
+    }
+  };
   let pos = 0;
-  return chunks.map((c) => {
-    const len =
-      c.kind === "conflict"
-        ? rangeLen(c.left) + rangeLen(c.right) + 3
-        : c.kind === "rightChanged"
-          ? rangeLen(c.right)
-          : rangeLen(c.left);
-    const r = { start: pos, end: pos + len };
-    pos += len;
-    return r;
+  d.merge.chunks.forEach((c, k) => {
+    const r = cur.regions[k];
+    copy(pos, r.start);
+    const start = lines.length;
+    if (c.kind !== "stable" && cur.states[k] === "pending") {
+      const o = chunkOutput(c, d, "auto");
+      for (const l of o.lines) {
+        lines.push(l);
+        origins.push(o.origin);
+      }
+      states[k] = o.state;
+    } else {
+      copy(Math.max(pos, r.start), r.end);
+    }
+    regions.push({ start, end: lines.length });
+    pos = Math.max(pos, r.end);
   });
+  copy(pos, old.length);
+  return { text: lines.join("\n"), regions, origins, states, marks: cur.marks };
+}
+
+/**
+ * Character ranges of `a` that differ from `b` (aligned character by
+ * character), or none when the lines are too different to pair up.
+ */
+function changedRanges(a: string, b: string, ignoreCase: boolean): StyledRange[] {
+  if (a === b || !a || !b || a.length + b.length > 4000) return [];
+  const eq = (x: string, y: string) => x === y || (ignoreCase && x.toLowerCase() === y.toLowerCase());
+  const out: StyledRange[] = [];
+  let pos = 0;
+  let same = 0;
+  for (const col of alignChars(a, b, ignoreCase)) {
+    if (col.left === null) continue;
+    const end = pos + col.left.length;
+    if (col.right !== null && eq(col.left, col.right)) same++;
+    else if (out.length && out[out.length - 1].end === pos) out[out.length - 1].end = end;
+    else out.push({ start: pos, end, cls: "tm-ch" });
+    pos = end;
+  }
+  // Mostly different lines read better without confetti: the cell colour says enough.
+  return same * 10 < Math.max(a.length, b.length) * 3 ? [] : out;
 }
 
 /**
@@ -91,7 +273,7 @@ function initialRegions(chunks: MergeChunk[]): Region[] {
  * edits say exactly what changed; hand edits are inferred from the common
  * leading and trailing lines, and new text goes to the region it was typed in.
  */
-function shiftRegions(prev: string, next: string, regions: Region[], edit: RegionEdit | null): Region[] {
+function shiftRegions(regions: Region[], edit: RegionEdit | null, d: LineDiff): Region[] {
   if (edit) {
     const delta = edit.newEnd - edit.oldEnd;
     return regions.map((r, k) =>
@@ -102,16 +284,7 @@ function shiftRegions(prev: string, next: string, regions: Region[], edit: Regio
           : { start: r.start + delta, end: r.end + delta },
     );
   }
-  if (prev === next) return regions;
-  const a = prev.split("\n");
-  const b = next.split("\n");
-  const min = Math.min(a.length, b.length);
-  let p = 0;
-  while (p < min && a[p] === b[p]) p++;
-  let s = 0;
-  while (s < min - p && a[a.length - 1 - s] === b[b.length - 1 - s]) s++;
-  const q = a.length - s; // old lines [p, q) became new lines [p, q2)
-  const q2 = b.length - s;
+  const { p, q, q2 } = d; // old lines [p, q) became new lines [p, q2)
   const delta = q2 - q;
   let floor = 0;
   return regions.map((r) => {
@@ -259,16 +432,30 @@ export function TextMerge({
   const [split, setSplit] = useState(() => Math.min(MAX_SPLIT, Math.max(MIN_SPLIT, settings?.split ?? 0.5)));
   const reportSettings = useRef(onSettingsChange);
   reportSettings.current = onSettingsChange;
-  useEffect(() => reportSettings.current?.({ options, split }), [options, split]);
+  const [start, setStart] = useState<StartMode>(settings?.start ?? "auto");
+  const startRef = useRef(start);
+  startRef.current = start;
+  useEffect(() => reportSettings.current?.({ options, split, start }), [options, split, start]);
 
   const [draft, setDraft] = useState<MergePaths>({ left, base, right, output });
   useEffect(() => setDraft({ left, base, right, output }), [left, base, right, output]);
 
   const [data, setData] = useState<MergeLoad | null>(null);
-  /** The output text and where each chunk sits in it. */
-  const [out, setOut] = useState<{ text: string; regions: Region[] }>({ text: "", regions: [] });
+  /** The output text, where each chunk sits in it, where its lines came from and how each chunk is resolved. */
+  const [out, setOutState] = useState<OutState>(EMPTY_OUT);
+  /** Mirrors `out` synchronously, for change handlers fired from inside another handler. */
+  const outRef = useRef(out);
+  const applyOut = (next: OutState) => {
+    outRef.current = next;
+    setOutState(next);
+  };
   const text = out.text;
   const regions = out.regions;
+  /** Undo/redo stacks of whole output states (automatic merge, takes, marks, typing bursts). */
+  const [hist, setHist] = useState<{ undo: Step[]; redo: Step[] }>({ undo: [], redo: [] });
+  const lastStep = useRef({ label: "", at: 0 });
+  /** The output right after loading, to tell whether anything was changed since. */
+  const [startText, setStartText] = useState("");
   /** Output text as last written to disk; `null` until the first save. */
   const [savedText, setSavedText] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -302,7 +489,14 @@ export function TextMerge({
       const res = await mergeApi.loadMerge(left, base, right, options);
       if (seq !== requestSeq.current) return;
       setData(res);
-      setOut({ text: res.output, regions: initialRegions(res.merge.chunks) });
+      // The automatic merge is a step of its own, so it can be undone right away.
+      const fresh = buildOut(res, "base");
+      const auto = startRef.current === "auto" && fresh.states.includes("pending");
+      const first = auto ? autoMerge(res, fresh) : fresh;
+      applyOut(first);
+      setStartText(first.text);
+      setHist({ undo: auto ? [{ label: "Automatic merge", snap: fresh }] : [], redo: [] });
+      lastStep.current = { label: "", at: 0 };
       setSavedText(null);
       setSel(-1);
       setLineSel(null);
@@ -310,7 +504,8 @@ export function TextMerge({
       if (seq !== requestSeq.current) return;
       setError(errorMessage(e));
       setData(null);
-      setOut({ text: "", regions: [] });
+      applyOut(EMPTY_OUT);
+      setHist({ undo: [], redo: [] });
     } finally {
       if (seq === requestSeq.current) setLoading(false);
     }
@@ -320,8 +515,8 @@ export function TextMerge({
     load();
   }, [load]);
 
-  /** The output differs from what is on disk (or from the fresh auto-merge if never saved). */
-  const edited = !!data && text !== (savedText ?? data.output);
+  /** The output differs from what is on disk (or from how it was loaded if never saved). */
+  const edited = !!data && text !== (savedText ?? startText);
   const unsaved = !!data && text !== savedText;
   const reportDirty = useRef(onDirtyChange);
   reportDirty.current = onDirtyChange;
@@ -374,20 +569,32 @@ export function TextMerge({
     }
     return m;
   }, [blocks, regions]);
-  /** Chunks whose output no longer matches the automatic merge (resolved or overridden). */
-  const overridden = useMemo(() => {
+  /** Unchanged chunks whose output was edited or added to. */
+  const touched = useMemo(() => {
     const set = new Set<number>();
-    if (!data) return set;
-    const initial = initialRegions(chunks);
-    const fresh = data.output.split("\n");
     regions.forEach((r, k) => {
-      const i = initial[k];
-      if (rangeLen(r) !== rangeLen(i) || outLines.slice(r.start, r.end).some((l, j) => l !== fresh[i.start + j]))
-        set.add(k);
+      if (chunks[k]?.kind !== "stable") return;
+      for (let i = r.start; i < r.end; i++)
+        if (out.origins[i]) {
+          set.add(k);
+          break;
+        }
     });
     return set;
-  }, [data, chunks, regions, outLines]);
-  const unresolved = blocks.length;
+  }, [chunks, regions, out.origins]);
+  /** Whether a change is resolved: marked by hand, else merged, taken or edited with no conflict markers left. */
+  const isResolved = (k: number) => {
+    const c = chunks[k];
+    if (!c || c.kind === "stable") return true;
+    const mark = out.marks[k];
+    if (mark !== undefined) return mark;
+    const st = out.states[k];
+    return !blockOf.has(k) && st !== "pending" && st !== "conflict";
+  };
+  /** Conflicts (and changes re-opened as conflicts) that still need a decision. */
+  const unresolved = changes.filter((k) => (chunks[k].kind === "conflict" || blockOf.has(k)) && !isResolved(k)).length;
+  /** Changes still showing the base text, waiting for the automatic merge. */
+  const pendingCount = changes.filter((k) => out.states[k] === "pending").length;
 
   const maxChars = useMemo(() => {
     if (!data) return 0;
@@ -424,11 +631,74 @@ export function TextMerge({
     if (target !== undefined) goChunk(target);
   };
 
-  /** Takes the new output text, moving the chunk regions along with the edit. */
+  /** Records `prev` as the state before step `label`; consecutive typing undoes as one step. */
+  const pushHistory = (label: string, prev: OutState) => {
+    const now = Date.now();
+    const typing = label === "Typing";
+    const merge = typing && lastStep.current.label === "Typing" && now - lastStep.current.at < TYPING_PAUSE_MS;
+    lastStep.current = { label, at: now };
+    setHist((h) =>
+      merge
+        ? h.redo.length
+          ? { undo: h.undo, redo: [] }
+          : h
+        : { undo: [...h.undo.slice(-(MAX_UNDO - 1)), { label, snap: prev }], redo: [] },
+    );
+  };
+  /** Replaces the whole output state as one undoable step. */
+  const commit = (label: string, next: OutState) => {
+    pushHistory(label, outRef.current);
+    applyOut(next);
+  };
+  const undo = () => {
+    const top = hist.undo[hist.undo.length - 1];
+    if (!top) return;
+    setHist({ undo: hist.undo.slice(0, -1), redo: [...hist.redo, { label: top.label, snap: outRef.current }] });
+    lastStep.current = { label: "", at: 0 };
+    applyOut(top.snap);
+  };
+  const redo = () => {
+    const top = hist.redo[hist.redo.length - 1];
+    if (!top) return;
+    setHist({ undo: [...hist.undo, { label: top.label, snap: outRef.current }], redo: hist.redo.slice(0, -1) });
+    lastStep.current = { label: "", at: 0 };
+    applyOut(top.snap);
+  };
+
+  /**
+   * Takes the new output text, moving the chunk regions and line origins
+   * along with the edit. Hand edits mark the lines as edited and the chunks
+   * they touch as overridden.
+   */
   const changeText = (next: string) => {
     const edit = pendingEdit.current;
     pendingEdit.current = null;
-    setOut((prev) => ({ text: next, regions: shiftRegions(prev.text, next, prev.regions, edit) }));
+    const prev = outRef.current;
+    if (next === prev.text) return;
+    const b = next.split("\n");
+    const d = edit ? { p: edit.start, q: edit.oldEnd, q2: edit.newEnd } : lineDiff(prev.text.split("\n"), b);
+    const nextRegions = shiftRegions(prev.regions, edit, d);
+    const fill: Origin[] = edit ? edit.origins : new Array<Origin>(Math.max(0, d.q2 - d.p)).fill("edit");
+    let origins = prev.origins.slice(0, d.p).concat(fill, prev.origins.slice(d.q));
+    // Edge cases (the last line, an emptied output) can be off by one; keep one origin per line.
+    if (origins.length !== b.length) origins = b.map((_, i) => origins[i] ?? "");
+    const states = prev.states.slice();
+    let marks = prev.marks;
+    if (edit) {
+      states[edit.chunk] = edit.state;
+      if (edit.chunk in marks) {
+        marks = { ...marks };
+        delete marks[edit.chunk];
+      }
+    } else {
+      const hi = Math.max(d.q2, d.p + 1);
+      nextRegions.forEach((r, k) => {
+        if (chunks[k]?.kind === "stable") return;
+        if ((r.start < hi && r.end > d.p) || (r.start === r.end && r.start === d.p)) states[k] = "edited";
+      });
+    }
+    pushHistory(edit ? edit.label : "Typing", prev);
+    applyOut({ text: next, regions: nextRegions, origins, states, marks });
   };
 
   /** Replaces `[from, to)` of the output, keeping the textarea's native undo history. */
@@ -442,13 +712,25 @@ export function TextMerge({
       const ok = insert ? document.execCommand("insertText", false, insert) : document.execCommand("delete");
       if (ok) return;
     }
-    changeText(text.slice(0, from) + insert + text.slice(to));
+    const cur = outRef.current.text;
+    changeText(cur.slice(0, from) + insert + cur.slice(to));
   };
 
-  /** Replaces output lines `[start, end)`, which lie in chunk `k`'s region, with `lines`. */
-  const editLines = (k: number, start: number, end: number, lines: string[]) => {
+  /**
+   * Replaces output lines `[start, end)`, which lie in chunk `k`'s region,
+   * with `lines` (from `origins`), leaving the chunk in `state`.
+   */
+  const editLines = (
+    k: number,
+    start: number,
+    end: number,
+    lines: string[],
+    origins: Origin[],
+    state: ChunkState,
+    label: string,
+  ) => {
     const { from, to, value } = lineEdit(outLines, text, start, end, lines);
-    pendingEdit.current = { chunk: k, start, oldEnd: end, newEnd: start + lines.length };
+    pendingEdit.current = { chunk: k, start, oldEnd: end, newEnd: start + lines.length, origins, state, label };
     replaceOutput(from, to, value);
     pendingEdit.current = null;
   };
@@ -456,21 +738,68 @@ export function TextMerge({
   /** Sets the selected chunk's output: one side, both, the base, or the conflict markers again. */
   const resolve = (how: Resolution) => {
     if (!data || !curChunk) return;
-    const take = (doc: TextDocument | null, r: { start: number; end: number }) =>
-      doc ? doc.lines.slice(r.start, r.end) : [];
-    const l = take(data.left, curChunk.left);
-    const r = take(data.right, curChunk.right);
-    const n = markerNo[sel];
-    const lines = {
-      left: l,
-      right: r,
-      leftRight: [...l, ...r],
-      rightLeft: [...r, ...l],
-      base: take(data.base, curChunk.base),
-      conflict: [`<<<<<<< Left #${n}`, ...l, SEPARATOR, ...r, `>>>>>>> Right #${n}`],
-    }[how];
+    const l = takeLines(data.left, curChunk.left);
+    const r = takeLines(data.right, curChunk.right);
+    const b = takeLines(data.base, curChunk.base);
+    const from = (lines: string[], o: Origin) => lines.map(() => o);
+    const table: Record<Resolution, [string[], Origin[]]> = {
+      left: [l, from(l, "left")],
+      right: [r, from(r, "right")],
+      leftRight: [[...l, ...r], [...from(l, "left"), ...from(r, "right")]],
+      rightLeft: [[...r, ...l], [...from(r, "right"), ...from(l, "left")]],
+      base: [b, from(b, "base")],
+      conflict: [conflictLines(markerNo[sel], l, r), []],
+    };
+    const [lines, origins] = table[how];
     const reg = regions[sel];
-    editLines(sel, reg.start, reg.end, lines);
+    const label = RESOLUTIONS.find((x) => x.id === how)?.label ?? how;
+    editLines(
+      sel,
+      reg.start,
+      reg.end,
+      lines,
+      how === "conflict" ? from(lines, "") : origins,
+      how === "conflict" ? "conflict" : "taken",
+      how === "conflict" ? "Re-open as conflict" : `Take ${label.toLowerCase()}`,
+    );
+  };
+
+  /** Changes the selection covers: the chunks under the picked lines, else the selected chunk. */
+  const markTargets = (): number[] => {
+    if (lineSel) {
+      const lo = Math.min(lineSel.anchor, lineSel.focus);
+      const hi = Math.max(lineSel.anchor, lineSel.focus);
+      return changes.filter((k) => {
+        const r = chunks[k][lineSel.pane];
+        return r.start <= hi && r.end > lo;
+      });
+    }
+    return curChunk ? [sel] : [];
+  };
+  /** Marks changes resolved (dimmed, not counted as conflicts) or unresolved, whatever the output holds. */
+  const setMarks = (targets: number[], value: boolean) => {
+    if (!targets.length) return;
+    const prev = outRef.current;
+    const marks = { ...prev.marks };
+    for (const k of targets) marks[k] = value;
+    commit(value ? "Mark resolved" : "Mark unresolved", { ...prev, marks });
+  };
+  const toggleMarks = () => {
+    const targets = markTargets();
+    setMarks(targets, !targets.every(isResolved));
+  };
+
+  /** Applies every change still pending (base text) in one undoable step; conflicts get their markers. */
+  const runAutoMerge = () => {
+    if (!data || !pendingCount) return;
+    commit("Automatic merge", autoMerge(data, outRef.current));
+  };
+  /** Rebuilds the output from scratch as the chosen starting point (undoable), and remembers the choice. */
+  const changeStart = (mode: StartMode) => {
+    setStart(mode);
+    if (!data) return;
+    const fresh = buildOut(data, "base");
+    commit(mode === "auto" ? "Start with auto-merged" : "Start with base only", mode === "auto" ? autoMerge(data, fresh) : fresh);
   };
 
   /** The chunk holding line `line` of `pane`, or -1. */
@@ -492,11 +821,13 @@ export function TextMerge({
     if (k < 0 || !lines.length) return;
     const c = chunks[k];
     const reg = regions[k];
+    const origins = lines.map((): Origin => lineSel.pane);
+    const state = c.kind === "stable" ? out.states[k] : "taken";
     if (blockOf.has(k) && chunkAt(lineSel.pane, lo) === k) {
-      editLines(k, reg.start, reg.end, lines);
+      editLines(k, reg.start, reg.end, lines, origins, state, "Copy to output");
     } else {
       const at = c.kind === "stable" ? Math.min(reg.end, reg.start + (hi - c[lineSel.pane].start) + 1) : reg.end;
-      editLines(k, at, at, lines);
+      editLines(k, at, at, lines, origins, state, "Copy to output");
     }
     if (c.kind !== "stable") setSel(k);
     scrollOutputTo(reg.start);
@@ -565,9 +896,18 @@ export function TextMerge({
     const onKey = (e: KeyboardEvent) => {
       // Inactive tabs stay mounted but hidden; only the visible session reacts.
       if (e.defaultPrevented || !root.current?.offsetParent) return;
+      if (isComposing(e)) return; // araxis:text-view — keys belong to an open IME composition araxis:text-view end
       const mod = e.ctrlKey || e.metaKey;
       const inOutput = e.target === textarea.current;
-      if (mod && !e.shiftKey && !e.altKey && e.key.toLowerCase() === "s") save();
+      const t = e.target as HTMLElement | null;
+      // Text fields (the output, path boxes) keep their own undo.
+      const inField = !!t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable);
+      const key = e.key.toLowerCase();
+      if (mod && !e.shiftKey && !e.altKey && key === "s") save();
+      else if (mod && !e.altKey && !inField && key === "z") (e.shiftKey ? redo : undo)();
+      else if (mod && !e.shiftKey && !e.altKey && !inField && key === "y") redo();
+      else if (keyMatches(e, "merge.autoMerge")) runAutoMerge();
+      else if (keyMatches(e, "merge.markResolved")) toggleMarks();
       else if (e.altKey && e.shiftKey && e.key === "ArrowDown") step(changes, 1);
       else if (e.altKey && e.shiftKey && e.key === "ArrowUp") step(changes, -1);
       else if (e.altKey && e.key === "ArrowDown") step(conflicts, 1);
@@ -605,7 +945,37 @@ export function TextMerge({
   };
 
   const shift = { transform: `translateX(${-hx}px)` };
-  const cell = (pane: Pane, line: number | null, cls: string) => {
+  /** Inline changed-character ranges of a changed line, against the base (or the other side in a two-way merge). */
+  const inlineCache = useMemo(() => new Map<string, StyledRange[]>(), [data, options.ignoreCase]);
+  const inlineFor = (pane: Pane, row: MergeRow): StyledRange[] => {
+    const c = chunks[row.chunk];
+    const line = row[pane];
+    const doc = docOf(pane);
+    if (!data || !doc || line == null || c.kind === "stable") return [];
+    const key = `${pane}:${line}:${row.chunk}`;
+    const hit = inlineCache.get(key);
+    if (hit) return hit;
+    const lineOf = (p: Pane) => {
+      const n = row[p];
+      const d = docOf(p);
+      return n != null && d ? d.lines[n] : null;
+    };
+    const leftChanged = c.kind !== "rightChanged";
+    const rightChanged = c.kind !== "leftChanged";
+    let partners: (string | null)[] = [];
+    if (pane === "base") {
+      partners = [leftChanged ? lineOf("left") : null, rightChanged ? lineOf("right") : null];
+      if (partners[0] === partners[1]) partners = [partners[0]];
+    } else if (pane === "left" ? leftChanged : rightChanged) {
+      partners = [twoWay ? lineOf(pane === "left" ? "right" : "left") : lineOf("base")];
+    }
+    const text = doc.lines[line];
+    const ranges = partners.flatMap((other) => (other == null ? [] : changedRanges(text, other, options.ignoreCase)));
+    inlineCache.set(key, ranges);
+    return ranges;
+  };
+
+  const cell = (pane: Pane, line: number | null, cls: string, ranges: StyledRange[] = []) => {
     const doc = docOf(pane);
     const pick = picked(pane, line) ? " picked" : "";
     const handlers = {
@@ -620,7 +990,15 @@ export function TextMerge({
         </span>
         <div className={`tm-cell ${line == null ? "absent" : cls}${pick}`} {...handlers}>
           <div className="tcontent" style={shift}>
-            {line != null && doc?.lines[line]}
+            {line != null &&
+              doc &&
+              (ranges.length
+                ? composeRuns(doc.lines[line], [ranges]).map((r, i) => (
+                    <span key={i} className={r.cls || undefined}>
+                      {r.text}
+                    </span>
+                  ))
+                : doc.lines[line])}
           </div>
         </div>
       </>
@@ -632,29 +1010,39 @@ export function TextMerge({
     const chunk = chunks[row.chunk];
     const isConflict = chunk.kind === "conflict";
     const open = blockOf.has(row.chunk);
-    const changed = overridden.has(row.chunk);
-    const resolved = isConflict && !open;
+    const st = out.states[row.chunk];
+    const pending = chunk.kind !== "stable" && st === "pending";
+    const changed = chunk.kind === "stable" ? touched.has(row.chunk) : st === "taken" || st === "edited";
+    const resolved = chunk.kind !== "stable" && isResolved(row.chunk);
+    const mark = out.marks[row.chunk];
     const current = sel === row.chunk && chunk.kind !== "stable";
     const [lc, bc, rc] = CELL_CLASSES[chunk.kind];
+    const how = mark === true ? " (marked resolved)" : mark === false ? " (marked unresolved)" : resolved ? " (resolved)" : "";
     const title =
       chunk.kind === "stable"
         ? changed
           ? "Unchanged text (edited in the output)"
           : undefined
         : isConflict
-          ? `Conflict ${chunk.conflict}${resolved ? " (resolved)" : ""}`
-          : `${CHUNK_LABEL[chunk.kind]}${open ? " (re-opened as a conflict)" : changed ? " (overridden)" : ""}; click to choose a different side`;
+          ? `Conflict ${chunk.conflict}${pending ? " (not merged yet: the output holds the base)" : how}`
+          : pending
+            ? `${CHUNK_LABEL[chunk.kind].replace(" (merged automatically)", "")}: not merged yet (Automatic merge applies it)`
+            : `${CHUNK_LABEL[chunk.kind]}${open ? " (re-opened as a conflict)" : changed ? " (overridden)" : ""}${
+                mark !== undefined ? how : ""
+              }; click to choose a different side`;
     return (
       <div
         className={`mrow m-${chunk.kind}${row.first && chunk.kind !== "stable" ? " first" : ""}${
           resolved ? " resolved" : ""
-        }${!isConflict && changed ? " edited" : ""}${!isConflict && open ? " reopened" : ""}${current ? " current" : ""}`}
+        }${pending ? " pending" : ""}${!isConflict && changed ? " edited" : ""}${!isConflict && open ? " reopened" : ""}${
+          current ? " current" : ""
+        }`}
         onClick={() => chunk.kind !== "stable" && goChunk(row.chunk, false)}
         title={title}
       >
-        {cell("left", row.left, lc)}
-        {!twoWay && cell("base", row.base, bc)}
-        {cell("right", row.right, rc)}
+        {cell("left", row.left, lc, inlineFor("left", row))}
+        {!twoWay && cell("base", row.base, bc, inlineFor("base", row))}
+        {cell("right", row.right, rc, inlineFor("right", row))}
       </div>
     );
   };
@@ -690,6 +1078,37 @@ export function TextMerge({
     return bars;
   };
 
+  /** Edit markers in the output's left margin: runs of lines by where they came from. */
+  const gutter = () => {
+    const top = outScroll.top;
+    const height = textarea.current?.clientHeight ?? 2000;
+    const first = Math.max(0, Math.floor((top - OUT_PAD_TOP) / OUT_LINE_HEIGHT));
+    const last = Math.min(out.origins.length, Math.ceil((top + height) / OUT_LINE_HEIGHT) + 1);
+    const marks: ReactNode[] = [];
+    for (let i = first; i < last; ) {
+      const o = out.origins[i];
+      let j = i + 1;
+      while (j < last && out.origins[j] === o) j++;
+      if (o)
+        marks.push(
+          <div
+            key={i}
+            className={`tm-gm o-${o}`}
+            style={{ top: OUT_PAD_TOP + i * OUT_LINE_HEIGHT, height: (j - i) * OUT_LINE_HEIGHT }}
+          />,
+        );
+      i = j;
+    }
+    return marks;
+  };
+
+  const undoTop = hist.undo[hist.undo.length - 1];
+  const redoTop = hist.redo[hist.redo.length - 1];
+  const targets = markTargets();
+  const targetText = lineSel
+    ? `the ${targets.length} change${targets.length === 1 ? "" : "s"} under the picked lines`
+    : "the selected change";
+
   const stats = data?.merge.stats;
   const autoMerged = stats ? stats.leftChanges + stats.rightChanges + stats.bothSame : 0;
   const canResolve = !!curChunk;
@@ -713,6 +1132,39 @@ export function TextMerge({
         >
           <ArrowDown size={14} /> Next
         </button>
+        <span className="sep" />
+        <button
+          onClick={undo}
+          disabled={!undoTop}
+          title={undoTop ? `Undo: ${undoTop.label} (Ctrl+Z outside the output pane)` : "Nothing to undo"}
+        >
+          <Undo2 size={14} /> {undoTop?.label === "Automatic merge" ? "Undo automatic merge" : "Undo"}
+        </button>
+        <button
+          onClick={redo}
+          disabled={!redoTop}
+          title={redoTop ? `Redo: ${redoTop.label} (Ctrl+Y outside the output pane)` : "Nothing to redo"}
+        >
+          <Redo2 size={14} /> Redo
+        </button>
+        <button
+          onClick={runAutoMerge}
+          disabled={!pendingCount}
+          title={
+            pendingCount
+              ? `Merge the ${pendingCount} change${pendingCount === 1 ? "" : "s"} not merged yet in one step: one-sided changes are taken, conflicts are wrapped in markers (${shortcutLabel("merge.autoMerge")}; undo with one Undo)`
+              : "Every change is already merged, taken or edited (Undo the automatic merge or start with the base only to merge again)"
+          }
+        >
+          <WandSparkles size={14} /> Automatic merge
+        </button>
+        <label title="What the output starts as when the files are (re)loaded; changing it rebuilds the output (undoable)">
+          Start with
+          <select value={start} onChange={(e) => changeStart(e.target.value as StartMode)}>
+            <option value="auto">Auto-merged</option>
+            <option value="base">Base only</option>
+          </select>
+        </label>
         <span className="sep" />
         <span className="tm-take-label">Take</span>
         <div className="seg-control">
@@ -743,6 +1195,28 @@ export function TextMerge({
           }
         >
           <ArrowDownToLine size={14} /> Copy to output
+        </button>
+        <button
+          onClick={() => setMarks(targets, true)}
+          disabled={!targets.length || targets.every(isResolved)}
+          title={
+            targets.length
+              ? `Mark ${targetText} resolved: dimmed and no longer counted as a conflict (${shortcutLabel("merge.markResolved")} toggles)`
+              : "Select a change, or pick lines in an input pane, first"
+          }
+        >
+          <CheckCheck size={14} /> Resolved
+        </button>
+        <button
+          onClick={() => setMarks(targets, false)}
+          disabled={!targets.length || !targets.some(isResolved)}
+          title={
+            targets.length
+              ? `Mark ${targetText} unresolved: flagged again until you decide (${shortcutLabel("merge.markResolved")} toggles)`
+              : "Select a change, or pick lines in an input pane, first"
+          }
+        >
+          <CircleDashed size={14} /> Unresolved
         </button>
         <span className="sep" />
         <label>
@@ -866,12 +1340,23 @@ export function TextMerge({
                     <span className="tm-dirty-dot" /> unsaved
                   </span>
                 )}
+                <span className="tm-legend" title="Edit markers in the output's left margin show where each line came from">
+                  {ORIGIN_LEGEND.map((o) => (
+                    <span key={o.id} className="tm-legend-item" title={o.title}>
+                      <span className={`tm-swatch o-${o.id}`} />
+                      {o.label}
+                    </span>
+                  ))}
+                </span>
               </div>
               <div className="tm-editor">
                 <div className="tm-highlights" aria-hidden>
                   <div style={{ transform: `translate(${-outScroll.left}px, ${-outScroll.top}px)` }}>
                     {highlights()}
                   </div>
+                </div>
+                <div className="tm-gutter" aria-hidden>
+                  <div style={{ transform: `translateY(${-outScroll.top}px)` }}>{gutter()}</div>
                 </div>
                 <textarea
                   ref={textarea}
@@ -884,6 +1369,7 @@ export function TextMerge({
                     setOutScroll({ top: e.currentTarget.scrollTop, left: e.currentTarget.scrollLeft })
                   }
                   onKeyDown={(e) => {
+                    if (isComposing(e)) return; // araxis:text-view araxis:text-view end
                     if (e.key === "Tab" && !e.shiftKey && !e.ctrlKey && !e.altKey && !e.metaKey) {
                       e.preventDefault();
                       document.execCommand("insertText", false, "\t");
@@ -924,6 +1410,11 @@ export function TextMerge({
                   {stats.leftChanges} left · {stats.rightChanges} right · {stats.bothSame} both
                 </span>
               </>
+            )}
+            {pendingCount > 0 && (
+              <span className="tm-pending">
+                {pendingCount} change{pendingCount === 1 ? "" : "s"} not merged yet (Automatic merge)
+              </span>
             )}
             {lineSel && (
               <span className="muted">
