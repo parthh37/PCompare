@@ -1,4 +1,4 @@
-/* ---------- 3-way folder merge ---------- */
+/* ---------- folder merge (3-way, or 2-way without a base) ---------- */
 .fm-paths {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -41,6 +41,11 @@
   border-bottom: 1px solid var(--border);
   background: var(--panel-2);
 }
+/* Two-way merges have no base column. */
+.fm-two .fm-header,
+.fm-two .fm-row {
+  grid-template-columns: minmax(0, 1fr) 96px 96px 190px 118px;
+}
 .fm-header > div {
   padding: 0 6px;
 }
@@ -50,10 +55,10 @@
   user-select: none;
 }
 .fm-row:hover {
-  background: rgba(255, 255, 255, 0.03);
+  background: var(--row-hover);
 }
 .fm-row.selected {
-  background: rgba(91, 156, 255, 0.16);
+  background: var(--sel-bg);
 }
 .fm-row.conflict {
   box-shadow: inset 3px 0 0 var(--different);
@@ -122,12 +127,25 @@
 .c-leftChanged .fm-badge,
 .c-leftAdded .fm-badge,
 .c-leftDeleted .fm-badge {
-  color: #8fb8ff;
+  color: var(--left-fg);
 }
 .c-rightChanged .fm-badge,
 .c-rightAdded .fm-badge,
-.c-rightDeleted .fm-badge {
+.c-rightDeleted .fm-badge,
+.c-rightOnly .fm-badge,
+.c-rightNewer .fm-badge {
   color: var(--orphan);
+}
+.c-leftOnly .fm-badge,
+.c-leftNewer .fm-badge {
+  color: var(--left-fg);
+}
+.c-autoMerged .fm-badge {
+  color: var(--ok);
+  border-color: rgba(111, 207, 151, 0.4);
+}
+.fm-textconf {
+  opacity: 0.85;
 }
 .fm-row.conflict .fm-badge {
   color: var(--different);
@@ -168,10 +186,13 @@
 }
 
 .fm-left-fg {
-  color: #8fb8ff;
+  color: var(--left-fg);
 }
 .fm-right-fg {
   color: var(--orphan);
+}
+.fm-auto-fg {
+  color: var(--ok);
 }
 
 /* dialogs */

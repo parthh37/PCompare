@@ -241,7 +241,7 @@ fn size_filter_hides_small_pairs() {
 
 #[test]
 fn size_and_date_filters_keep_a_pair_when_either_side_matches() {
-    let file = |size, modified_ms| EntryMeta { size, modified_ms, is_dir: false };
+    let file = |size, modified_ms| EntryMeta { size, modified_ms, is_dir: false, ..Default::default() };
     let size = FolderFilters { max_size: Some(100), ..Default::default() };
     // Grew past the limit on one side only: still listed.
     assert!(pair_passes(Some(&file(50, None)), Some(&file(500, None)), &size));

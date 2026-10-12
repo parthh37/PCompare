@@ -1,0 +1,47 @@
+/* Folder Compare: attributes column, ignored rows, link marker, progress overlay. */
+
+.fc-attrs .fheader,
+.fc-attrs .frow {
+  grid-template-columns: minmax(0, 1fr) 80px 175px 84px 28px minmax(0, 1fr) 80px 175px 84px;
+}
+.fcell.fc-attr {
+  color: var(--muted);
+  font-family: var(--mono, ui-monospace, monospace);
+  font-size: 11.5px;
+}
+.fcell.fc-attr.differs {
+  color: var(--different);
+}
+
+/* Marked "ignore": counts as same, drawn muted and italic so it stays recognisable. */
+.frow.ignored .name,
+.frow.ignored .status {
+  color: var(--muted);
+  font-style: italic;
+}
+
+.fc-link {
+  display: inline-flex;
+  margin-left: 5px;
+  color: var(--muted);
+  vertical-align: -1px;
+}
+
+.fc-progress {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  max-width: 70%;
+  text-align: center;
+}
+.fc-progress small {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fc-error-text {
+  color: var(--warn);
+}

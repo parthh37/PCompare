@@ -68,14 +68,14 @@
 .mrow {
   height: 100%;
   font-family: var(--mono);
-  font-size: 13px;
+  font-size: var(--editor-font-size);
   line-height: 20px;
   tab-size: 4;
 }
 .mrow .ln {
   text-align: right;
   padding-right: 8px;
-  color: #566074;
+  color: var(--faint);
   user-select: none;
   background: var(--panel);
 }
@@ -115,7 +115,7 @@
   background: rgba(242, 119, 122, 0.06);
 }
 .mrow.resolved .ln {
-  color: #566074;
+  color: var(--faint);
 }
 .mrow.current .ln:first-child {
   box-shadow: inset 3px 0 0 var(--warn);
@@ -130,7 +130,7 @@
   touch-action: none;
 }
 .tm-splitter:hover {
-  background: rgba(91, 156, 255, 0.35);
+  background: var(--accent-border);
 }
 
 .tm-outpane {
@@ -173,7 +173,7 @@
   padding: 4px 8px;
   background: transparent;
   font-family: var(--mono);
-  font-size: 13px;
+  font-size: var(--editor-font-size);
   line-height: 20px;
   tab-size: 4;
   white-space: pre;
@@ -201,7 +201,7 @@
   background: rgba(242, 119, 122, 0.3);
 }
 .tm-hl.left {
-  background: rgba(91, 156, 255, 0.12);
+  background: var(--accent-tint);
 }
 .tm-hl.right {
   background: var(--add-bg);
@@ -218,4 +218,37 @@
 }
 .statusbar .muted {
   color: var(--muted);
+}
+
+/* Two-way merge: no base column. */
+.tm-two .tm-heads,
+.tm-two .mrow {
+  grid-template-columns: 44px minmax(0, 1fr) 44px minmax(0, 1fr);
+}
+
+/* Changes can be selected (and overridden); lines can be picked for "Copy to output". */
+.mrow:not(.m-stable) {
+  cursor: pointer;
+}
+.mrow .tm-cell {
+  user-select: none;
+}
+.mrow .tm-cell.picked,
+.mrow .ln.picked {
+  background-image: linear-gradient(var(--accent-tint), var(--accent-tint)), linear-gradient(var(--accent-tint), var(--accent-tint));
+  color: var(--text);
+}
+.mrow.edited .ln {
+  color: var(--accent);
+}
+.mrow.reopened .tm-cell:not(.absent) {
+  background: rgba(242, 119, 122, 0.16);
+}
+.tm-hl.region {
+  background: var(--accent-tint);
+  box-shadow: inset 3px 0 0 var(--warn);
+}
+.tm-hl.region.empty {
+  background: var(--warn);
+  box-shadow: none;
 }

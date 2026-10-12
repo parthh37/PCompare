@@ -1,4 +1,5 @@
-//! Tauri commands for editable Text Compare sessions and 3-way Text Merge.
+//! Tauri commands for editable Text Compare sessions and Text Merge (3-way,
+//! or 2-way when no base file is given).
 
 use crate::CmdResult;
 use pcompare_core::text::{self, TextDiffOptions, TextDiffResult};
@@ -103,6 +104,9 @@ pub async fn save_text_file(path: String, text: String, format: TextFormat) -> C
     if pcompare_remote::is_remote(&path) {
         return Err(format!("{path}: remote files are read-only"));
     }
+    if pcompare_remote::is_inside_container(&path) {
+        return Err(pcompare_remote::read_only_inside(&path)); // bc5:archives
+    }
     crate::blocking(move || textfile::save_text(&path, &text, &format)).await
 }
 
@@ -110,7 +114,8 @@ pub async fn save_text_file(path: String, text: String, format: TextFormat) -> C
 #[serde(rename_all = "camelCase")]
 pub struct MergeLoad {
     left: TextDocument,
-    base: TextDocument,
+    /// `None` in a two-way merge, where every difference is a conflict.
+    base: Option<TextDocument>,
     right: TextDocument,
     merge: MergeResult,
     /// Auto-merged output with conflict markers around unresolved conflicts.
@@ -120,7 +125,8 @@ pub struct MergeLoad {
     output_format: TextFormat,
 }
 
-/// Loads the three inputs of a Text Merge session and merges them.
+/// Loads the inputs of a Text Merge session and merges them: three-way
+/// against `base`, or two-way when `base` is empty.
 #[tauri::command]
 pub async fn load_merge(
     app: AppHandle,
@@ -133,19 +139,33 @@ pub async fn load_merge(
         let (lp, rp) = crate::with_remote(&app, [&left, &right], |r| {
             Ok((r.local_copy(&left, true)?, r.local_copy(&right, true)?))
         })?;
-        let bp = crate::with_remote(&app, [&base, ""], |r| r.local_copy(&base, true))?;
-        let (left, base, right) = (load_document(&lp, left)?, load_document(&bp, base)?, load_document(&rp, right)?);
-        if let Some(doc) = [&left, &base, &right].into_iter().find(|d| d.binary) {
+        let base = if base.is_empty() {
+            None
+        } else {
+            let bp = crate::with_remote(&app, [&base, ""], |r| r.local_copy(&base, true))?;
+            Some(load_document(&bp, base)?)
+        };
+        let (left, right) = (load_document(&lp, left)?, load_document(&rp, right)?);
+        if let Some(doc) = [Some(&left), base.as_ref(), Some(&right)].into_iter().flatten().find(|d| d.binary) {
             return Err(CoreError::Other(format!(
                 "{} looks binary; Text Merge needs text files",
                 doc.info.path
             )));
         }
 
-        let merge = pcompare_merge::merge3(&base.lines, &left.lines, &right.lines, &options)?;
+        // bc5:folder-merge — without a base every difference is a conflict to resolve.
+        let (merge, trailing) = match &base {
+            Some(base) => (
+                pcompare_merge::merge3(&base.lines, &left.lines, &right.lines, &options)?,
+                pcompare_merge::merge_trailing_newline(
+                    base.trailing_newline,
+                    left.trailing_newline,
+                    right.trailing_newline,
+                ),
+            ),
+            None => (pcompare_merge::merge2(&left.lines, &right.lines, &options)?, left.trailing_newline),
+        };
         let lines = pcompare_merge::render_output(&merge, &left.lines, &right.lines);
-        let trailing =
-            pcompare_merge::merge_trailing_newline(base.trailing_newline, left.trailing_newline, right.trailing_newline);
         Ok(MergeLoad {
             output: pcompare_merge::join_lines(&lines, trailing),
             output_format: left.format.clone(),

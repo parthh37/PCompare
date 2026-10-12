@@ -1,0 +1,70 @@
+/* Text compare rules dialog (TextRulesDialog.tsx). */
+.trd-error {
+  color: var(--danger-text);
+  margin-right: auto;
+  font-size: 12px;
+}
+.trd-span {
+  grid-column: 1 / -1;
+}
+.trd-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 8px 0 10px;
+}
+.trd-table th {
+  text-align: left;
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--muted);
+  padding: 0 4px 4px;
+}
+.trd-table td {
+  padding: 2px 4px;
+}
+.trd-table td input:not([type="checkbox"]) {
+  width: 100%;
+  font-family: var(--mono);
+}
+.trd-arrow,
+.trd-center {
+  text-align: center;
+  color: var(--muted);
+}
+.trd-list {
+  list-style: none;
+  margin: 0 0 6px;
+  padding: 0;
+  max-height: 140px;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+}
+.trd-list li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 2px 4px 2px 8px;
+  font-size: 12px;
+  min-height: 24px;
+}
+.trd-list li + li {
+  border-top: 1px solid var(--border);
+}
+.trd-add {
+  align-items: center;
+}
+.trd-add input {
+  width: 90px;
+}
+.trd-clear {
+  align-self: flex-start;
+  margin-top: 4px;
+}
+/* bc5:converters — "File formats…" sits at the left of the footer. */
+.trd-formats {
+  margin-right: auto;
+}
+.trd-error + .trd-formats {
+  margin-right: 0;
+}

@@ -1,0 +1,27 @@
+[package]
+name = "pcompare-archive"
+description = "Archives (zip, tar, gzip, bzip2, xz, 7z), folder snapshots and Subversion repositories as PCompare file systems"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+# Pure Rust only: the crate is clippy-checked for Windows from macOS.
+[dependencies]
+pcompare-core = { path = "../pcompare-core" }
+serde.workspace = true
+serde_json.workspace = true
+zip = { version = "8", default-features = false, features = ["deflate", "deflate64", "bzip2", "lzma", "xz"] }
+tar = "0.4"
+flate2 = "1"
+bzip2 = "0.6"
+lzma-rust2 = { version = "0.22", default-features = false, features = ["std", "xz"] }
+sevenz-rust2 = { version = "0.24", default-features = false, features = ["bzip2", "deflate", "ppmd"] }
+quick-xml = { version = "0.42", features = ["serialize"] }
+chrono = { version = "0.4", default-features = false, features = ["std", "clock"] }
+crc32fast = "1"
+tempfile = "3"
+
+[dev-dependencies]
+sevenz-rust2 = { version = "0.24", default-features = false, features = ["compress"] }
+lzma-rust2 = { version = "0.22", default-features = false, features = ["std", "xz", "encoder"] }

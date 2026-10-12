@@ -19,6 +19,13 @@ pcompare-sync = { path = "../crates/pcompare-sync" }
 pcompare-meta = { path = "../crates/pcompare-meta" }
 pcompare-index = { path = "../crates/pcompare-index" }
 pcompare-db = { path = "../crates/pcompare-db" }
+# bc5:converters — document → text converters, file format rules, external tools.
+pcompare-convert = { path = "../crates/pcompare-convert" }
+# bc5:reports-script — HTML/text/CSV reports and the script processor (`pcompare @script.txt`).
+pcompare-report = { path = "../crates/pcompare-report" }
+pcompare-script = { path = "../crates/pcompare-script" }
+# bc5:archives — archives, folder snapshots and svn: repositories as folders.
+pcompare-archive = { path = "../crates/pcompare-archive" }
 serde.workspace = true
 serde_json.workspace = true
 tauri = { version = "2", features = [] }
@@ -26,6 +33,10 @@ tauri-plugin-dialog = "2"
 tauri-plugin-opener = "2"
 tauri-plugin-updater = "2"
 tauri-plugin-process = "2"
+# bc5:text-ui — clipboard text as a Text Compare side.
+tauri-plugin-clipboard-manager = "2"
+# bc5:app-shell — a second launch opens a tab in the running window.
+tauri-plugin-single-instance = "2"
 notify = "8"
 notify-debouncer-mini = "0.7"
 globset = "0.4"

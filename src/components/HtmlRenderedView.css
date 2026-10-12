@@ -1,0 +1,43 @@
+/* Formatted HTML view of Text Compare (HtmlRenderedView.tsx). */
+.hrv {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+.hrv-bar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 4px 10px;
+  border-bottom: 1px solid var(--border);
+  font-size: 12px;
+}
+.hrv-bar .field {
+  margin: 0;
+}
+.hrv-error {
+  color: var(--danger-text);
+}
+.hrv-panes {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1px;
+  flex: 1;
+  min-height: 0;
+  background: var(--border);
+}
+.hrv-pane {
+  width: 100%;
+  height: 100%;
+  border: 0;
+  /* Pages assume a white canvas, whatever the app theme. */
+  background: #fff;
+  padding: 0;
+}
+div.hrv-pane {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--panel);
+}

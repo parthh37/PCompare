@@ -3,12 +3,12 @@ import { relaunch } from "@tauri-apps/plugin-process";
 import { check, type Update } from "@tauri-apps/plugin-updater";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { errorMessage } from "./api";
+import { setPrefs, usePref } from "./prefs";
 
 /** Background re-check cadence for long-running sessions. */
 const CHECK_EVERY_MS = 6 * 60 * 60 * 1000;
 /** Don't compete with the first comparison for startup I/O. */
 const FIRST_CHECK_DELAY_MS = 8_000;
-const AUTO_CHECK_KEY = "pcompare.autoUpdate";
 
 export type UpdatePhase =
   | { kind: "idle" }
@@ -16,10 +16,6 @@ export type UpdatePhase =
   | { kind: "available"; update: Update }
   | { kind: "downloading"; update: Update; done: number; total: number | null }
   | { kind: "error"; message: string };
-
-function autoUpdateEnabled(): boolean {
-  return localStorage.getItem(AUTO_CHECK_KEY) !== "off";
-}
 
 /**
  * Over-the-air updates from GitHub Releases (see plugins.updater in
@@ -30,7 +26,8 @@ export function useUpdater(notify: (msg: string) => void) {
   const [phase, setPhase] = useState<UpdatePhase>({ kind: "idle" });
   const [version, setVersion] = useState("");
   const [dismissed, setDismissed] = useState<string | null>(null);
-  const [autoCheck, setAutoCheckState] = useState(autoUpdateEnabled);
+  /** App preference (migrated from the old `pcompare.autoUpdate` localStorage key by prefs.ts). */
+  const autoCheck = usePref("autoUpdate");
   /** When the last check reached the server, successfully or not. */
   const [checkedAt, setCheckedAt] = useState<Date | null>(null);
   const busy = useRef(false);
@@ -77,10 +74,7 @@ export function useUpdater(notify: (msg: string) => void) {
     };
   }, [runCheck, autoCheck]);
 
-  const setAutoCheck = useCallback((on: boolean) => {
-    localStorage.setItem(AUTO_CHECK_KEY, on ? "on" : "off");
-    setAutoCheckState(on);
-  }, []);
+  const setAutoCheck = useCallback((on: boolean) => setPrefs({ autoUpdate: on }), []);
 
   const install = useCallback(async () => {
     if (phase.kind !== "available") return;

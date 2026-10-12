@@ -1,5 +1,6 @@
 import { ArrowLeft, ArrowRight, ChevronDown, ChevronRight, Equal, EqualNot, RefreshCw, type LucideIcon } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { matches as matchesKey, shortcutLabel } from "../lib/keymap";
 import type { DiffStatus, PropertyCompareResult, PropertyRow } from "../lib/metaApi";
 import "./PropertyCompare.css";
 
@@ -77,12 +78,12 @@ export function PropertyCompare({
     return out;
   }, [result, filter]);
 
-  // F5 refreshes, but only for the visible tab (hidden tab panels have no layout).
+  // The refresh key (F5 by default) only acts on the visible tab (hidden tab panels have no layout).
   const refresh = useRef(onRefresh);
   refresh.current = onRefresh;
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key !== "F5" || !root.current?.offsetParent) return;
+      if (!matchesKey(e, "property.refresh") || !root.current?.offsetParent) return;
       e.preventDefault();
       refresh.current();
     };
@@ -115,7 +116,7 @@ export function PropertyCompare({
           ))}
         </div>
         <span className="spacer" />
-        <button onClick={onRefresh} title="Refresh (F5)">
+        <button onClick={onRefresh} title={`Refresh (${shortcutLabel("property.refresh")})`}>
           <RefreshCw size={14} /> Refresh
         </button>
       </div>

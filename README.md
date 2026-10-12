@@ -34,28 +34,28 @@ A fast, modern file & folder comparison tool for Windows and macOS — inspired 
 - [x] Folder **sync** actions: copy, move, delete, mirror, update (with preview + undo log)
 - [x] Two-way sync with history, journaled crash-resumable runs, rollback, locked-file handling
 - [x] **Text Merge**: 3-way merge with base, conflict resolution, `git mergetool` support
-- [ ] Better line alignment inside replace blocks (similarity-based pairing)
-- [x] Ignore rules (regex-defined unimportant text) · [ ] language grammars (comments, strings)
+- [x] Better line alignment inside replace blocks (similarity-based pairing)
+- [x] Ignore rules (regex-defined unimportant text) · [x] language grammars (comments, strings)
 - [x] **Table / CSV compare** with key columns
 - [x] **Image compare** (side-by-side, overlay, pixel-diff, tolerance)
-- [ ] Archive compare (zip / 7z / tar as folders)
+- [x] Archive compare (zip / 7z / tar as folders), folder snapshots, Subversion sides
 - [x] Saved sessions
-- [ ] Workspaces (save all open tabs), file-format rules per extension
-- [ ] HTML / text reports, folder compare reports
-- [ ] Progress + cancellation for huge folder trees
-- [ ] Windows Explorer context menu ("Select left side" / "Compare to…")
+- [x] Workspaces (save all open tabs), file-format rules per extension
+- [x] HTML / text reports, folder compare reports
+- [x] Progress + cancellation for huge folder trees
+- [x] Windows Explorer context menu ("Select left side" / "Compare to…")
 - [x] Remote: SFTP / FTP / S3 / WebDAV / OneDrive / Dropbox / Google Drive / Azure / GCS / B2
-- [ ] Remote write-back (sync actions on remote profiles)
+- [x] Remote write-back (sync actions on remote profiles)
 
 ### Phase 3 — Extended features (beyond Beyond Compare)
 - [ ] Structural diff for JSON / YAML / XML (key-order-insensitive)
-- [ ] Syntax highlighting & semantic (AST-aware) code diff
+- [x] Syntax highlighting · [ ] semantic (AST-aware) code diff
 - [ ] Moved-block detection
-- [ ] Office/PDF text extraction compare (docx, xlsx, pdf)
+- [x] Office/PDF text extraction compare (docx, doc, odt, rtf, pdf)
 - [ ] Git integration: compare branches/commits, blame-aware view
 - [x] Watch mode — live re-compare on file change
 - [ ] AI-generated change summary of a diff
-- [ ] Light theme & custom color schemes
+- [x] Light theme & custom color schemes
 
 ## Development
 
@@ -114,6 +114,8 @@ crates/pcompare-sync/    Folder sync planning, fail-safe execution (retries, loc
 crates/pcompare-index/   Embedded SQLite scan database: checksum cache, two-way sync baselines, job journal
 crates/pcompare-meta/    Registry (.reg / live), executable version (pelite) and audio tag (lofty) compare
 crates/pcompare-db/      Database schema/data compare + sync scripts (sqlx: MySQL/PostgreSQL/SQLite, tiberius: SQL Server)
+crates/pcompare-report/  Text / folder / table reports (HTML, text, unified patch, CSV)
+crates/pcompare-script/  Script processor (`pcompare @script.txt`) and headless quick compare (`/qc`)
 src-tauri/               Tauri shell exposing the engines as commands
 src/                     React + TypeScript UI
 ```
@@ -144,12 +146,98 @@ PCOMPARE_LIVE_MSSQL='{"engine":"mssql","host":"127.0.0.1","port":1433,"user":"sa
 
 Cells are matched by `values_equal` in `crates/pcompare-db/src/value.rs`. Numbers compare by value across types (`bit` 1 = `tinyint(1)` 1, `12.50` = `12.5`), and NULL only equals NULL. Everything else is opt-in from the Data options dialog: ignore case, trim whitespace (CHAR padding), a numeric tolerance, and a date-time precision (SQL Server `datetime` keeps about 3 fractional digits, MySQL and PostgreSQL keep 6).
 
+### Command line
+
+```text
+pcompare [options] <left> [<right>]                  compare two files or folders
+pcompare [options] <left> <right> <base> [<output>]  3-way merge (Beyond Compare's argument order)
+pcompare @<script> [<param>…] [/silent]               run a script without a window
+pcompare /qc[=size|crc|binary|rules] <left> <right>   quick compare without a window
+```
+
+Switches take Beyond Compare's spelling (`/name=value`, case-insensitive) or a GNU-style one (`--name value` /
+`--name=value`); `/`-switches are recognised only by their exact names, so `/Users/…` stays a path.
+
+| Switch | What it does |
+|---|---|
+| `/fv=<viewer>`, `--viewer <kind>` | Open as a specific session: `text`, `hex`, `table`, `picture`, `folder`, `sync`, `merge`, `folderMerge`, `registry`, `version`, `mp3`, `database` (BC names such as `"Text Compare"` or `"Data Compare"` work too) |
+| `/title1=<text>`, `/title2=<text>`, `--title-left`, `--title-right` | Tab labels instead of the file names (handy for git's temporary files) |
+| `/readonly` (`/ro`), `/lro`, `/rro`, `--readonly[-left\|-right]` | Open sides read-only in Text Compare |
+| `/mergeoutput=<path>`, `--merge-output <path>` | Where a 3-way merge writes its result |
+| `/qc[=<method>]`, `--quick-compare[=<method>]` | Compare headlessly and print one line. `rules` (default) applies the text rules to text files and compares other files byte by byte; `binary`, `crc` and `size` are stricter or quicker. Folders are compared recursively |
+| `@<file>`, `/silent` | Run a script (below); `/silent` prints only errors |
+| `--select-left <path>`, `--compare-to <path>` | Explorer's "Select Left Side" / "Compare to" |
+| `-h`, `--help`, `/?` | Usage |
+
+Exit codes: quick compare `0` = same (or only unimportant differences), `1` = different, `2` = error; scripts `0` =
+success, `1` = some commands failed, `2` = the script is unreadable or has syntax errors (nothing ran). With
+PCompare already open, a new `pcompare <paths>` (switches included) opens a tab in that window.
+
+On Windows the installed `pcompare.exe` is a GUI program: `cmd.exe` doesn't wait for it, so use
+`start /wait pcompare.exe /qc a b` (or PowerShell's `Start-Process -Wait`) to read `%ERRORLEVEL%`; output goes to the
+console the command was typed in, or wherever it is redirected (`> result.txt`).
+
+### Reports
+
+**Report…** in Text Compare, Folder Compare (toolbar) and Table Compare saves, copies or prints the comparison:
+
+- **Text**: side-by-side or unified layout, all lines or differences only with *N* context lines, as HTML (the app's
+  diff colours with changed-word highlights), plain text or a unified patch (`patch` / `git apply`); line numbers,
+  ignore unimportant differences, black and white. Unsaved edits are included.
+- **Folder**: summary (status and path) or detailed (both sides with sizes and dates), honouring the display filter
+  and name filter (or differences only / everything), as HTML, text or CSV. *Link to file comparison reports* writes a
+  text report for every differing text file into `<report>_files/` next to the saved HTML report and links it.
+- **Table**: an HTML grid with differing cells highlighted (left value over right value), or CSV.
+
+Copying HTML puts rich text on the clipboard (pastes formatted into Word or mail). Printing uses the webview's print
+dialog on Windows and Linux; on macOS, whose web view can't print, the report opens in the default browser with its
+print dialog.
+
+### Scripts
+
+`pcompare @nightly.txt "D:/work" "E:/backup"` runs a Beyond Compare–style script without opening a window. One
+command per line, keywords are case-insensitive, `#` starts a comment line, arguments with spaces go in double quotes,
+`%1`–`%9` are the parameters after the script name and `%NAME%` is an environment variable. The whole script is
+checked before anything runs.
+
+```text
+# Mirror a project to a backup and keep a report of what changed.
+log verbose "%TEMP%/backup.log"
+criteria timestamp:2sec size
+filter "-target\;-node_modules\;-*.tmp"
+load "%1" "%2"
+expand all
+folder-report layout:side-by-side options:display-mismatches,include-file-links output-to:"%2/../changes.html"
+sync create-empty mirror:left->right
+```
+
+| Command | |
+|---|---|
+| `log [normal\|verbose] [append:]<file>` | Log commands, results and errors (verbose: every file operation) |
+| `criteria <timestamp[:Nsec;IgnoreDST]\|size\|crc\|binary\|rules-based\|version\|attrib>…` | How files are compared (default `timestamp size`) |
+| `filter "<mask>;-<mask>;<folder>\;-<folder>\"` | Include / exclude file masks; masks ending in `\` or `/` are folders |
+| `load <left> <right>` | Compare two folders (or two files, for `text-report`) |
+| `expand all\|<folder>`, `collapse all\|<folder>` | Like the folder view: `select` and reports only see expanded folders' contents |
+| `select <side>.<status>.<type>…` | e.g. `all.diff.files`, `left.orphan`, `right.newer.files`, `all`; side `left\|right\|all`, status `all\|diff\|same\|exact\|orphan\|newer\|older`, type `files\|folders` |
+| `compare [crc\|binary\|rules-based]` | Content-compare the selected files |
+| `folder-report layout:<summary\|side-by-side> [options:<display-all\|display-mismatches\|display-matches\|display-orphans\|display-left-newer…>,include-file-links,column-size,column-timestamp] [title:<text>] output-to:<file> [output-options:<html-color\|html-mono\|text\|csv>]` | Folder report (format defaults from the file extension) |
+| `text-report layout:<side-by-side\|interleaved\|patch> [options:display-all\|display-mismatches\|display-context[=N],line-numbers,ignore-unimportant] output-to:<file> [output-options:html-color\|html-mono\|text,wrap-none]` | Text report of the loaded files, or of every selected file pair in one report |
+| `sync [create-empty] <mirror\|update>:<left->right\|right->left>`, `sync update:all` | Synchronize (fail-safe executor: atomic copies, retries, deletions to the Recycle Bin / Trash) |
+| `copy [left->right\|right->left]`, `delete [left\|right\|all]` | Copy or delete the selection (folders with their contents) |
+| `option confirm:<yes-to-all\|no-to-all\|prompt>` | Overwrites and deletions by `copy` / `delete` need confirmation: asked on the terminal (`prompt`, the default), never asked with `/silent` (skipped) |
+| `option stop-on-error`, `option recycle:<yes\|no>` | Stop at the first failing command (otherwise the script goes on and exits with 1); delete permanently instead of to the Recycle Bin |
+
+Scripts work on local folders; `printer` and `clipboard` outputs need the window.
+
 ### Use as a git difftool
 
 ```bash
 git config --global diff.tool pcompare
-git config --global difftool.pcompare.cmd '"C:/Program Files/PCompare/pcompare.exe" "$LOCAL" "$REMOTE"'
+# $BASE is the file's name in the repository; the titles replace git's temporary file names.
+git config --global difftool.pcompare.cmd '"C:/Program Files/PCompare/pcompare.exe" /title1="$BASE (old)" /title2="$BASE (new)" "$LOCAL" "$REMOTE"'
 ```
+
+To check whether two revisions differ without opening a window: `pcompare /qc "$LOCAL" "$REMOTE"` (exit code 0 or 1).
 
 ### Use as a git mergetool
 
@@ -157,7 +245,7 @@ The argument order matches Beyond Compare (`left right base output`):
 
 ```bash
 git config --global merge.tool pcompare
-git config --global mergetool.pcompare.cmd '"C:/Program Files/PCompare/pcompare.exe" "$LOCAL" "$REMOTE" "$BASE" "$MERGED"'
+git config --global mergetool.pcompare.cmd '"C:/Program Files/PCompare/pcompare.exe" "$LOCAL" "$REMOTE" "$BASE" /mergeoutput="$MERGED"'
 git config --global mergetool.pcompare.trustExitCode false
 ```
 

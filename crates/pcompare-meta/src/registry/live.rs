@@ -15,6 +15,37 @@ pub fn load_live(_spec: &LiveSpec) -> Result<RegTree> {
     ))
 }
 
+#[cfg(not(windows))]
+pub fn run_live_plan(_plan: &[Vec<String>]) -> Result<()> {
+    Err(CoreError::Other(
+        "Live registry edits are only available on Windows".into(),
+    ))
+}
+
+/// Runs the `reg.exe` invocations from [`super::live_plan`] in order,
+/// stopping at the first failure (earlier steps stay applied).
+#[cfg(windows)]
+pub fn run_live_plan(plan: &[Vec<String>]) -> Result<()> {
+    for (i, args) in plan.iter().enumerate() {
+        let args: Vec<&str> = args.iter().map(String::as_str).collect();
+        reg_exe(&args).map_err(|e| {
+            let done = if i == 0 {
+                String::new()
+            } else {
+                format!(
+                    " ({i} earlier step{} applied)",
+                    if i == 1 { " was" } else { "s were" }
+                )
+            };
+            CoreError::Other(format!(
+                "{} failed: {e}{done}",
+                super::format_command(&plan[i])
+            ))
+        })?;
+    }
+    Ok(())
+}
+
 #[cfg(windows)]
 pub fn load_live(spec: &LiveSpec) -> Result<RegTree> {
     match spec.machine {
