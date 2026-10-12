@@ -1,8 +1,9 @@
-import { CornerLeftUp, File, Folder } from "lucide-react";
+import { CornerLeftUp } from "lucide-react";
 import { useEffect, useState } from "react";
 import { api, errorMessage, REMOTE_SCHEME, type Profile, type RemoteEntry } from "../lib/api";
 import { formatSize, formatTime } from "../lib/format";
 import { Modal } from "./Modal";
+import { FileIcon } from "./icons";
 
 interface Props {
   /** Pick a folder (folder compare) or a file (text / hex compare). */
@@ -156,7 +157,7 @@ export function RemoteBrowser({ directory, initial, onPick, onClose, onManagePro
               onDoubleClick={() => (e.isDir ? enter(e.name) : pickFile(e.name))}
             >
               <span className="rb-name">
-                {e.isDir ? <Folder size={14} className="ic-folder" /> : <File size={14} className="ic-file" />} {e.name}
+                <FileIcon name={e.name} isDir={e.isDir} /> {e.name}
               </span>
               <span className="muted num">{e.isDir ? "" : formatSize(e.size)}</span>
               <span className="muted">{formatTime(e.modifiedMs)}</span>
