@@ -34,6 +34,28 @@ struct AppState {
     db: pcompare_db::connection::ConnectionStore,
     /// Set by `db_cancel` to stop a running data compare between tables.
     db_cancel: AtomicBool,
+    /// The scan database (checksum cache, sync baselines, job journal).
+    /// `None` if it couldn't be opened; everything still works, just without
+    /// caching, two-way history or crash recovery.
+    index: Option<pcompare_index::Index>,
+}
+
+/// Opens the scan database, quarantining a corrupt file and marking syncs
+/// that were running when the app last died as interrupted.
+fn open_index(data_dir: &std::path::Path) -> Option<pcompare_index::Index> {
+    let index = match pcompare_index::Index::open(&data_dir.join("pcompare.db")) {
+        Ok(ix) => ix,
+        Err(e) => {
+            eprintln!("scan database unavailable: {e}");
+            return None;
+        }
+    };
+    if let Err(e) = index.mark_interrupted() {
+        eprintln!("scan database: {e}");
+    }
+    // Keep a quarter of history; interrupted jobs are never pruned.
+    let _ = index.prune_jobs(90);
+    Some(index)
 }
 
 fn state(app: &AppHandle) -> tauri::State<'_, AppState> {
@@ -203,7 +225,18 @@ async fn compare_folders(
             };
             let (lfs, lpath) = side(&left)?;
             let (rfs, rpath) = side(&right)?;
-            let mut res = folder::compare_folders_with(&*lfs, &lpath, &*rfs, &rpath, &options)?;
+            let cache = sync::checksum_cache(&app, [&left, &right]);
+            let mut res = folder::compare_folders_cached(
+                &*lfs,
+                &lpath,
+                &*rfs,
+                &rpath,
+                &options,
+                cache.as_ref().map(|c| c as &dyn folder::ChecksumCache),
+            )?;
+            if let Some(cache) = cache {
+                let _ = cache.flush();
+            }
             res.left_root = left.clone();
             res.right_root = right.clone();
             Ok(res)
@@ -417,6 +450,7 @@ fn main() {
         .plugin(tauri_plugin_process::init())
         .setup(|app| {
             let config_dir = app.path().app_config_dir()?;
+            let data_dir = app.path().app_data_dir()?;
             let cache_dir = app.path().app_cache_dir()?.join("remote");
             let remote = RemoteManager::new(&config_dir, cache_dir, Box::new(KeyringSecrets));
             remote.clear_cache();
@@ -429,6 +463,7 @@ fn main() {
                     Box::new(KeyringSecrets),
                 ),
                 db_cancel: AtomicBool::new(false),
+                index: open_index(&data_dir),
             });
             Ok(())
         })
@@ -472,6 +507,17 @@ fn main() {
             sync::sync_plan,
             sync::sync_execute,
             sync::sync_cancel,
+            sync::sync_preflight,
+            sync::sync_interrupted,
+            sync::sync_resume,
+            sync::sync_discard,
+            sync::sync_rollback,
+            sync::sync_jobs,
+            sync::sync_job_detail,
+            sync::sync_forget_history,
+            sync::sync_default_versioning_folder,
+            sync::index_stats,
+            sync::index_clear_checksums,
             sync::folder_merge_compare,
             sync::folder_merge_execute,
             // --- registry / version / mp3 (meta.rs) ---

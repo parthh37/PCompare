@@ -21,6 +21,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::io::Read;
 use std::path::Path;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Instant;
 
 /// How file contents are compared after the quick tests.
@@ -160,6 +161,19 @@ pub struct FolderStats {
     pub left_only: usize,
     pub right_only: usize,
     pub errors: usize,
+    /// Checksums answered by the [`ChecksumCache`] instead of reading files.
+    pub checksums_reused: usize,
+}
+
+/// Remembers file checksums between scans so unchanged files need not be
+/// read again. Implementations key entries on the path *and* its size and
+/// modification time, and return `None` whenever either has changed.
+///
+/// `side` lets one cache serve both sides of a comparison while keeping
+/// their key spaces apart (or skip a side, e.g. a remote store).
+pub trait ChecksumCache: Send + Sync {
+    fn get(&self, side: Side, path: &str, meta: &EntryMeta) -> Option<u32>;
+    fn put(&self, side: Side, path: &str, meta: &EntryMeta, crc: u32);
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -180,6 +194,8 @@ struct Ctx<'a> {
     exclude_folders: GlobSet,
     left: &'a dyn Vfs,
     right: &'a dyn Vfs,
+    cache: Option<&'a dyn ChecksumCache>,
+    reused: AtomicUsize,
 }
 
 impl Ctx<'_> {
@@ -420,6 +436,27 @@ fn quick_tests_pass(l: &EntryMeta, r: &EntryMeta, opts: &FolderCompareOptions) -
         && (!opts.compare_timestamp || timestamps_match(l.modified_ms, r.modified_ms, opts))
 }
 
+/// CRC-32 of one side, from the cache when it still describes the file.
+fn cached_crc(ctx: &Ctx, side: Side, path: &str, meta: &EntryMeta) -> Result<u32> {
+    if let Some(hit) = ctx.cache.and_then(|c| c.get(side, path, meta)) {
+        ctx.reused.fetch_add(1, Ordering::Relaxed);
+        return Ok(hit);
+    }
+    let crc = crc32(ctx.fs(side), path)?;
+    if let Some(cache) = ctx.cache {
+        cache.put(side, path, meta, crc);
+    }
+    Ok(crc)
+}
+
+/// Cached checksums of both sides, without reading anything.
+fn cached_pair(ctx: &Ctx, lp: &str, rp: &str, l: &EntryMeta, r: &EntryMeta) -> Option<[u32; 2]> {
+    let cache = ctx.cache?;
+    let pair = [cache.get(Side::Left, lp, l)?, cache.get(Side::Right, rp, r)?];
+    ctx.reused.fetch_add(2, Ordering::Relaxed);
+    Some(pair)
+}
+
 fn compare_file_pair(lp: &str, rp: &str, l: &EntryMeta, r: &EntryMeta, ctx: &Ctx) -> Result<ContentVerdict> {
     let opts = ctx.opts;
     let quick_same = quick_tests_pass(l, r, opts);
@@ -431,7 +468,24 @@ fn compare_file_pair(lp: &str, rp: &str, l: &EntryMeta, r: &EntryMeta, ctx: &Ctx
     if opts.content == ContentMethod::Off || (!quick_same && !opts.override_quick_tests) {
         return Ok(quick);
     }
-    compare_contents(ctx.left, lp, l.size, ctx.right, rp, r.size, opts.content, &opts.rules)
+    let diff = |crc| ContentVerdict { status: EntryStatus::Different, crc };
+    match opts.content {
+        ContentMethod::Crc if ctx.cache.is_some() => {
+            let crc = [cached_crc(ctx, Side::Left, lp, l)?, cached_crc(ctx, Side::Right, rp, r)?];
+            let same = l.size == r.size && crc[0] == crc[1];
+            Ok(ContentVerdict {
+                status: if same { EntryStatus::Same } else { EntryStatus::Different },
+                crc: Some(crc),
+            })
+        }
+        // Different checksums prove different bytes; equal ones prove nothing,
+        // so a byte-for-byte compare still has to read both files.
+        ContentMethod::Binary => match cached_pair(ctx, lp, rp, l, r) {
+            Some(crc) if crc[0] != crc[1] => Ok(diff(Some(crc))),
+            _ => compare_contents(ctx.left, lp, l.size, ctx.right, rp, r.size, opts.content, &opts.rules),
+        },
+        _ => compare_contents(ctx.left, lp, l.size, ctx.right, rp, r.size, opts.content, &opts.rules),
+    }
 }
 
 /// Whether a file pair survives the size/date filters. `None` is the side
@@ -670,6 +724,19 @@ pub fn compare_folders_with(
     right: &str,
     opts: &FolderCompareOptions,
 ) -> Result<FolderCompareResult> {
+    compare_folders_cached(left_fs, left, right_fs, right, opts, None)
+}
+
+/// [`compare_folders_with`], reusing and filling a checksum cache so CRC and
+/// binary comparisons skip files that haven't changed since the last scan.
+pub fn compare_folders_cached(
+    left_fs: &dyn Vfs,
+    left: &str,
+    right_fs: &dyn Vfs,
+    right: &str,
+    opts: &FolderCompareOptions,
+    cache: Option<&dyn ChecksumCache>,
+) -> Result<FolderCompareResult> {
     let started = Instant::now();
     // Fail fast on bad regexes rather than once per file pair.
     if opts.content == ContentMethod::Rules {
@@ -684,10 +751,13 @@ pub fn compare_folders_with(
         exclude_folders: build_globset(&opts.filters.exclude_folders, ci)?,
         left: left_fs,
         right: right_fs,
+        cache,
+        reused: AtomicUsize::new(0),
     };
     let entries = compare_dirs(left, right, "", &ctx)?;
     let mut stats = FolderStats::default();
     tally(&entries, &mut stats);
+    stats.checksums_reused = ctx.reused.load(Ordering::Relaxed);
     Ok(FolderCompareResult {
         left_root: left.to_owned(),
         right_root: right.to_owned(),
@@ -732,5 +802,56 @@ mod timestamp_tests {
         assert!(!timestamps_match(None, Some(0), &opts));
         // Extreme values must not overflow.
         assert!(!timestamps_match(Some(i64::MIN), Some(i64::MAX), &opts));
+    }
+
+    /// In-memory cache that counts the files it had to be told about.
+    type CacheKey = (bool, String);
+    type CacheVal = (u64, Option<i64>, u32);
+
+    #[derive(Default)]
+    struct MemCache(std::sync::Mutex<std::collections::HashMap<CacheKey, CacheVal>>);
+
+    impl ChecksumCache for MemCache {
+        fn get(&self, side: Side, path: &str, meta: &EntryMeta) -> Option<u32> {
+            let map = self.0.lock().unwrap();
+            let &(size, mtime, crc) = map.get(&(side == Side::Left, path.to_owned()))?;
+            (size == meta.size && mtime == meta.modified_ms).then_some(crc)
+        }
+        fn put(&self, side: Side, path: &str, meta: &EntryMeta, crc: u32) {
+            let key = (side == Side::Left, path.to_owned());
+            self.0.lock().unwrap().insert(key, (meta.size, meta.modified_ms, crc));
+        }
+    }
+
+    #[test]
+    fn checksum_cache_skips_unchanged_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let (l, r) = (dir.path().join("l"), dir.path().join("r"));
+        std::fs::create_dir_all(&l).unwrap();
+        std::fs::create_dir_all(&r).unwrap();
+        for (name, a, b) in [("same.txt", "abc", "abc"), ("diff.txt", "abc", "abd")] {
+            std::fs::write(l.join(name), a).unwrap();
+            std::fs::write(r.join(name), b).unwrap();
+        }
+        let opts = FolderCompareOptions { content: ContentMethod::Crc, ..Default::default() };
+        let cache = MemCache::default();
+        let (ls, rs) = (l.to_string_lossy(), r.to_string_lossy());
+        let run = |opts: &FolderCompareOptions| {
+            compare_folders_cached(&LocalFs, &ls, &LocalFs, &rs, opts, Some(&cache)).unwrap()
+        };
+
+        let first = run(&opts);
+        assert_eq!((first.stats.same, first.stats.different, first.stats.checksums_reused), (1, 1, 0));
+        let second = run(&opts);
+        assert_eq!((second.stats.same, second.stats.different, second.stats.checksums_reused), (1, 1, 4));
+
+        // Binary mode trusts cached checksums only to prove a difference.
+        let binary = run(&FolderCompareOptions { content: ContentMethod::Binary, ..opts.clone() });
+        assert_eq!((binary.stats.same, binary.stats.different, binary.stats.checksums_reused), (1, 1, 4));
+
+        // A changed file (new size) misses the cache and is read again.
+        std::fs::write(r.join("same.txt"), "abcd").unwrap();
+        let third = run(&opts);
+        assert_eq!((third.stats.same, third.stats.different, third.stats.checksums_reused), (0, 2, 3));
     }
 }
