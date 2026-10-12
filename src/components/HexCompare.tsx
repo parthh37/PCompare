@@ -110,7 +110,7 @@ export function HexCompare({
   const [prefs, setPrefs] = useState<HexSettings>({ ...DEFAULT_SETTINGS, ...settings });
   const reportSettings = useRef(onSettingsChange);
   reportSettings.current = onSettingsChange;
-  useEffect(() => reportSettings.current?.(prefs), [prefs]);
+  useEffect(() => void reportSettings.current?.(prefs), [prefs]);
   const setPref = <K extends keyof HexSettings>(key: K, value: HexSettings[K]) =>
     setPrefs((p) => ({ ...p, [key]: value }));
   const [limitMb, setLimitMb] = useState(readLimit);
@@ -208,7 +208,7 @@ export function HexCompare({
   const dirty = !!state && (state.dirty[0] || state.dirty[1]);
   const reportDirty = useRef(onDirtyChange);
   reportDirty.current = onDirtyChange;
-  useEffect(() => reportDirty.current?.(dirty), [dirty]);
+  useEffect(() => void reportDirty.current?.(dirty), [dirty]);
 
   // ---------- row cache ----------
   const cache = useRef(new Map<number, { key: string; rows: HexRow[] }>());

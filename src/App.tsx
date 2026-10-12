@@ -3,6 +3,7 @@ import { CircleQuestionMark, Globe, Layers, Plus, Save, Settings, X } from "luci
 import { useCallback, useEffect, useRef, useState } from "react";
 import { AppSettingsDialog } from "./components/AppSettingsDialog";
 import { DbCompare } from "./components/DbCompare";
+import { CrashedView, ErrorBoundary } from "./components/ErrorBoundary";
 import { FolderCompare } from "./components/FolderCompare";
 import { FolderMerge } from "./components/FolderMerge";
 import { FolderSync } from "./components/FolderSync";
@@ -113,6 +114,8 @@ export default function App() {
   const dirtyTabs = useRef(new Set<number>());
   const updater = useUpdater(setToast);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  /** Bumped to remount the sessions after one crashed while closing. */
+  const [workareaEpoch, setWorkareaEpoch] = useState(0);
   const dbNames = useDbConnectionNames();
 
   const refreshSaved = useCallback(
@@ -483,7 +486,12 @@ export default function App() {
       settings: t.settings,
       onSettingsChange: (settings: object) => updateTab(t.id, { settings: { ...settings } }),
       onPathsChange: (left: string, right: string) => updateTab(t.id, { left, right }),
-      onDirtyChange: (dirty: boolean) => (dirty ? dirtyTabs.current.add(t.id) : dirtyTabs.current.delete(t.id)),
+      // Block body: sessions report this from `useEffect(() => report(dirty))`, so a
+      // returned Set/boolean would become the effect's "cleanup" and crash on close.
+      onDirtyChange: (dirty: boolean) => {
+        if (dirty) dirtyTabs.current.add(t.id);
+        else dirtyTabs.current.delete(t.id);
+      },
     };
     const three = {
       left: t.left,
@@ -757,12 +765,25 @@ export default function App() {
 
         {/* bc5:app-shell — the help panel docks to the right of the sessions. */}
         <div className="workarea">
-          {tabs.map((t) => (
-            // Inactive tabs stay mounted so their state and scroll position survive.
-            <main key={t.id} className="tabpanel" hidden={t.id !== active}>
-              {renderSession(t)}
-            </main>
-          ))}
+          {/* A session that throws while being torn down (closing its tab) lands
+              here; the tab list lives above, so remounting loses nothing. */}
+          <ErrorBoundary
+            key={workareaEpoch}
+            fallback={(m) => (
+              <CrashedView message={m} action="Reopen tabs" onAction={() => setWorkareaEpoch((n) => n + 1)} />
+            )}
+          >
+            {tabs.map((t) => (
+              // Inactive tabs stay mounted so their state and scroll position survive.
+              <main key={t.id} className="tabpanel" hidden={t.id !== active}>
+                <ErrorBoundary
+                  fallback={(m) => <CrashedView message={m} action="Close tab" onAction={() => closeTab(t.id)} />}
+                >
+                  {renderSession(t)}
+                </ErrorBoundary>
+              </main>
+            ))}
+          </ErrorBoundary>
           {helpTopic && <HelpPanel topicId={helpTopic} onClose={() => setHelpTopic(null)} />}
         </div>
 

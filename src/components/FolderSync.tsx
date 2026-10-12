@@ -262,7 +262,7 @@ export function FolderSync({ left, right, onPathsChange, settings, onSettingsCha
   const update = (patch: Partial<FolderSyncSettings>) => setCfg((c) => ({ ...c, ...patch }));
   const reportSettings = useRef(onSettingsChange);
   reportSettings.current = onSettingsChange;
-  useEffect(() => reportSettings.current?.(cfg), [cfg]);
+  useEffect(() => void reportSettings.current?.(cfg), [cfg]);
 
   const [plan, setPlan] = useState<SyncPlan | null>(null);
   const [error, setError] = useState<string | null>(null);
