@@ -94,6 +94,12 @@ pub trait Dialect: Send + Sync {
         true
     }
 
+    /// One statement as it appears in script text (statement + terminator).
+    /// MySQL overrides this to wrap compound routine bodies in `DELIMITER`.
+    fn script_statement(&self, stmt: &str) -> String {
+        format!("{stmt}{}", self.statement_terminator())
+    }
+
     /// `-- comment` line used for script headers and section titles.
     fn comment(&self, text: &str) -> String {
         text.lines().map(|l| format!("-- {l}")).collect::<Vec<_>>().join("\n")
@@ -165,11 +171,26 @@ pub trait Dialect: Send + Sync {
         }
         parts.extend(t.indexes.iter().filter(|i| i.constraint).map(|i| self.unique_clause(i)));
         parts.extend(t.checks.iter().map(|c| self.check_clause(c)));
+        if self.inline_foreign_keys() {
+            parts.extend(t.foreign_keys.iter().map(|fk| self.foreign_key_clause(fk)));
+        }
         format!("CREATE TABLE {} (\n    {}\n)", self.qualified(&t.name), parts.join(",\n    "))
     }
 
     fn drop_table(&self, name: &ObjectName) -> String {
         format!("DROP TABLE {}", self.qualified(name))
+    }
+
+    /// Renames a table within its schema (used by table rebuilds).
+    fn rename_table(&self, from: &ObjectName, to_name: &str) -> String {
+        format!("ALTER TABLE {} RENAME TO {}", self.qualified(from), self.quote_ident(to_name))
+    }
+
+    /// True when foreign keys can only be declared inside CREATE TABLE
+    /// (SQLite): `create_table` then includes them and adding/dropping one
+    /// means rebuilding the table.
+    fn inline_foreign_keys(&self) -> bool {
+        false
     }
 
     fn add_column(&self, table: &ObjectName, c: &Column) -> String {
