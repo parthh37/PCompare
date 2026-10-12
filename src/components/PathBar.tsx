@@ -1,21 +1,20 @@
-import { open } from "@tauri-apps/plugin-dialog";
+import type { DialogFilter } from "@tauri-apps/plugin-dialog";
+import { ArrowLeftRight } from "lucide-react";
 import { useEffect, useState } from "react";
-import { useShell } from "../lib/shell";
-import { RemoteBrowser } from "./RemoteBrowser";
+import { PathField } from "./PathField";
 
 interface Props {
   left: string;
   right: string;
   directory: boolean;
   onCompare: (left: string, right: string) => void;
+  filters?: DialogFilter[];
 }
 
-/** The two path inputs across the top of every session, with browse + swap. */
-export function PathBar({ left, right, directory, onCompare }: Props) {
-  const shell = useShell();
+/** The two path inputs across the top of every 2-way session, with browse + swap. */
+export function PathBar({ left, right, directory, onCompare, filters }: Props) {
   const [l, setL] = useState(left);
   const [r, setR] = useState(right);
-  const [remoteSide, setRemoteSide] = useState<"left" | "right" | null>(null);
   useEffect(() => setL(left), [left]);
   useEffect(() => setR(right), [right]);
 
@@ -25,63 +24,32 @@ export function PathBar({ left, right, directory, onCompare }: Props) {
     if (other) onCompare(isLeft ? picked : other, isLeft ? other : picked);
   };
 
-  const browse = async (isLeft: boolean) => {
-    const picked = await open({ directory, multiple: false, title: directory ? "Choose folder" : "Choose file" });
-    if (typeof picked === "string") apply(picked, isLeft);
-  };
-
   const submit = () => l && r && onCompare(l, r);
+  const what = directory ? "folder" : "file";
 
   return (
     <div className="pathbar">
-      <div className="pathfield">
-        <input
-          value={l}
-          placeholder={directory ? "Left folder… or remote://profile/path" : "Left file… or remote://profile/path"}
-          onChange={(e) => setL(e.target.value)}
-          onKeyDown={(e) => e.key === "Enter" && submit()}
-          spellCheck={false}
-        />
-        <button className="icon-btn" title="Browse…" onClick={() => browse(true)}>
-          📂
-        </button>
-        <button className="icon-btn" title="Browse remote (S3, SFTP, OneDrive…)" onClick={() => setRemoteSide("left")}>
-          🌐
-        </button>
-      </div>
+      <PathField
+        value={l}
+        onChange={setL}
+        onSubmit={submit}
+        onPick={(p) => apply(p, true)}
+        directory={directory}
+        filters={filters}
+        placeholder={`Left ${what}… or remote://profile/path`}
+      />
       <button className="icon-btn swap" title="Swap sides" onClick={() => l && r && onCompare(r, l)}>
-        ⇄
+        <ArrowLeftRight size={15} />
       </button>
-      <div className="pathfield">
-        <input
-          value={r}
-          placeholder={directory ? "Right folder… or remote://profile/path" : "Right file… or remote://profile/path"}
-          onChange={(e) => setR(e.target.value)}
-          onKeyDown={(e) => e.key === "Enter" && submit()}
-          spellCheck={false}
-        />
-        <button className="icon-btn" title="Browse…" onClick={() => browse(false)}>
-          📂
-        </button>
-        <button className="icon-btn" title="Browse remote (S3, SFTP, OneDrive…)" onClick={() => setRemoteSide("right")}>
-          🌐
-        </button>
-      </div>
-      {remoteSide && (
-        <RemoteBrowser
-          directory={directory}
-          initial={remoteSide === "left" ? l : r}
-          onClose={() => setRemoteSide(null)}
-          onManageProfiles={() => {
-            setRemoteSide(null);
-            shell.openProfiles();
-          }}
-          onPick={(p) => {
-            apply(p, remoteSide === "left");
-            setRemoteSide(null);
-          }}
-        />
-      )}
+      <PathField
+        value={r}
+        onChange={setR}
+        onSubmit={submit}
+        onPick={(p) => apply(p, false)}
+        directory={directory}
+        filters={filters}
+        placeholder={`Right ${what}… or remote://profile/path`}
+      />
     </div>
   );
 }

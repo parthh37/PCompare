@@ -1,0 +1,639 @@
+import { save as saveDialog } from "@tauri-apps/plugin-dialog";
+import { ArrowDown, ArrowUp, GitMerge, ListFilter, RefreshCw, Save } from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState, type PointerEvent, type ReactNode, type WheelEvent } from "react";
+import { DEFAULT_TEXT_OPTIONS, errorMessage, isRemote, type TextDiffOptions, type WhitespaceMode } from "../lib/api";
+import { formatSize } from "../lib/format";
+import { mergeApi, type ChunkKind, type MergeChunk, type MergeLoad, type TextDocument } from "../lib/mergeApi";
+import type { MergePaths, MergeProps } from "../lib/sessionProps";
+import { PathField } from "./PathField";
+import { IgnoreRulesDialog } from "./TextCompare";
+import { VirtualList, type VirtualListHandle } from "./VirtualList";
+import "./TextMerge.css";
+
+const ROW_HEIGHT = 20;
+const CHAR_WIDTH = 7.8;
+/** Output textarea metrics; the highlight layer relies on them matching TextMerge.css. */
+const OUT_LINE_HEIGHT = 20;
+const OUT_PAD_TOP = 4;
+const MIN_SPLIT = 0.15;
+const MAX_SPLIT = 0.85;
+
+/** What a saved merge session remembers besides its paths. */
+export interface MergeSettings {
+  options: TextDiffOptions;
+  /** Fraction of the body height given to the three input panes. */
+  split: number;
+}
+
+type Resolution = "left" | "right" | "leftRight" | "rightLeft" | "base";
+const RESOLUTIONS: { id: Resolution; label: string; title: string }[] = [
+  { id: "left", label: "Left", title: "Take the left version" },
+  { id: "right", label: "Right", title: "Take the right version" },
+  { id: "leftRight", label: "Left + Right", title: "Take the left version, then the right version" },
+  { id: "rightLeft", label: "Right + Left", title: "Take the right version, then the left version" },
+  { id: "base", label: "Base", title: "Take the base (ancestor) version, discarding both changes" },
+];
+
+/** Cell classes (left, base, right) per chunk kind in the input panes. */
+const CELL_CLASSES: Record<ChunkKind, [string, string, string]> = {
+  stable: ["", "", ""],
+  leftChanged: ["chg", "base", ""],
+  rightChanged: ["", "base", "chg"],
+  bothSame: ["same", "base", "same"],
+  conflict: ["conf", "conf", "conf"],
+};
+
+/** One aligned row of the three input panes; `null` pads a shorter side. */
+interface MergeRow {
+  chunk: number;
+  left: number | null;
+  base: number | null;
+  right: number | null;
+  first: boolean;
+}
+
+function buildRows(chunks: MergeChunk[]): { rows: MergeRow[]; chunkRow: number[] } {
+  const rows: MergeRow[] = [];
+  const chunkRow: number[] = [];
+  chunks.forEach((c, chunk) => {
+    chunkRow.push(rows.length);
+    const ll = c.left.end - c.left.start;
+    const bl = c.base.end - c.base.start;
+    const rl = c.right.end - c.right.start;
+    const n = Math.max(ll, bl, rl);
+    for (let k = 0; k < n; k++) {
+      rows.push({
+        chunk,
+        left: k < ll ? c.left.start + k : null,
+        base: k < bl ? c.base.start + k : null,
+        right: k < rl ? c.right.start + k : null,
+        first: k === 0,
+      });
+    }
+  });
+  return { rows, chunkRow };
+}
+
+// Conflict markers written by pcompare-merge's `render_output`.
+const START_RE = /^<{7} Left #(\d+)$/;
+const END_RE = /^>{7} Right #(\d+)$/;
+const SEPARATOR = "=======";
+
+/** An unresolved conflict block in the output, as line indices (markers included). */
+interface Block {
+  n: number;
+  start: number;
+  sep: number;
+  end: number;
+}
+
+function findBlocks(lines: string[]): Block[] {
+  const out: Block[] = [];
+  let open: { n: number; start: number; sep: number } | null = null;
+  lines.forEach((line, i) => {
+    const c = line.charCodeAt(0);
+    if (c === 60 /* < */) {
+      const m = START_RE.exec(line);
+      if (m) open = { n: Number(m[1]), start: i, sep: -1 };
+    } else if (!open) {
+      return;
+    } else if (line === SEPARATOR && open.sep < 0) {
+      open.sep = i;
+    } else if (c === 62 /* > */) {
+      const m = END_RE.exec(line);
+      if (m && Number(m[1]) === open.n) {
+        out.push({ ...open, end: i });
+        open = null;
+      }
+    }
+  });
+  return out;
+}
+
+/** Character offset where line `i` starts (`text.length` past the last line). */
+function lineOffset(lines: string[], i: number): number {
+  let off = 0;
+  for (let k = 0; k < i && k < lines.length; k++) off += lines[k].length + 1;
+  return off;
+}
+
+function DocInfo({ label, doc }: { label: string; doc: TextDocument | undefined }) {
+  return (
+    <div className="tm-colhead">
+      <span className="tm-colname">{label}</span>
+      {doc && (
+        <span className="fileinfo">
+          {doc.info.encoding}
+          {doc.info.hasBom ? " BOM" : ""} · {doc.info.lineEnding.toUpperCase()} · {formatSize(doc.info.size)}
+        </span>
+      )}
+    </div>
+  );
+}
+
+export function TextMerge({
+  left,
+  base,
+  right,
+  output,
+  onPathsChange,
+  settings,
+  onSettingsChange,
+  onDirtyChange,
+}: MergeProps<MergeSettings>) {
+  const [options, setOptionsState] = useState<TextDiffOptions>({ ...DEFAULT_TEXT_OPTIONS, ...settings?.options });
+  const [editingRules, setEditingRules] = useState(false);
+  const [split, setSplit] = useState(() => Math.min(MAX_SPLIT, Math.max(MIN_SPLIT, settings?.split ?? 0.5)));
+  const reportSettings = useRef(onSettingsChange);
+  reportSettings.current = onSettingsChange;
+  useEffect(() => reportSettings.current?.({ options, split }), [options, split]);
+
+  const [draft, setDraft] = useState<MergePaths>({ left, base, right, output });
+  useEffect(() => setDraft({ left, base, right, output }), [left, base, right, output]);
+
+  const [data, setData] = useState<MergeLoad | null>(null);
+  const [text, setText] = useState("");
+  /** Output text as last written to disk; `null` until the first save. */
+  const [savedText, setSavedText] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [saving, setSaving] = useState(false);
+  /** Index into `conflicts` of the selected conflict, or -1. */
+  const [cur, setCur] = useState(-1);
+  const [hx, setHx] = useState(0);
+  const [outScroll, setOutScroll] = useState({ top: 0, left: 0 });
+
+  const root = useRef<HTMLDivElement>(null);
+  const body = useRef<HTMLDivElement>(null);
+  const list = useRef<VirtualListHandle>(null);
+  const textarea = useRef<HTMLTextAreaElement>(null);
+
+  const ready = !!(left && base && right);
+  const requestSeq = useRef(0);
+  const load = useCallback(async () => {
+    if (!left || !base || !right) return;
+    const seq = ++requestSeq.current;
+    setLoading(true);
+    setError(null);
+    try {
+      const res = await mergeApi.loadMerge(left, base, right, options);
+      if (seq !== requestSeq.current) return;
+      setData(res);
+      setText(res.output);
+      setSavedText(null);
+      setCur(-1);
+    } catch (e) {
+      if (seq !== requestSeq.current) return;
+      setError(errorMessage(e));
+      setData(null);
+      setText("");
+    } finally {
+      if (seq === requestSeq.current) setLoading(false);
+    }
+  }, [left, base, right, options]);
+
+  useEffect(() => {
+    load();
+  }, [load]);
+
+  /** The output differs from what is on disk (or from the fresh auto-merge if never saved). */
+  const edited = !!data && text !== (savedText ?? data.output);
+  const unsaved = !!data && text !== savedText;
+  const reportDirty = useRef(onDirtyChange);
+  reportDirty.current = onDirtyChange;
+  // Only hand edits count: an untouched auto-merge can simply be recomputed.
+  useEffect(() => reportDirty.current?.(edited), [edited]);
+  const confirmDiscard = (action: string) =>
+    !edited || window.confirm(`The merged output has unsaved edits. Discard them and ${action}?`);
+
+  const setOptions = (next: TextDiffOptions) => {
+    if (confirmDiscard("merge again with the new options")) setOptionsState(next);
+  };
+
+  const applyPaths = (next: MergePaths) => {
+    const inputsChanged = next.left !== left || next.base !== base || next.right !== right;
+    if (inputsChanged && !confirmDiscard("merge the new files")) {
+      setDraft({ left, base, right, output });
+      return;
+    }
+    onPathsChange(next);
+  };
+  const pick = (key: keyof MergePaths, value: string) => {
+    const next = { ...draft, [key]: value };
+    setDraft(next);
+    applyPaths(next);
+  };
+
+  const chunks = data?.merge.chunks ?? [];
+  const { rows, chunkRow } = useMemo(() => buildRows(chunks), [chunks]);
+  /** Chunk indices of all conflicts, in order. */
+  const conflicts = useMemo(
+    () => chunks.flatMap((c, i) => (c.kind === "conflict" ? [i] : [])),
+    [chunks],
+  );
+  const outLines = useMemo(() => text.split("\n"), [text]);
+  const blocks = useMemo(() => findBlocks(outLines), [outLines]);
+  const blockByConflict = useMemo(() => new Map(blocks.map((b) => [b.n, b])), [blocks]);
+  const unresolved = conflicts.filter((ci) => blockByConflict.has(chunks[ci].conflict!)).length;
+
+  const maxChars = useMemo(() => {
+    if (!data) return 0;
+    let m = 0;
+    for (const doc of [data.left, data.base, data.right]) for (const l of doc.lines) m = Math.max(m, l.length);
+    return m;
+  }, [data]);
+
+  const curChunk = cur >= 0 && cur < conflicts.length ? chunks[conflicts[cur]] : null;
+  const curBlock = curChunk ? blockByConflict.get(curChunk.conflict!) : undefined;
+
+  const scrollOutputTo = (line: number) => {
+    const ta = textarea.current;
+    if (ta) ta.scrollTop = Math.max(0, line * OUT_LINE_HEIGHT - ta.clientHeight / 3);
+  };
+
+  /** Selects a conflict and scrolls the output (and optionally the input panes) to it. */
+  const goConflict = (idx: number, scrollInputs = true) => {
+    if (!conflicts.length) return;
+    const clamped = Math.max(0, Math.min(conflicts.length - 1, idx));
+    setCur(clamped);
+    if (scrollInputs) list.current?.scrollToRow(chunkRow[conflicts[clamped]]);
+    const block = blockByConflict.get(chunks[conflicts[clamped]].conflict!);
+    if (block) scrollOutputTo(block.start);
+  };
+
+  /** Replaces `[start, end)` of the output, keeping the textarea's native undo history. */
+  const replaceOutput = (start: number, end: number, insert: string) => {
+    const ta = textarea.current;
+    if (ta) {
+      ta.focus();
+      ta.setSelectionRange(start, end);
+      const ok = insert ? document.execCommand("insertText", false, insert) : document.execCommand("delete");
+      if (ok) return;
+    }
+    setText((t) => t.slice(0, start) + insert + t.slice(end));
+  };
+
+  const resolve = (how: Resolution) => {
+    if (!data || !curChunk || !curBlock) return;
+    const take = (doc: TextDocument, r: { start: number; end: number }) => doc.lines.slice(r.start, r.end);
+    const l = take(data.left, curChunk.left);
+    const r = take(data.right, curChunk.right);
+    const lines = {
+      left: l,
+      right: r,
+      leftRight: [...l, ...r],
+      rightLeft: [...r, ...l],
+      base: take(data.base, curChunk.base),
+    }[how];
+    let start = lineOffset(outLines, curBlock.start);
+    const atEnd = curBlock.end === outLines.length - 1;
+    // Replace whole lines, including the newline after the closing marker when there is one.
+    const end = atEnd ? text.length : lineOffset(outLines, curBlock.end + 1);
+    const insert = lines.join("\n") + (lines.length && !atEnd ? "\n" : "");
+    if (!lines.length && atEnd && start > 0) start -= 1; // drop the newline that preceded the block
+    replaceOutput(start, end, insert);
+  };
+
+  const save = async () => {
+    if (!data || saving) return;
+    if (
+      unresolved > 0 &&
+      !window.confirm(
+        `${unresolved} unresolved conflict${unresolved === 1 ? "" : "s"} remain${unresolved === 1 ? "s" : ""} ` +
+          "(marked in the output). Save anyway?",
+      )
+    )
+      return;
+    let target = output;
+    if (!target) {
+      const picked = await saveDialog({ title: "Save merged output", defaultPath: isRemote(left) ? undefined : left });
+      if (typeof picked !== "string") return;
+      target = picked;
+      onPathsChange({ left, base, right, output: picked });
+    }
+    if (isRemote(target)) {
+      setError("The merged output must be saved to a local file.");
+      return;
+    }
+    const written = text;
+    setSaving(true);
+    setError(null);
+    try {
+      await mergeApi.saveTextFile(target, written, data.outputFormat);
+      setSavedText(written);
+    } catch (e) {
+      setError(errorMessage(e));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const refresh = () => {
+    if (confirmDiscard("merge the files again")) load();
+  };
+
+  // Re-registered every render so the handler always sees current state.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      // Inactive tabs stay mounted but hidden; only the visible session reacts.
+      if (e.defaultPrevented || !root.current?.offsetParent) return;
+      const mod = e.ctrlKey || e.metaKey;
+      if (mod && !e.shiftKey && !e.altKey && e.key.toLowerCase() === "s") save();
+      else if (e.altKey && e.key === "ArrowDown") goConflict(cur + 1);
+      else if (e.altKey && e.key === "ArrowUp") goConflict(cur - 1);
+      else if (e.key === "F5") refresh();
+      else return;
+      e.preventDefault();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  });
+
+  const onSplitterDown = (e: PointerEvent<HTMLDivElement>) => {
+    const el = body.current;
+    if (!el) return;
+    e.currentTarget.setPointerCapture(e.pointerId);
+    const rect = el.getBoundingClientRect();
+    const move = (ev: globalThis.PointerEvent) =>
+      setSplit(Math.min(MAX_SPLIT, Math.max(MIN_SPLIT, (ev.clientY - rect.top) / rect.height)));
+    const target = e.currentTarget;
+    const up = () => {
+      target.removeEventListener("pointermove", move);
+      target.removeEventListener("pointerup", up);
+    };
+    target.addEventListener("pointermove", move);
+    target.addEventListener("pointerup", up);
+  };
+
+  const onWheel = (e: WheelEvent<HTMLDivElement>) => {
+    const dx = e.shiftKey ? e.deltaY : e.deltaX;
+    if (!dx || (!e.shiftKey && Math.abs(e.deltaX) < Math.abs(e.deltaY))) return;
+    setHx((x) => Math.max(0, Math.min(maxChars * CHAR_WIDTH, x + dx)));
+  };
+
+  const shift = { transform: `translateX(${-hx}px)` };
+  const cell = (doc: TextDocument, line: number | null, cls: string) => (
+    <>
+      <span className="ln">{line == null ? "" : line + 1}</span>
+      <div className={`tm-cell ${line == null ? "absent" : cls}`}>
+        <div className="tcontent" style={shift}>
+          {line != null && doc.lines[line]}
+        </div>
+      </div>
+    </>
+  );
+
+  const renderRow = (i: number) => {
+    const row = rows[i];
+    const chunk = chunks[row.chunk];
+    const isConflict = chunk.kind === "conflict";
+    const resolved = isConflict && !blockByConflict.has(chunk.conflict!);
+    const current = curChunk === chunk;
+    const [lc, bc, rc] = CELL_CLASSES[chunk.kind];
+    return (
+      <div
+        className={`mrow m-${chunk.kind}${row.first && chunk.kind !== "stable" ? " first" : ""}${
+          resolved ? " resolved" : ""
+        }${current ? " current" : ""}`}
+        onClick={() => isConflict && goConflict(conflicts.indexOf(row.chunk), false)}
+        title={isConflict ? `Conflict ${chunk.conflict}${resolved ? " (resolved)" : ""}` : undefined}
+      >
+        {cell(data!.left, row.left, lc)}
+        {cell(data!.base, row.base, bc)}
+        {cell(data!.right, row.right, rc)}
+      </div>
+    );
+  };
+
+  /** Background bars behind the output text marking unresolved conflict blocks. */
+  const highlights = () => {
+    const ta = textarea.current;
+    const viewTop = outScroll.top;
+    const viewBottom = viewTop + (ta?.clientHeight ?? 2000);
+    const bars: ReactNode[] = [];
+    const bar = (line: number, cls: string, key: string) => {
+      const top = OUT_PAD_TOP + line * OUT_LINE_HEIGHT;
+      if (top + OUT_LINE_HEIGHT < viewTop || top > viewBottom) return;
+      bars.push(<div key={key} className={`tm-hl ${cls}`} style={{ top, height: OUT_LINE_HEIGHT }} />);
+    };
+    for (const b of blocks) {
+      const blockTop = OUT_PAD_TOP + b.start * OUT_LINE_HEIGHT;
+      const blockBottom = OUT_PAD_TOP + (b.end + 1) * OUT_LINE_HEIGHT;
+      if (blockBottom < viewTop || blockTop > viewBottom) continue;
+      const isCur = curBlock?.n === b.n ? " current" : "";
+      for (let line = b.start; line <= b.end; line++) {
+        const marker = line === b.start || line === b.end || line === b.sep;
+        const part = marker ? "marker" : b.sep < 0 || line < b.sep ? "left" : "right";
+        bar(line, `${part}${isCur}`, `${b.n}:${line}`);
+      }
+    }
+    return bars;
+  };
+
+  const stats = data?.merge.stats;
+  const autoMerged = stats ? stats.leftChanges + stats.rightChanges + stats.bothSame : 0;
+  const canResolve = !!curBlock;
+  const patternCount = options.ignorePatterns.filter((p) => p.trim()).length;
+  return (
+    <div className="session tm-session" ref={root}>
+      <div className="toolbar">
+        <button onClick={() => goConflict(cur - 1)} disabled={!conflicts.length} title="Previous conflict (Alt+↑)">
+          <ArrowUp size={14} /> Prev
+        </button>
+        <button onClick={() => goConflict(cur + 1)} disabled={!conflicts.length} title="Next conflict (Alt+↓)">
+          <ArrowDown size={14} /> Next
+        </button>
+        <span className="sep" />
+        <span className="tm-take-label">Take</span>
+        <div className="seg-control">
+          {RESOLUTIONS.map((r) => (
+            <button
+              key={r.id}
+              disabled={!canResolve}
+              onClick={() => resolve(r.id)}
+              title={
+                canResolve
+                  ? `${r.title} for conflict ${curChunk!.conflict}`
+                  : curChunk
+                    ? "This conflict is resolved; edit the output directly to change it"
+                    : "Select a conflict first (click it, or Alt+↓)"
+              }
+            >
+              {r.label}
+            </button>
+          ))}
+        </div>
+        <span className="sep" />
+        <label>
+          Whitespace
+          <select
+            value={options.whitespace}
+            onChange={(e) => setOptions({ ...options, whitespace: e.target.value as WhitespaceMode })}
+          >
+            <option value="compare">Compare</option>
+            <option value="ignoreTrailing">Ignore trailing</option>
+            <option value="ignoreChanges">Ignore changes</option>
+            <option value="ignoreAll">Ignore all</option>
+          </select>
+        </label>
+        <label className="check">
+          <input
+            type="checkbox"
+            checked={options.ignoreCase}
+            onChange={(e) => setOptions({ ...options, ignoreCase: e.target.checked })}
+          />
+          Ignore case
+        </label>
+        <button onClick={() => setEditingRules(true)} title="Regexes for text that never matters">
+          <ListFilter size={14} /> Ignore rules{patternCount ? ` · ${patternCount}` : ""}
+        </button>
+        <span className="spacer" />
+        <button
+          onClick={save}
+          disabled={!data || saving}
+          title={output ? `Save the merged output to ${output} (Ctrl+S)` : "Choose where to save the merged output (Ctrl+S)"}
+        >
+          <Save size={14} /> {saving ? "Saving…" : "Save"}
+        </button>
+        <button onClick={refresh} disabled={!ready} title="Merge again from the files on disk (F5)">
+          <RefreshCw size={14} /> Refresh
+        </button>
+      </div>
+
+      {editingRules && (
+        <IgnoreRulesDialog
+          patterns={options.ignorePatterns}
+          onClose={() => setEditingRules(false)}
+          onApply={(ignorePatterns) => setOptions({ ...options, ignorePatterns })}
+        />
+      )}
+
+      <div className="tm-paths">
+        {(["left", "base", "right"] as const).map((key) => (
+          <PathField
+            key={key}
+            label={key[0].toUpperCase() + key.slice(1)}
+            value={draft[key]}
+            onChange={(v) => setDraft({ ...draft, [key]: v })}
+            onSubmit={() => applyPaths(draft)}
+            onPick={(p) => pick(key, p)}
+            directory={false}
+            placeholder={`${key === "base" ? "Common ancestor" : key[0].toUpperCase() + key.slice(1)} file… or remote://profile/path`}
+          />
+        ))}
+        <div className="tm-output-path">
+          <PathField
+            label="Output"
+            value={draft.output}
+            onChange={(v) => setDraft({ ...draft, output: v })}
+            onSubmit={() => applyPaths(draft)}
+            onPick={(p) => pick("output", p)}
+            directory={false}
+            saveDialog
+            localOnly
+            placeholder="Merged output file (chosen on first save if empty)"
+          />
+          <button className="primary" onClick={() => applyPaths(draft)} disabled={!draft.left || !draft.base || !draft.right}>
+            <GitMerge size={14} /> Merge
+          </button>
+        </div>
+      </div>
+
+      <div className="session-body tm-body" ref={body}>
+        {loading && <div className="overlay">Merging…</div>}
+        {error && <div className="banner error">{error}</div>}
+        {!ready && !data && (
+          <div className="empty-state">Choose the left, base (common ancestor) and right files to merge.</div>
+        )}
+        {data && (
+          <>
+            <div className="tm-inputs" style={{ flexBasis: `${split * 100}%` }}>
+              <div className="tm-heads">
+                <DocInfo label="Left" doc={data.left} />
+                <DocInfo label="Base" doc={data.base} />
+                <DocInfo label="Right" doc={data.right} />
+              </div>
+              <VirtualList
+                ref={list}
+                className="tm-list"
+                count={rows.length}
+                rowHeight={ROW_HEIGHT}
+                renderRow={renderRow}
+                onWheel={onWheel}
+              />
+            </div>
+            <div
+              className="tm-splitter"
+              onPointerDown={onSplitterDown}
+              role="separator"
+              aria-orientation="horizontal"
+              title="Drag to resize"
+            />
+            <div className="tm-outpane">
+              <div className="tm-colhead tm-outhead">
+                <span className="tm-colname">Output</span>
+                <span className="fileinfo">{output || "not saved yet"}</span>
+                {unsaved && (
+                  <span className="tm-dirty" title="The merged output has not been saved (Ctrl+S)">
+                    <span className="tm-dirty-dot" /> unsaved
+                  </span>
+                )}
+              </div>
+              <div className="tm-editor">
+                <div className="tm-highlights" aria-hidden>
+                  <div style={{ transform: `translate(${-outScroll.left}px, ${-outScroll.top}px)` }}>
+                    {highlights()}
+                  </div>
+                </div>
+                <textarea
+                  ref={textarea}
+                  className="tm-textarea"
+                  value={text}
+                  wrap="off"
+                  spellCheck={false}
+                  onChange={(e) => setText(e.target.value)}
+                  onScroll={(e) =>
+                    setOutScroll({ top: e.currentTarget.scrollTop, left: e.currentTarget.scrollLeft })
+                  }
+                  onKeyDown={(e) => {
+                    if (e.key === "Tab" && !e.shiftKey && !e.ctrlKey && !e.altKey && !e.metaKey) {
+                      e.preventDefault();
+                      document.execCommand("insertText", false, "\t");
+                    }
+                  }}
+                />
+              </div>
+            </div>
+          </>
+        )}
+      </div>
+
+      <div className="statusbar">
+        {stats && (
+          <>
+            {stats.conflicts === 0 ? (
+              <span className="ok">No conflicts</span>
+            ) : (
+              <span className="tm-conflicts">
+                {stats.conflicts} conflict{stats.conflicts === 1 ? "" : "s"}
+                {cur >= 0 ? ` (at ${cur + 1})` : ""}
+              </span>
+            )}
+            {stats.conflicts > 0 &&
+              (unresolved ? (
+                <span className="tm-unresolved">{unresolved} unresolved</span>
+              ) : (
+                <span className="ok">All conflicts resolved</span>
+              ))}
+            <span>
+              {autoMerged} auto-merged change{autoMerged === 1 ? "" : "s"}
+            </span>
+            <span className="muted">
+              {stats.leftChanges} left · {stats.rightChanges} right · {stats.bothSame} both
+            </span>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}

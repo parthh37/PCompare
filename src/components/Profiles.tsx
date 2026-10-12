@@ -1,4 +1,21 @@
 import { open } from "@tauri-apps/plugin-dialog";
+import {
+  Box,
+  CircleCheck,
+  Cloud,
+  CloudUpload,
+  Cylinder,
+  Earth,
+  Flame,
+  FolderOpen,
+  Globe,
+  Hexagon,
+  Plus,
+  Server,
+  ShieldCheck,
+  Triangle,
+  type LucideIcon,
+} from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import {
   api,
@@ -13,18 +30,24 @@ import {
 
 const REFRESH_TOKEN = "refresh_token";
 
-const PROVIDER_ICON: Record<ProviderKind, string> = {
-  s3: "🪣",
-  azblob: "🔷",
-  gcs: "☁️",
-  b2: "🔥",
-  ftp: "📡",
-  sftp: "🔐",
-  webdav: "🌍",
-  onedrive: "📘",
-  dropbox: "📦",
-  gdrive: "🟢",
+/** Generic glyphs tinted with each vendor's brand colour (no trademarked logos). */
+const PROVIDER_ICON: Record<ProviderKind, [LucideIcon, string]> = {
+  s3: [Cylinder, "#ff9900"],
+  azblob: [Hexagon, "#0089d6"],
+  gcs: [Cloud, "#4285f4"],
+  b2: [Flame, "#e21e29"],
+  ftp: [Server, "#94a3b8"],
+  sftp: [ShieldCheck, "#22c55e"],
+  webdav: [Earth, "#38bdf8"],
+  onedrive: [CloudUpload, "#0364b8"],
+  dropbox: [Box, "#0061ff"],
+  gdrive: [Triangle, "#34a853"],
 };
+
+function ProviderIcon({ kind, size = 16 }: { kind: ProviderKind; size?: number }) {
+  const [Icon, color] = PROVIDER_ICON[kind];
+  return <Icon size={size} color={color} aria-hidden />;
+}
 
 interface Draft {
   id?: string;
@@ -226,7 +249,7 @@ export function Profiles() {
                 if (typeof picked === "string") setSetting(f.key, picked);
               }}
             >
-              📂
+              <FolderOpen size={15} />
             </button>
           </div>
         );
@@ -267,7 +290,7 @@ export function Profiles() {
             onClick={() => select(newDraft(providers[0]))}
             title="New connection profile"
           >
-            + New
+            <Plus size={14} /> New
           </button>
         </div>
         {profiles.map((p) => (
@@ -276,14 +299,16 @@ export function Profiles() {
             className={`profile-item${draft?.id === p.id ? " active" : ""}`}
             onClick={() => select(draftFrom(p))}
           >
-            <span className="pi-icon">{PROVIDER_ICON[p.kind]}</span>
+            <span className="pi-icon">
+              <ProviderIcon kind={p.kind} />
+            </span>
             <span className="pi-text">
               <span className="pi-name">{p.name}</span>
               <span className="muted pi-sub">{providers.find((s) => s.kind === p.kind)?.label ?? p.kind}</span>
             </span>
           </button>
         ))}
-        {!profiles.length && <p className="muted pad">No profiles yet. Click “+ New” to connect S3, SFTP, OneDrive and more.</p>}
+        {!profiles.length && <p className="muted pad">No profiles yet. Click “New” to connect S3, SFTP, OneDrive and more.</p>}
       </aside>
 
       <section className="profile-edit">
@@ -294,7 +319,7 @@ export function Profiles() {
         ) : (
           <>
             <h2>
-              {PROVIDER_ICON[draft.kind]} {draft.id ? draft.name || "Untitled" : "New connection"}
+              <ProviderIcon kind={draft.kind} size={18} /> {draft.id ? draft.name || "Untitled" : "New connection"}
               {dirty && <span className="muted"> — unsaved</span>}
             </h2>
             <div className="form">
@@ -328,7 +353,9 @@ export function Profiles() {
             {spec.oauth && (
               <div className="oauth-box">
                 <div>
-                  <strong>{signedIn ? "✓ Signed in" : "Not signed in"}</strong>
+                  <strong className={signedIn ? "signed-in" : undefined}>
+                    {signedIn && <CircleCheck size={14} />} {signedIn ? "Signed in" : "Not signed in"}
+                  </strong>
                   <p className="muted">
                     Register an app in the{" "}
                     <button className="link" onClick={() => api.openProviderConsole(draft.kind)}>
@@ -345,7 +372,7 @@ export function Profiles() {
 
             {draft.id && (
               <p className="muted uri-hint">
-                Use <code>{`${REMOTE_SCHEME}${draft.id}/path`}</code> in any compare, or click 🌐 next to a path field.
+                Use <code>{`${REMOTE_SCHEME}${draft.id}/path`}</code> in any compare, or click <Globe size={12} className="inline-icon" /> next to a path field.
               </p>
             )}
 

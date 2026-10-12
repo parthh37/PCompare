@@ -1,6 +1,11 @@
 // Hide the console window on Windows release builds.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod merge;
+mod meta;
+mod picture;
+mod sync;
+mod table;
 mod watch;
 
 use pcompare_core::folder::{self, ContentMethod, ContentVerdict, FolderCompareOptions, FolderCompareResult};
@@ -363,6 +368,26 @@ fn main() {
             sign_in_profile,
             open_provider_console,
             remote_list,
+            // --- text compare editing + text merge (merge.rs) ---
+            merge::load_text_pair,
+            merge::diff_texts,
+            merge::save_text_file,
+            merge::load_merge,
+            // --- table compare (table.rs) ---
+            table::compare_tables,
+            // --- picture compare (picture.rs) ---
+            picture::picture_load,
+            picture::picture_diff,
+            // --- folder sync + folder merge (sync.rs) ---
+            sync::sync_plan,
+            sync::sync_execute,
+            sync::sync_cancel,
+            sync::folder_merge_compare,
+            sync::folder_merge_execute,
+            // --- registry / version / mp3 (meta.rs) ---
+            meta::compare_registry,
+            meta::compare_versions,
+            meta::compare_audio,
         ])
         .run(tauri::generate_context!())
         .expect("error while running PCompare");

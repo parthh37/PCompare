@@ -1,0 +1,117 @@
+/* ---------- picture compare ---------- */
+.picture-compare input[type="range"] {
+  width: 110px;
+  padding: 0;
+  border: none;
+  background: none;
+  accent-color: var(--accent);
+}
+.picture-compare .pic-num {
+  width: 56px;
+  font-family: var(--mono);
+}
+.picture-compare .pic-value {
+  min-width: 38px;
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--text);
+  text-align: center;
+}
+.picture-compare .pic-zoom {
+  min-width: 52px;
+}
+.picture-compare .toolbar button.active-toggle {
+  background: rgba(91, 156, 255, 0.18);
+  border-color: var(--accent);
+}
+.picture-compare .pic-warn {
+  color: var(--warn);
+}
+
+.pic-views {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  gap: 1px;
+  background: var(--border);
+}
+.pic-pane {
+  flex: 1;
+  min-width: 0;
+  overflow: auto;
+  background: var(--bg);
+  cursor: grab;
+  user-select: none;
+}
+.pic-views.panning .pic-pane {
+  cursor: grabbing;
+}
+/* Centres the canvas when it is smaller than the pane; scrolls when larger. */
+.pic-stage {
+  display: grid;
+  place-items: center;
+  box-sizing: border-box;
+  width: max-content;
+  min-width: 100%;
+  min-height: 100%;
+  padding: 12px;
+}
+.pic-canvas {
+  position: relative;
+  /* `clip` (not `hidden`) so the swipe grip can stick to the pane's viewport. */
+  overflow: clip;
+  /* Area covered by neither image when the sizes differ. */
+  background: var(--hatch);
+  outline: 1px solid var(--border);
+}
+.pic-canvas img,
+.pic-canvas canvas {
+  position: absolute;
+  top: 0;
+  left: 0;
+  display: block;
+  max-width: none;
+  -webkit-user-drag: none;
+}
+.pic-canvas.pixelated img,
+.pic-canvas canvas {
+  image-rendering: pixelated;
+}
+.pic-img.checker {
+  background-color: #2a2f3a;
+  background-image: conic-gradient(#3a414e 25%, transparent 0 50%, #3a414e 0 75%, transparent 0);
+  background-size: 16px 16px;
+}
+.pic-mask {
+  opacity: 0.85;
+  pointer-events: none;
+}
+
+.pic-swipe {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  margin-left: -1px;
+  background: var(--accent);
+  cursor: ew-resize;
+  z-index: 2;
+  touch-action: none;
+}
+/* Wider invisible hit area around the line. */
+.pic-swipe::before {
+  content: "";
+  position: absolute;
+  inset: 0 -6px;
+}
+.pic-swipe-grip {
+  position: sticky;
+  top: 50%;
+  display: block;
+  width: 12px;
+  height: 28px;
+  margin-left: -5px;
+  border-radius: 6px;
+  background: var(--accent);
+  box-shadow: 0 0 0 2px var(--bg);
+}

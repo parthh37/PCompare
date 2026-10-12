@@ -1,3 +1,22 @@
+import {
+  ArrowLeft,
+  ArrowLeftRight,
+  ArrowRight,
+  ChevronDown,
+  ChevronRight,
+  ChevronsDownUp,
+  ChevronsUpDown,
+  Equal,
+  EqualApproximately,
+  EqualNot,
+  File,
+  Folder,
+  FolderSync,
+  RefreshCw,
+  Settings2,
+  TriangleAlert,
+  type LucideIcon,
+} from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   api,
@@ -44,18 +63,20 @@ interface Props {
   /** Opens a text compare; `rules` carries this session's text rules over. */
   onOpenFiles: (left: string, right: string, rules: TextDiffOptions) => void;
   onOpenHex: (left: string, right: string) => void;
+  /** Opens a Folder Sync session on the same two folders. */
+  onOpenSync: (left: string, right: string) => void;
   settings?: Record<string, unknown>;
   onSettingsChange?: (s: FolderSettings) => void;
 }
 
-const STATUS_ICON: Record<EntryStatus, string> = {
-  same: "=",
-  similar: "≈",
-  different: "≠",
-  leftOnly: "◀",
-  rightOnly: "▶",
-  typeMismatch: "⚠",
-  error: "⚠",
+const STATUS_ICON: Record<EntryStatus, LucideIcon> = {
+  same: Equal,
+  similar: EqualApproximately,
+  different: EqualNot,
+  leftOnly: ArrowLeft,
+  rightOnly: ArrowRight,
+  typeMismatch: TriangleAlert,
+  error: TriangleAlert,
 };
 
 const STATUS_LABEL: Record<EntryStatus, string> = {
@@ -100,7 +121,16 @@ function rowTitle(e: FolderEntry): string {
   return parts.join(" · ");
 }
 
-export function FolderCompare({ left, right, onPathsChange, onOpenFiles, onOpenHex, settings, onSettingsChange }: Props) {
+export function FolderCompare({
+  left,
+  right,
+  onPathsChange,
+  onOpenFiles,
+  onOpenHex,
+  onOpenSync,
+  settings,
+  onSettingsChange,
+}: Props) {
   const [cfg, setCfg] = useState<FolderSettings>(() => loadFolderSettings(settings));
   const update = (patch: Partial<FolderSettings>) => setCfg((c) => ({ ...c, ...patch }));
   const reportSettings = useRef(onSettingsChange);
@@ -260,14 +290,16 @@ export function FolderCompare({ left, right, onPathsChange, onOpenFiles, onOpenH
                 toggle(e.relPath);
               }}
             >
-              {expanded.has(e.relPath) ? "▾" : "▸"}
+              {expanded.has(e.relPath) ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
             </span>
           ) : (
             <span className="chevron" />
           )}
           {meta && (
             <>
-              <span className="ficon">{e.isDir ? "📁" : "📄"}</span>
+              <span className="ficon">
+                {e.isDir ? <Folder size={14} className="ic-folder" /> : <File size={14} className="ic-file" />}
+              </span>
               {cfg.flatten ? e.relPath : e.name}
             </>
           )}
@@ -281,6 +313,7 @@ export function FolderCompare({ left, right, onPathsChange, onOpenFiles, onOpenH
   const renderRow = (i: number) => {
     const { entry: e, depth } = flat[i];
     const checked = e.contentChecked && e.contentChecked !== "off";
+    const StatusIcon = STATUS_ICON[e.status];
     return (
       <div
         className={`frow s-${e.status}${selected === e.relPath ? " selected" : ""}`}
@@ -294,7 +327,9 @@ export function FolderCompare({ left, right, onPathsChange, onOpenFiles, onOpenH
         title={rowTitle(e)}
       >
         {renderSide(e, "left", depth)}
-        <div className={`fcell status${checked ? " checked" : ""}`}>{STATUS_ICON[e.status]}</div>
+        <div className={`fcell status${checked ? " checked" : ""}`}>
+          <StatusIcon size={13} />
+        </div>
         {renderSide(e, "right", depth)}
       </div>
     );
@@ -338,10 +373,10 @@ export function FolderCompare({ left, right, onPathsChange, onOpenFiles, onOpenH
         />
         <span className="sep" />
         <button onClick={() => setExpanded(allDirs(entries))} disabled={cfg.flatten} title="Expand all folders">
-          Expand
+          <ChevronsUpDown size={14} /> Expand
         </button>
         <button onClick={() => setExpanded(new Set())} disabled={cfg.flatten} title="Collapse all folders">
-          Collapse
+          <ChevronsDownUp size={14} /> Collapse
         </button>
         <label className="check" title="Ignore folder structure: list every file at one level">
           <input type="checkbox" checked={cfg.flatten} onChange={(e) => update({ flatten: e.target.checked })} />
@@ -366,7 +401,7 @@ export function FolderCompare({ left, right, onPathsChange, onOpenFiles, onOpenH
           </select>
         </label>
         <button onClick={() => setShowSettings(true)} title="Comparison, filters and text rules">
-          ⚙ Settings{filterCount ? ` · ${filterCount} filter${filterCount > 1 ? "s" : ""}` : ""}
+          <Settings2 size={14} /> Settings{filterCount ? ` · ${filterCount} filter${filterCount > 1 ? "s" : ""}` : ""}
         </button>
         <label className="grow">
           Exclude
@@ -383,11 +418,14 @@ export function FolderCompare({ left, right, onPathsChange, onOpenFiles, onOpenH
           <input type="checkbox" checked={cfg.autoRefresh} onChange={(e) => update({ autoRefresh: e.target.checked })} />
           Auto-refresh
         </label>
-        <button onClick={() => onPathsChange(right, left)} title="Swap sides" disabled={!left || !right}>
-          ⇄
+        <button onClick={() => onPathsChange(right, left)} title="Swap sides" aria-label="Swap sides" disabled={!left || !right}>
+          <ArrowLeftRight size={14} />
         </button>
-        <button onClick={() => run()} title="Refresh (F5)">
-          ⟳
+        <button onClick={() => run()} title="Refresh (F5)" aria-label="Refresh">
+          <RefreshCw size={14} />
+        </button>
+        <button onClick={() => onOpenSync(left, right)} disabled={!left || !right} title="Synchronize these folders">
+          <FolderSync size={14} /> Sync…
         </button>
       </div>
 

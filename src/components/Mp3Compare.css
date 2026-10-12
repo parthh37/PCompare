@@ -1,0 +1,44 @@
+/* ---------- mp3 compare: embedded cover thumbnails ---------- */
+.mp3-covers {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--border);
+  max-height: 190px;
+  overflow-y: auto;
+}
+.mp3-covers-side {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: flex-start;
+  font-size: 12px;
+}
+.mp3-cover {
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  max-width: 140px;
+}
+.mp3-cover img,
+.mp3-cover-placeholder {
+  width: 120px;
+  height: 120px;
+  object-fit: contain;
+  background: var(--hatch), var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+}
+.mp3-cover-placeholder {
+  display: grid;
+  place-items: center;
+  color: var(--muted);
+}
+.mp3-cover figcaption {
+  font-size: 11px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}

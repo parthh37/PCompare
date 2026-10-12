@@ -1,3 +1,4 @@
+import { CornerLeftUp, File, Folder } from "lucide-react";
 import { useEffect, useState } from "react";
 import { api, errorMessage, REMOTE_SCHEME, type Profile, type RemoteEntry } from "../lib/api";
 import { formatSize, formatTime } from "../lib/format";
@@ -140,7 +141,9 @@ export function RemoteBrowser({ directory, initial, onPick, onClose, onManagePro
       <div className="rb-list">
         {dir && (
           <div className="rb-row" onDoubleClick={() => setDir(crumbs.slice(0, -1).join("/"))}>
-            <span>📁 ..</span>
+            <span className="rb-name">
+              <CornerLeftUp size={14} className="ic-folder" /> ..
+            </span>
           </div>
         )}
         {loading && <div className="rb-row muted">Loading…</div>}
@@ -152,8 +155,8 @@ export function RemoteBrowser({ directory, initial, onPick, onClose, onManagePro
               onClick={() => !e.isDir && setSelected(e.name)}
               onDoubleClick={() => (e.isDir ? enter(e.name) : pickFile(e.name))}
             >
-              <span>
-                {e.isDir ? "📁" : "📄"} {e.name}
+              <span className="rb-name">
+                {e.isDir ? <Folder size={14} className="ic-folder" /> : <File size={14} className="ic-file" />} {e.name}
               </span>
               <span className="muted num">{e.isDir ? "" : formatSize(e.size)}</span>
               <span className="muted">{formatTime(e.modifiedMs)}</span>

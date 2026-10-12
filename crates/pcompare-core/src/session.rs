@@ -11,7 +11,19 @@ use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::sync::Mutex;
 
-pub const SESSION_KINDS: &[&str] = &["text", "folder", "hex"];
+pub const SESSION_KINDS: &[&str] = &[
+    "text",
+    "merge",
+    "table",
+    "picture",
+    "folder",
+    "sync",
+    "folderMerge",
+    "hex",
+    "registry",
+    "version",
+    "mp3",
+];
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -21,6 +33,12 @@ pub struct SavedSession {
     pub kind: String,
     pub left: String,
     pub right: String,
+    /// Common ancestor, for 3-way merge sessions.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base: Option<String>,
+    /// Merge destination, for 3-way merge sessions.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output: Option<String>,
     #[serde(default)]
     pub settings: serde_json::Value,
     pub created_ms: i64,
@@ -36,6 +54,10 @@ pub struct SessionInput {
     pub kind: String,
     pub left: String,
     pub right: String,
+    #[serde(default)]
+    pub base: Option<String>,
+    #[serde(default)]
+    pub output: Option<String>,
     #[serde(default)]
     pub settings: serde_json::Value,
 }
@@ -112,6 +134,8 @@ impl SessionStore {
                 existing.kind = input.kind;
                 existing.left = input.left;
                 existing.right = input.right;
+                existing.base = input.base;
+                existing.output = input.output;
                 existing.settings = input.settings;
                 existing.modified_ms = now;
                 existing.clone()
@@ -123,6 +147,8 @@ impl SessionStore {
                     kind: input.kind,
                     left: input.left,
                     right: input.right,
+                    base: input.base,
+                    output: input.output,
                     settings: input.settings,
                     created_ms: now,
                     modified_ms: now,
@@ -147,6 +173,8 @@ impl SessionStore {
             kind: existing.kind,
             left: existing.left,
             right: existing.right,
+            base: existing.base,
+            output: existing.output,
             settings: existing.settings,
         })
     }
@@ -170,6 +198,8 @@ mod tests {
             kind: "folder".into(),
             left: "/a".into(),
             right: "remote://s3/b".into(),
+            base: None,
+            output: None,
             settings: serde_json::json!({ "criteria": "content" }),
         }
     }
