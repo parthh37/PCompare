@@ -102,9 +102,10 @@ fn pair_key(path: &str) -> String {
 }
 
 /// A checksum cache for the local sides of a comparison (remote listings
-/// carry no trustworthy file identity, so they are always read).
+/// carry no trustworthy file identity, so they are always read). An empty
+/// path is a side with no folder chosen yet, which has nothing to cache.
 pub(crate) fn checksum_cache<'a>(app: &'a AppHandle, paths: [&str; 2]) -> Option<CachedChecksums<'a>> {
-    let roots = paths.map(|p| (!pcompare_remote::is_remote(p)).then_some(p));
+    let roots = paths.map(|p| (!p.is_empty() && !pcompare_remote::is_remote(p)).then_some(p));
     index(app)?.checksum_cache(roots).ok()
 }
 

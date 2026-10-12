@@ -1,23 +1,15 @@
 import {
   ArrowLeft,
-  ArrowLeftRight,
   ArrowRight,
   ChevronDown,
   ChevronRight,
-  ChevronsDownUp,
-  ChevronsUpDown,
   Equal,
   EqualApproximately,
   EqualNot,
-  File,
-  Folder,
-  FolderSync,
-  RefreshCw,
-  Settings2,
   TriangleAlert,
   type LucideIcon,
 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
   api,
   errorMessage,
@@ -26,6 +18,7 @@ import {
   type EntryStatus,
   type FolderCompareResult,
   type FolderEntry,
+  type Side,
   type TextDiffOptions,
 } from "../lib/api";
 import {
@@ -48,9 +41,12 @@ import {
   visibleSet,
   type DisplayFilter,
 } from "../lib/folderTree";
-import { formatSize, formatTime, hex, joinPath } from "../lib/format";
+import { basename, formatSize, formatTime, hex, joinPath } from "../lib/format";
+import { useShell } from "../lib/shell";
 import { autoRefreshTitle, useAutoRefresh } from "../lib/useAutoRefresh";
 import { FolderSettingsDialog } from "./FolderSettingsDialog";
+import { FileIcon, ToolIcon, type ToolIconName } from "./icons";
+import { ToolButton } from "./ToolButton";
 import { PathBar } from "./PathBar";
 import { VirtualList } from "./VirtualList";
 
@@ -110,7 +106,16 @@ interface Menu {
   x: number;
   y: number;
   entry: FolderEntry;
+  /** The half of the row that was right-clicked (or the only side the entry exists on). */
+  side: Side;
 }
+
+const FILTER_ICON: Partial<Record<DisplayFilter, ToolIconName>> = {
+  all: "all",
+  diffs: "diffs",
+  same: "same",
+  orphans: "orphans",
+};
 
 function rowTitle(e: FolderEntry): string {
   const parts = [STATUS_LABEL[e.status]];
@@ -149,6 +154,7 @@ export function FolderCompare({
   const [selected, setSelected] = useState<string | null>(null);
   const [menu, setMenu] = useState<Menu | null>(null);
   const root = useRef<HTMLDivElement>(null);
+  const shell = useShell();
 
   // Only settings that affect the engine re-run it; view settings don't.
   const engineOptions = useMemo(() => toEngineOptions(cfg), [cfg]);
@@ -158,7 +164,8 @@ export function FolderCompare({
   /** `quiet` refreshes (auto-refresh) keep the current view instead of flashing an overlay. */
   const run = useCallback(
     async (quiet = false) => {
-      if (!left || !right) return;
+      // One folder is enough: it lists on its own until the other side is picked.
+      if (!left && !right) return;
       const seq = ++requestSeq.current;
       if (!quiet) setLoading(true);
       try {
@@ -192,7 +199,13 @@ export function FolderCompare({
   const entries = useMemo(() => (result ? applyVerdicts(result.entries, verdicts) : []), [result, verdicts]);
   const stats = useMemo(() => (verdicts.size ? tally(entries) : result?.stats), [entries, verdicts, result]);
   const matcher = useMemo(() => nameMatcher(nameQuery), [nameQuery]);
-  const visible = useMemo(() => visibleSet(entries, cfg.filter, matcher), [entries, cfg.filter, matcher]);
+  /** Only one folder chosen so far: show its listing rather than a sea of orphans. */
+  const oneSided = !!result && (!result.leftRoot || !result.rightRoot);
+  // Everything is an "orphan" until the other side exists, so display filters wait for it.
+  const visible = useMemo(
+    () => visibleSet(entries, oneSided ? "all" : cfg.filter, matcher),
+    [entries, oneSided, cfg.filter, matcher],
+  );
 
   const flat = useMemo(() => {
     const out: FlatRow[] = [];
@@ -219,6 +232,9 @@ export function FolderCompare({
       next.has(rel) ? next.delete(rel) : next.add(rel);
       return next;
     });
+
+  const sidePath = (e: FolderEntry, side: Side) =>
+    result ? joinPath(side === "left" ? result.leftRoot : result.rightRoot, e.relPath) : "";
 
   const paths = (e: FolderEntry): [string, string] | null =>
     result && e.left && e.right ? [joinPath(result.leftRoot, e.relPath), joinPath(result.rightRoot, e.relPath)] : null;
@@ -253,6 +269,17 @@ export function FolderCompare({
     if (failures.length) setError(failures.slice(0, 3).join("\n") + (failures.length > 3 ? "\n…" : ""));
   };
 
+  // Keep the context menu on screen: shift it left at the right edge and
+  // open it upwards when it would run past the bottom.
+  const menuRef = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => {
+    const el = menuRef.current;
+    if (!el || !menu) return;
+    const { width, height } = el.getBoundingClientRect();
+    el.style.left = `${Math.max(4, Math.min(menu.x, window.innerWidth - width - 4))}px`;
+    el.style.top = `${menu.y + height > window.innerHeight - 4 ? Math.max(4, menu.y - height) : menu.y}px`;
+  }, [menu]);
+
   useEffect(() => {
     if (!menu) return;
     const close = () => setMenu(null);
@@ -277,7 +304,8 @@ export function FolderCompare({
 
   const renderSide = (e: FolderEntry, side: "left" | "right", depth: number) => {
     const meta = e[side];
-    const newer = e.newer === side ? " newer" : "";
+    // Beyond Compare draws the newer of two differing files in red and the older in grey.
+    const newer = e.newer === side ? " newer" : e.newer ? " older" : "";
     const showChevron = e.isDir && meta && !cfg.flatten;
     return (
       <>
@@ -298,7 +326,7 @@ export function FolderCompare({
           {meta && (
             <>
               <span className="ficon">
-                {e.isDir ? <Folder size={14} className="ic-folder" /> : <File size={14} className="ic-file" />}
+                <FileIcon name={e.name} isDir={e.isDir} open={e.isDir && expanded.has(e.relPath) && !cfg.flatten} />
               </span>
               {cfg.flatten ? e.relPath : e.name}
             </>
@@ -322,14 +350,15 @@ export function FolderCompare({
         onContextMenu={(ev) => {
           ev.preventDefault();
           setSelected(e.relPath);
-          setMenu({ x: ev.clientX, y: ev.clientY, entry: e });
+          const box = ev.currentTarget.getBoundingClientRect();
+          const clicked: Side = ev.clientX < box.left + box.width / 2 ? "left" : "right";
+          const side: Side = e[clicked] ? clicked : clicked === "left" ? "right" : "left";
+          setMenu({ x: ev.clientX, y: ev.clientY, entry: e, side });
         }}
         title={rowTitle(e)}
       >
         {renderSide(e, "left", depth)}
-        <div className={`fcell status${checked ? " checked" : ""}`}>
-          <StatusIcon size={13} />
-        </div>
+        <div className={`fcell status${checked ? " checked" : ""}`}>{!oneSided && <StatusIcon size={13} />}</div>
         {renderSide(e, "right", depth)}
       </div>
     );
@@ -343,14 +372,17 @@ export function FolderCompare({
 
   return (
     <div className="session" ref={root}>
-      <div className="toolbar">
-        <div className="seg-control">
-          {primaryFilters.map((f) => (
-            <button key={f.value} className={cfg.filter === f.value ? "active" : ""} onClick={() => update({ filter: f.value })}>
-              {f.label}
-            </button>
-          ))}
-        </div>
+      <div className="bc-toolbar">
+        {primaryFilters.map((f) => (
+          <ToolButton
+            key={f.value}
+            icon={FILTER_ICON[f.value]!}
+            label={f.label === "Differences" ? "Diffs" : f.label}
+            title={`Show ${f.label.toLowerCase()}`}
+            active={cfg.filter === f.value}
+            onClick={() => update({ filter: f.value })}
+          />
+        ))}
         <select
           className={`more-filters${moreFilters.some((f) => f.value === cfg.filter) ? " active" : ""}`}
           value={moreFilters.some((f) => f.value === cfg.filter) ? cfg.filter : ""}
@@ -364,6 +396,30 @@ export function FolderCompare({
             </option>
           ))}
         </select>
+        <span className="tool-sep" />
+        <ToolButton icon="expand" label="Expand" title="Expand all folders" disabled={cfg.flatten} onClick={() => setExpanded(allDirs(entries))} />
+        <ToolButton icon="collapse" label="Collapse" title="Collapse all folders" disabled={cfg.flatten} onClick={() => setExpanded(new Set())} />
+        <ToolButton
+          icon="flatten"
+          label="Flatten"
+          title="Ignore folder structure: list every file at one level"
+          active={cfg.flatten}
+          onClick={() => update({ flatten: !cfg.flatten })}
+        />
+        <span className="tool-sep" />
+        <ToolButton
+          icon="rules"
+          label={filterCount ? `Rules · ${filterCount}` : "Rules"}
+          title={`Comparison, filters and text rules${filterCount ? ` (${filterCount} filter${filterCount > 1 ? "s" : ""} active)` : ""}`}
+          onClick={() => setShowSettings(true)}
+        />
+        <span className="tool-sep" />
+        <ToolButton icon="swap" label="Swap" title="Swap sides" disabled={!left && !right} onClick={() => onPathsChange(right, left)} />
+        <ToolButton icon="refresh" label="Refresh" title="Refresh (F5)" onClick={() => run()} />
+        <ToolButton icon="sync" label="Sync" title="Synchronize these folders" disabled={!left || !right} onClick={() => onOpenSync(left, right)} />
+      </div>
+
+      <div className="toolbar filterbar">
         <input
           className="name-filter"
           value={nameQuery}
@@ -371,18 +427,6 @@ export function FolderCompare({
           placeholder="Filter names (*.rs)"
           spellCheck={false}
         />
-        <span className="sep" />
-        <button onClick={() => setExpanded(allDirs(entries))} disabled={cfg.flatten} title="Expand all folders">
-          <ChevronsUpDown size={14} /> Expand
-        </button>
-        <button onClick={() => setExpanded(new Set())} disabled={cfg.flatten} title="Collapse all folders">
-          <ChevronsDownUp size={14} /> Collapse
-        </button>
-        <label className="check" title="Ignore folder structure: list every file at one level">
-          <input type="checkbox" checked={cfg.flatten} onChange={(e) => update({ flatten: e.target.checked })} />
-          Flatten
-        </label>
-        <span className="sep" />
         <label>
           Compare
           <select
@@ -400,9 +444,6 @@ export function FolderCompare({
             {preset === "custom" && <option value="custom">Custom</option>}
           </select>
         </label>
-        <button onClick={() => setShowSettings(true)} title="Comparison, filters and text rules">
-          <Settings2 size={14} /> Settings{filterCount ? ` · ${filterCount} filter${filterCount > 1 ? "s" : ""}` : ""}
-        </button>
         <label className="grow">
           Exclude
           <input
@@ -418,18 +459,9 @@ export function FolderCompare({
           <input type="checkbox" checked={cfg.autoRefresh} onChange={(e) => update({ autoRefresh: e.target.checked })} />
           Auto-refresh
         </label>
-        <button onClick={() => onPathsChange(right, left)} title="Swap sides" aria-label="Swap sides" disabled={!left || !right}>
-          <ArrowLeftRight size={14} />
-        </button>
-        <button onClick={() => run()} title="Refresh (F5)" aria-label="Refresh">
-          <RefreshCw size={14} />
-        </button>
-        <button onClick={() => onOpenSync(left, right)} disabled={!left || !right} title="Synchronize these folders">
-          <FolderSync size={14} /> Sync…
-        </button>
       </div>
 
-      <PathBar left={left} right={right} directory onCompare={onPathsChange} />
+      <PathBar left={left} right={right} directory oneSided onCompare={onPathsChange} />
 
       <div className="fheader">
         <div>Name</div>
@@ -441,7 +473,10 @@ export function FolderCompare({
         <div>Modified</div>
       </div>
 
-      <div className="session-body">
+      <div className={`session-body${oneSided ? " one-sided" : ""}`}>
+        {!left && !right && (
+          <div className="empty-state">Choose a folder on either side — its contents list right away.</div>
+        )}
         {loading && <div className="overlay">Comparing folders…</div>}
         {error && <div className="banner error">{error}</div>}
         {result && flat.length === 0 && <div className="empty-state">Nothing to show for this filter.</div>}
@@ -449,7 +484,17 @@ export function FolderCompare({
       </div>
 
       <div className="statusbar">
-        {stats && (
+        {stats && oneSided && (
+          <>
+            <span>
+              {stats.leftOnly + stats.rightOnly} files in {basename(result!.leftRoot || result!.rightRoot)}
+            </span>
+            <span className="muted">Choose the other folder to compare</span>
+            <span className="spacer" />
+            <span className="muted">{result!.elapsedMs} ms</span>
+          </>
+        )}
+        {stats && !oneSided && (
           <>
             <span className="s-same-fg">{stats.same} same</span>
             {stats.similar > 0 && <span className="s-similar-fg">{stats.similar} similar</span>}
@@ -472,11 +517,15 @@ export function FolderCompare({
       </div>
 
       {menu && (
-        <div className="ctx-menu" style={{ left: menu.x, top: menu.y }} onClick={(e) => e.stopPropagation()}>
+        <div className="ctx-menu" ref={menuRef} style={{ left: menu.x, top: menu.y }} onClick={(e) => e.stopPropagation()}>
           {!menu.entry.isDir && paths(menu.entry) && (
             <>
-              <button onClick={() => (setMenu(null), onOpenFiles(...paths(menu.entry)!, engineOptions.rules))}>Open in Text Compare</button>
-              <button onClick={() => (setMenu(null), onOpenHex(...paths(menu.entry)!))}>Open in Hex Compare</button>
+              <button className="ctx-icon" onClick={() => (setMenu(null), onOpenFiles(...paths(menu.entry)!, engineOptions.rules))}>
+                <ToolIcon name="text" size={16} /> Open in Text Compare
+              </button>
+              <button className="ctx-icon" onClick={() => (setMenu(null), onOpenHex(...paths(menu.entry)!))}>
+                <ToolIcon name="hex" size={16} /> Open in Hex Compare
+              </button>
               <hr />
             </>
           )}
@@ -496,13 +545,27 @@ export function FolderCompare({
             </button>
           ))}
           <hr />
+          <button className="ctx-icon" onClick={() => (setMenu(null), shell.selectLeft(sidePath(menu.entry, menu.side)))}>
+            <ToolIcon name="selectLeft" size={16} /> Select Left Side for Compare
+          </button>
+          {shell.leftSelection && shell.leftSelection !== sidePath(menu.entry, menu.side) && (
+            <button
+              className="ctx-icon"
+              title={`${shell.leftSelection}\n↔ ${sidePath(menu.entry, menu.side)}`}
+              onClick={() => (setMenu(null), shell.compareToLeft(sidePath(menu.entry, menu.side)))}
+            >
+              <ToolIcon name="compareTo" size={16} /> Compare to “{basename(shell.leftSelection)}”
+            </button>
+          )}
+          <hr />
           <button
+            className="ctx-icon"
             onClick={() => {
               setMenu(null);
               navigator.clipboard.writeText(menu.entry.relPath).catch(() => {});
             }}
           >
-            Copy relative path
+            <ToolIcon name="copy" size={16} /> Copy relative path
           </button>
         </div>
       )}

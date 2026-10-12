@@ -13,12 +13,14 @@ use pcompare_core::hex::{self, HexChunk, HexSummary};
 use pcompare_core::session::{SavedSession, SessionInput, SessionStore};
 use pcompare_core::text::{self, TextDiffOptions, TextDiffResult};
 use pcompare_core::textfile::{self, TextFileInfo};
+use pcompare_core::vfs::{EmptyFs, Vfs};
 use pcompare_core::PathKind;
 use pcompare_remote::profile::{KeyringSecrets, Profile, ProfileInput};
 use pcompare_remote::provider::{self, ProviderKind, ProviderSpec};
 use pcompare_remote::RemoteManager;
 use serde::Serialize;
 use std::path::PathBuf;
+use std::sync::Arc;
 use tauri::{AppHandle, Manager};
 use tauri_plugin_opener::OpenerExt;
 
@@ -87,13 +89,68 @@ fn path_kind(path: String) -> PathKind {
     pcompare_core::path_kind(path)
 }
 
+/// Where "Select Left Side for Compare" remembers its path between the
+/// Explorer menu, the in-app menu and the next "Compare to…".
+fn left_selection_file() -> PathBuf {
+    std::env::temp_dir().join("pcompare-left-selection.txt")
+}
+
+fn read_left_selection() -> Option<String> {
+    let s = std::fs::read_to_string(left_selection_file()).ok()?;
+    let s = s.trim();
+    (!s.is_empty()).then(|| s.to_owned())
+}
+
+/// Turns the command line into the paths to open. Plain paths pass through;
+/// `--compare-to <path>` pairs `path` with the remembered left side (or opens
+/// it alone when nothing was selected) and consumes the selection.
+fn resolve_launch_args(args: &[String], left_selection: Option<String>) -> Vec<String> {
+    if let Some(i) = args.iter().position(|a| a == "--compare-to") {
+        let Some(target) = args.get(i + 1) else { return Vec::new() };
+        return match left_selection {
+            Some(left) if &left != target => vec![left, target.clone()],
+            _ => vec![target.clone()],
+        };
+    }
+    args.iter().filter(|a| !a.starts_with('-')).cloned().collect()
+}
+
+/// The paths this process was launched with, resolved once in `main` before
+/// any window exists (so the webview never sees a half-consumed selection).
+static LAUNCH_PATHS: std::sync::OnceLock<Vec<String>> = std::sync::OnceLock::new();
+
+fn resolve_launch_paths(args: &[String]) -> Vec<String> {
+    if !args.iter().any(|a| a == "--compare-to") {
+        return resolve_launch_args(args, None);
+    }
+    let paths = resolve_launch_args(args, read_left_selection());
+    let _ = std::fs::remove_file(left_selection_file());
+    paths
+}
+
 /// Paths passed on the command line, e.g. `pcompare.exe left right`.
 #[tauri::command]
 fn launch_args() -> Vec<String> {
-    std::env::args()
-        .skip(1)
-        .filter(|a| !a.starts_with('-'))
-        .collect()
+    LAUNCH_PATHS.get().cloned().unwrap_or_default()
+}
+
+/// The path picked with "Select Left Side for Compare", if any.
+#[tauri::command]
+fn get_left_selection() -> Option<String> {
+    read_left_selection()
+}
+
+/// Remembers (or with `None`, forgets) the left side for a later "Compare to…".
+#[tauri::command]
+fn set_left_selection(path: Option<String>) -> CmdResult<()> {
+    let file = left_selection_file();
+    match path {
+        Some(p) => std::fs::write(file, p).map_err(|e| e.to_string()),
+        None => match std::fs::remove_file(file) {
+            Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(e.to_string()),
+            _ => Ok(()),
+        },
+    }
 }
 
 /// Runs `f` and, if it fails, drops cached connections behind both paths so
@@ -151,8 +208,17 @@ async fn compare_folders(
 ) -> CmdResult<FolderCompareResult> {
     blocking(move || {
         with_remote(&app, [&left, &right], |r| {
-            let (lfs, lpath) = r.target(&left)?;
-            let (rfs, rpath) = r.target(&right)?;
+            // A side with no folder chosen yet lists as empty, so the other
+            // side's contents show as soon as one folder is picked.
+            let side = |p: &str| -> pcompare_core::Result<(Arc<dyn Vfs>, String)> {
+                if p.is_empty() {
+                    Ok((Arc::new(EmptyFs), String::new()))
+                } else {
+                    r.target(p)
+                }
+            };
+            let (lfs, lpath) = side(&left)?;
+            let (rfs, rpath) = side(&right)?;
             let cache = sync::checksum_cache(&app, [&left, &right]);
             let mut res = folder::compare_folders_cached(
                 &*lfs,
@@ -360,6 +426,17 @@ async fn remote_list(app: AppHandle, path: String) -> CmdResult<Vec<RemoteEntry>
 }
 
 fn main() {
+    // Explorer's "Select Left Side for Compare" just records the path and
+    // exits without opening a window, like Beyond Compare's shell extension.
+    let args: Vec<String> = std::env::args().collect();
+    if let Some(i) = args.iter().position(|a| a == "--select-left") {
+        if let Some(path) = args.get(i + 1) {
+            let _ = std::fs::write(left_selection_file(), path);
+        }
+        return;
+    }
+    let _ = LAUNCH_PATHS.set(resolve_launch_paths(args.get(1..).unwrap_or_default()));
+
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
@@ -382,6 +459,8 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             path_kind,
             launch_args,
+            get_left_selection,
+            set_left_selection,
             compare_text_files,
             compare_folders,
             compare_file_contents,
@@ -437,4 +516,31 @@ fn main() {
         ])
         .run(tauri::generate_context!())
         .expect("error while running PCompare");
+}
+
+#[cfg(test)]
+mod launch_tests {
+    use super::resolve_launch_args;
+
+    fn args(a: &[&str]) -> Vec<String> {
+        a.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn plain_paths_pass_through() {
+        assert_eq!(resolve_launch_args(&args(&["a", "-v", "b"]), None), args(&["a", "b"]));
+    }
+
+    #[test]
+    fn compare_to_pairs_with_the_selected_left() {
+        let got = resolve_launch_args(&args(&["--compare-to", "b"]), Some("a".into()));
+        assert_eq!(got, args(&["a", "b"]));
+    }
+
+    #[test]
+    fn compare_to_without_selection_opens_one_side() {
+        assert_eq!(resolve_launch_args(&args(&["--compare-to", "b"]), None), args(&["b"]));
+        assert_eq!(resolve_launch_args(&args(&["--compare-to", "b"]), Some("b".into())), args(&["b"]));
+        assert!(resolve_launch_args(&args(&["--compare-to"]), None).is_empty());
+    }
 }
