@@ -77,11 +77,17 @@ pub struct SessionStore {
 /// Decides the final name when `desired` is already used by another session.
 ///
 /// `taken` holds the names of all *other* sessions (the one being updated is
-/// excluded), compared case-insensitively by the caller.
+/// excluded). Like Explorer, a clash gets the first free ` (n)` suffix, so a
+/// save never silently replaces another session.
 fn resolve_name_conflict(desired: &str, taken: &[&str]) -> String {
-    // TODO(you): choose the policy for duplicate names — see the chat notes.
-    let _ = taken;
-    desired.to_owned()
+    let free = |name: &str| !taken.iter().any(|t| t.eq_ignore_ascii_case(name));
+    if free(desired) {
+        return desired.to_owned();
+    }
+    (2..)
+        .map(|n| format!("{desired} ({n})"))
+        .find(|name| free(name))
+        .expect("finitely many names are taken")
 }
 
 impl SessionStore {
@@ -118,14 +124,10 @@ impl SessionStore {
         let taken: Vec<&str> = file
             .sessions
             .iter()
-            .filter(|s| Some(s.id.as_str()) != id && s.name.eq_ignore_ascii_case(name))
+            .filter(|s| Some(s.id.as_str()) != id)
             .map(|s| s.name.as_str())
             .collect();
-        let name = if taken.is_empty() {
-            name.to_owned()
-        } else {
-            resolve_name_conflict(name, &taken)
-        };
+        let name = resolve_name_conflict(name, &taken);
         let now = now_ms();
 
         let saved = match id.and_then(|id| file.sessions.iter_mut().find(|s| s.id == id)) {
@@ -225,6 +227,20 @@ mod tests {
         assert_eq!(store.rename(&a.id, "Renamed").unwrap().name, "Renamed");
         store.delete(&a.id).unwrap();
         assert!(store.list().unwrap().is_empty());
+    }
+
+    #[test]
+    fn duplicate_names_get_a_numbered_suffix() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = SessionStore::new(dir.path().join("s.json"));
+        let a = store.save(input("Nightly")).unwrap();
+        assert_eq!(store.save(input("nightly")).unwrap().name, "nightly (2)");
+        assert_eq!(store.save(input("Nightly")).unwrap().name, "Nightly (3)");
+        // Re-saving a session under its own name is not a clash.
+        let mut same = input("Nightly");
+        same.id = Some(a.id.clone());
+        assert_eq!(store.save(same).unwrap().name, "Nightly");
+        assert_eq!(store.rename(&a.id, "Nightly (2)").unwrap().name, "Nightly (2) (2)");
     }
 
     #[test]
