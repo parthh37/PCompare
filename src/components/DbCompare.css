@@ -169,10 +169,10 @@
   margin-right: 14px;
 }
 .db-obj:hover {
-  background: rgba(255, 255, 255, 0.03);
+  background: var(--row-hover);
 }
 .db-obj.selected {
-  background: rgba(91, 156, 255, 0.16);
+  background: var(--sel-bg);
 }
 .db-obj-name {
   flex: 1;
@@ -197,7 +197,7 @@
   font-size: 10.5px;
   font-weight: 500;
   color: var(--muted);
-  background: rgba(255, 255, 255, 0.05);
+  background: var(--hairline);
   font-variant-numeric: tabular-nums;
 }
 .db-kind-icon {
@@ -360,10 +360,10 @@
   font-variant-numeric: tabular-nums;
 }
 .db-trow:hover:not(.db-thead) {
-  background: rgba(255, 255, 255, 0.03);
+  background: var(--row-hover);
 }
 .db-trow.selected {
-  background: rgba(91, 156, 255, 0.16);
+  background: var(--sel-bg);
 }
 .db-thead {
   height: auto;
@@ -495,7 +495,7 @@ button.db-chip {
 }
 button.db-chip.active {
   border-color: var(--accent);
-  background: rgba(91, 156, 255, 0.18);
+  background: var(--sel-bg-strong);
 }
 .banner.db-dialog-status {
   display: flex;
@@ -584,7 +584,7 @@ button.db-chip.active {
   user-select: text;
 }
 .db-script .c {
-  color: #6f7c93;
+  color: var(--comment-fg);
 }
 .db-script .go {
   color: var(--accent);

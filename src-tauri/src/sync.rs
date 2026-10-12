@@ -1,7 +1,9 @@
-//! Tauri commands for Folder Sync and 3-way Folder Merge.
+//! Tauri commands for Folder Sync and Folder Merge (3-way, or 2-way without a base).
 //!
-//! Planning and comparison work on remote stores too (through the shared
-//! `RemoteManager`); execution writes to disk, so it is local-only for now.
+//! Planning, comparison and execution work on remote stores too (through the
+//! shared `RemoteManager`): either side of a sync may be a `remote://` folder
+//! (bc5:remote-write). Remote deletions are permanent — remotes have no
+//! Recycle Bin — which the plan warns about; Folder Merge output stays local.
 //!
 //! Every sync run is a job in the scan database (`pcompare-index`): its
 //! operations are journaled as they run, so a sync cut short by a crash can
@@ -13,6 +15,8 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
+
+use pcompare_core::vfs_write::VfsWrite;
 use std::time::{Duration, Instant};
 
 use pcompare_core::folder::{ChecksumCache, FolderCompareOptions};
@@ -25,7 +29,8 @@ use pcompare_sync::exec::{
 };
 use pcompare_sync::fsops::{self, TrashDeleter};
 use pcompare_sync::journal::{Journal, NullJournal};
-use pcompare_sync::merge::{self, FolderMergeResult, MergeDecision, MergeReport};
+use pcompare_sync::remote::{self as remote_sync, Root}; // bc5:remote-write
+use pcompare_sync::merge::{self, FolderMergeOptions, FolderMergeResult, MergeDecision, MergeReport}; // bc5:folder-merge
 use pcompare_sync::sync::{self as engine, ConflictPolicy, PlanOptions, SyncMode, SyncOp, SyncPlan};
 use serde::Serialize;
 use tauri::ipc::Channel;
@@ -48,6 +53,17 @@ impl SyncJobs {
     }
 }
 
+/// Pause flags of running sync jobs, keyed like [`SyncJobs`] (bc5:file-ops).
+#[derive(Default)]
+struct SyncPauses(Mutex<HashMap<String, Arc<AtomicBool>>>);
+
+fn pauses(app: &AppHandle) -> MutexGuard<'_, HashMap<String, Arc<AtomicBool>>> {
+    if app.try_state::<SyncPauses>().is_none() {
+        app.manage(SyncPauses::default());
+    }
+    app.state::<SyncPauses>().inner().0.lock().unwrap_or_else(|e| e.into_inner())
+}
+
 fn jobs(app: &AppHandle) -> tauri::State<'_, SyncJobs> {
     // Registered on first use so this module needs no setup hook in main.rs.
     if app.try_state::<SyncJobs>().is_none() {
@@ -56,7 +72,7 @@ fn jobs(app: &AppHandle) -> tauri::State<'_, SyncJobs> {
     app.state::<SyncJobs>()
 }
 
-/// Execution writes and deletes files, which remote stores don't support yet.
+/// Folder Merge writes its output locally only.
 fn require_local_dirs(paths: &[(&str, &str)]) -> pcompare_core::Result<()> {
     for (label, path) in paths {
         if pcompare_remote::is_remote(path) {
@@ -73,6 +89,43 @@ fn require_existing_dir(label: &str, path: &str) -> pcompare_core::Result<()> {
         Ok(())
     } else {
         Err(CoreError::Other(format!("The {label} folder {path} doesn't exist.")))
+    }
+}
+
+// ---------- sync sides (bc5:remote-write) ----------
+
+/// The writable file system behind a side, `None` for a local folder.
+type SideFs = Option<(Arc<dyn VfsWrite>, String)>;
+
+fn root<'a>(path: &'a str, fs: &'a SideFs) -> Root<'a> {
+    match fs {
+        Some((fs, rel)) => Root::Remote { fs: &**fs, path: rel, label: path },
+        None => Root::Local(Path::new(path)),
+    }
+}
+
+/// Connects whichever sides are remote and runs `f` on both sides. A
+/// failure drops the connections so the next attempt starts fresh.
+fn with_roots<T>(
+    app: &AppHandle,
+    left: &str,
+    right: &str,
+    f: impl FnOnce(Root, Root) -> pcompare_core::Result<T>,
+) -> pcompare_core::Result<T> {
+    with_remote(app, [left, right], |r| {
+        // bc5:archives — a zip archive (or read-only tar/7z/snapshot) can be a side
+        let (lfs, rfs) = (r.target_write_folder(left)?, r.target_write_folder(right)?);
+        f(root(left, &lfs), root(right, &rfs))
+    })
+}
+
+fn require_existing_root(label: &str, side: Root) -> pcompare_core::Result<()> {
+    match side {
+        Root::Local(p) => require_existing_dir(label, &p.to_string_lossy()),
+        Root::Remote { fs, path, label: shown } => fs
+            .read_dir(path)
+            .map(drop)
+            .map_err(|e| CoreError::Other(format!("The {label} folder {shown} isn't reachable: {e}"))),
     }
 }
 
@@ -123,18 +176,21 @@ fn plan(
     conflicts: ConflictPolicy,
 ) -> pcompare_core::Result<SyncPlan> {
     with_remote(app, [left, right], |r| {
-        let (lfs, lpath) = r.target(left)?;
-        let (rfs, rpath) = r.target(right)?;
+        let (lfs, lpath) = r.target_folder(left)?; // bc5:archives
+        let (rfs, rpath) = r.target_folder(right)?;
         let baseline = match (mode, index(app)) {
             (SyncMode::TwoWay, Some(ix)) => Some(ix.load_baseline(&pair_key(left), &pair_key(right)).map_err(db_err)?),
             _ => None,
         };
-        let cache = checksum_cache(app, [left, right]);
+        let cache = checksum_cache(app, [crate::archive::cache_root(left), crate::archive::cache_root(right)]); // bc5:archives
         let plan_opts = PlanOptions { baseline: baseline.as_ref(), conflicts };
         let mut plan = engine::plan_sync_with(&*lfs, &lpath, &*rfs, &rpath, mode, options, &plan_opts, as_cache(&cache))?;
         if let Some(cache) = cache {
             let _ = cache.flush();
         }
+        // bc5:remote-write — remote deletions can't be undone; say so up front.
+        let remote_warnings = remote_sync::remote_warnings(&plan, pcompare_remote::is_remote(left), pcompare_remote::is_remote(right));
+        plan.warnings.extend(remote_warnings);
         plan.left_root = left.to_owned();
         plan.right_root = right.to_owned();
         Ok(plan)
@@ -177,19 +233,24 @@ struct RunGuard {
     app: AppHandle,
     key: String,
     flag: Arc<AtomicBool>,
+    /// Holds the run while set (bc5:file-ops).
+    pause: Arc<AtomicBool>,
 }
 
 impl RunGuard {
     fn new(app: &AppHandle, key: String) -> Self {
         let flag = Arc::new(AtomicBool::new(false));
         jobs(app).map().insert(key.clone(), flag.clone());
-        RunGuard { app: app.clone(), key, flag }
+        let pause = Arc::new(AtomicBool::new(false));
+        pauses(app).insert(key.clone(), pause.clone());
+        RunGuard { app: app.clone(), key, flag, pause }
     }
 }
 
 impl Drop for RunGuard {
     fn drop(&mut self) {
         jobs(&self.app).map().remove(&self.key);
+        pauses(&self.app).remove(&self.key);
     }
 }
 
@@ -226,13 +287,16 @@ struct RunSpec<'a> {
 
 /// Executes `ops` under `job_id`'s journal, closes the job, re-plans and
 /// refreshes the baseline.
+#[allow(clippy::too_many_arguments)]
 fn run_job(
     app: &AppHandle,
     spec: &RunSpec,
+    roots: (Root, Root),
     job: Option<(&str, i64)>,
     ops: &[SyncOp],
     exec_opts: &ExecOptions,
     cancel: &AtomicBool,
+    pause: &AtomicBool,
     progress: &mut dyn FnMut(&ExecProgress),
 ) -> SyncRun {
     let ix = index(app);
@@ -244,14 +308,15 @@ fn run_job(
         Some(j) => j,
         None => &mut null,
     };
-    let report = exec::execute(
-        Path::new(spec.left),
-        Path::new(spec.right),
+    let report = exec::execute_ctl(
+        roots.0,
+        roots.1,
         ops,
         exec_opts,
         &*deleter,
         journal,
         cancel,
+        pause, // bc5:file-ops
         progress,
     );
     drop(db_journal);
@@ -273,15 +338,14 @@ fn run_job(
 
 /// Puts half-finished operations of an interrupted job right: staged old
 /// versions go back (or are disposed of if the new file made it), temp
-/// files are removed.
-fn recover_job(detail: &JobDetail) -> Vec<Recovery> {
-    let (left, right) = (Path::new(&detail.summary.left), Path::new(&detail.summary.right));
+/// files are removed — on remote sides too.
+fn recover_job(left: Root, right: Root, detail: &JobDetail) -> Vec<Recovery> {
     let deleter = detail.options.disposal.deleter(&job_stamp(detail.summary.started_ms));
     detail
         .ops
         .iter()
         .filter(|o| o.state == OpState::Running)
-        .map(|o| exec::recover_op(left, right, &o.op, o.staged.as_deref().map(Path::new), &*deleter))
+        .map(|o| remote_sync::recover_op_on(left, right, &o.op, o.staged.as_deref(), &*deleter))
         .collect()
 }
 
@@ -303,14 +367,14 @@ pub async fn sync_plan(
 /// old versions are to be kept, that the versioning folder can take them.
 #[tauri::command]
 pub async fn sync_preflight(
+    app: AppHandle,
     left: String,
     right: String,
     ops: Vec<SyncOp>,
     exec: Option<ExecOptions>,
 ) -> CmdResult<Vec<PreflightIssue>> {
     blocking(move || {
-        require_local_dirs(&[("left", &left), ("right", &right)])?;
-        let mut issues = exec::preflight(Path::new(&left), Path::new(&right), &ops);
+        let mut issues = with_roots(&app, &left, &right, |l, r| Ok(remote_sync::preflight_on(l, r, &ops)))?;
         if let Some(Disposal::Versioning { folder }) = exec.map(|e| e.disposal) {
             let folder = Path::new(&folder);
             if !folder.as_os_str().is_empty() {
@@ -343,11 +407,6 @@ pub async fn sync_execute(
     run_key: String,
     on_progress: Channel<ExecProgress>,
 ) -> CmdResult<SyncRun> {
-    require_local_dirs(&[("left", &left), ("right", &right)])
-        .and_then(|_| require_existing_dir("left", &left))
-        .and_then(|_| require_existing_dir("right", &right))
-        .map_err(|e| e.to_string())?;
-
     let mut exec = exec;
     if let Disposal::Versioning { folder } = &mut exec.disposal {
         // An empty folder would resolve against the working directory.
@@ -356,7 +415,9 @@ pub async fn sync_execute(
         }
     }
     let guard = RunGuard::new(&app, run_key);
-    blocking(move || {
+    blocking(move || with_roots(&app, &left, &right, |l, r| {
+        require_existing_root("left", l)?;
+        require_existing_root("right", r)?;
         let started = now_ms();
         let job_id = match index(&app) {
             Some(ix) => {
@@ -378,13 +439,15 @@ pub async fn sync_execute(
         Ok(run_job(
             &app,
             &spec,
+            (l, r),
             job_id.as_deref().map(|id| (id, started)),
             &ops,
             &exec,
             &guard.flag,
+            &guard.pause,
             &mut send,
         ))
-    })
+    }))
     .await
 }
 
@@ -393,6 +456,15 @@ pub async fn sync_execute(
 pub fn sync_cancel(app: AppHandle, run_key: String) {
     if let Some(flag) = jobs(&app).map().get(&run_key) {
         flag.store(true, Ordering::Relaxed);
+    }
+}
+
+/// Holds (`paused`) or resumes a running sync between operations and inside
+/// large copies (bc5:file-ops).
+#[tauri::command]
+pub fn sync_pause(app: AppHandle, run_key: String, paused: bool) {
+    if let Some(flag) = pauses(&app).get(&run_key) {
+        flag.store(paused, Ordering::Relaxed);
     }
 }
 
@@ -422,28 +494,31 @@ pub async fn sync_resume(
         let ix = require_index(&app)?;
         let detail = ix.job_detail(&job_id).map_err(db_err)?;
         let s = &detail.summary;
-        require_local_dirs(&[("left", &s.left), ("right", &s.right)])?;
-        require_existing_dir("left", &s.left)?;
-        require_existing_dir("right", &s.right)?;
-        recover_job(&detail);
-        ix.set_job_status(&job_id, JobStatus::Running).map_err(db_err)?;
-        let remaining: Vec<SyncOp> = detail
-            .ops
-            .iter()
-            .filter(|o| matches!(o.state, OpState::Pending | OpState::Running))
-            .map(|o| o.op.clone())
-            .collect();
-        let spec = RunSpec { left: &s.left, right: &s.right, mode: s.mode, compare: &compare, conflicts };
-        let mut send = progress_sender(on_progress);
-        Ok(run_job(
-            &app,
-            &spec,
-            Some((&job_id, s.started_ms)),
-            &remaining,
-            &detail.options,
-            &guard.flag,
-            &mut send,
-        ))
+        with_roots(&app, &s.left, &s.right, |l, r| {
+            require_existing_root("left", l)?;
+            require_existing_root("right", r)?;
+            recover_job(l, r, &detail);
+            ix.set_job_status(&job_id, JobStatus::Running).map_err(db_err)?;
+            let remaining: Vec<SyncOp> = detail
+                .ops
+                .iter()
+                .filter(|o| matches!(o.state, OpState::Pending | OpState::Running))
+                .map(|o| o.op.clone())
+                .collect();
+            let spec = RunSpec { left: &s.left, right: &s.right, mode: s.mode, compare: &compare, conflicts };
+            let mut send = progress_sender(on_progress);
+            Ok(run_job(
+                &app,
+                &spec,
+                (l, r),
+                Some((&job_id, s.started_ms)),
+                &remaining,
+                &detail.options,
+                &guard.flag,
+                &guard.pause,
+                &mut send,
+            ))
+        })
     })
     .await
 }
@@ -455,7 +530,8 @@ pub async fn sync_discard(app: AppHandle, job_id: String) -> CmdResult<Vec<Recov
     blocking(move || {
         let ix = require_index(&app)?;
         let detail = ix.job_detail(&job_id).map_err(db_err)?;
-        let recovered = recover_job(&detail);
+        let s = &detail.summary;
+        let recovered = with_roots(&app, &s.left, &s.right, |l, r| Ok(recover_job(l, r, &detail)))?;
         ix.set_job_status(&job_id, JobStatus::Cancelled).map_err(db_err)?;
         Ok(recovered)
     })
@@ -469,18 +545,20 @@ pub async fn sync_rollback(app: AppHandle, job_id: String) -> CmdResult<Vec<Roll
         let ix = require_index(&app)?;
         let detail = ix.job_detail(&job_id).map_err(db_err)?;
         let s = &detail.summary;
-        require_local_dirs(&[("left", &s.left), ("right", &s.right)])?;
-        // Finish any half-done operation first so the rollback sees a clean state.
-        recover_job(&detail);
-        let items: Vec<RollbackItem> = detail
-            .ops
-            .iter()
-            .filter(|o| o.state == OpState::Done)
-            .filter_map(|o| Some(RollbackItem { op: o.op.clone(), result: o.result.clone()? }))
-            .collect();
-        // Files the sync created still exist at their source, but go to the
-        // Trash anyway in case the source has changed since.
-        let results = exec::rollback(Path::new(&s.left), Path::new(&s.right), &items, &TrashDeleter::new());
+        let results = with_roots(&app, &s.left, &s.right, |l, r| {
+            // Finish any half-done operation first so the rollback sees a clean state.
+            recover_job(l, r, &detail);
+            let items: Vec<RollbackItem> = detail
+                .ops
+                .iter()
+                .filter(|o| o.state == OpState::Done)
+                .filter_map(|o| Some(RollbackItem { op: o.op.clone(), result: o.result.clone()? }))
+                .collect();
+            // Files the sync created still exist at their source, but go to the
+            // Trash anyway in case the source has changed since. Remote deletions
+            // and overwrites are reported as impossible to undo.
+            Ok(remote_sync::rollback_on(l, r, &items, &TrashDeleter::new()))
+        })?;
         let undone: Vec<u32> = results.iter().filter(|r| r.ok).map(|r| r.id).collect();
         ix.mark_ops_rolled_back(&job_id, &undone).map_err(db_err)?;
         ix.set_job_status(&job_id, JobStatus::RolledBack).map_err(db_err)?;
@@ -545,7 +623,8 @@ pub async fn index_clear_checksums(app: AppHandle) -> CmdResult<usize> {
     blocking(move || require_index(&app)?.clear_checksums().map_err(db_err)).await
 }
 
-// ---------- 3-way folder merge ----------
+// ---------- folder merge (3-way, or 2-way without a base) ----------
+// bc5:folder-merge — the base is optional and text files can be merged automatically.
 
 #[tauri::command]
 pub async fn folder_merge_compare(
@@ -554,19 +633,29 @@ pub async fn folder_merge_compare(
     left: String,
     right: String,
     options: FolderCompareOptions,
+    merge_options: Option<FolderMergeOptions>,
 ) -> CmdResult<FolderMergeResult> {
+    let merge_options = merge_options.unwrap_or_default();
     blocking(move || {
         let result = with_remote(&app, [&left, &right], |r| {
-            let (bfs, bpath) = r.target(&base)?;
-            let (lfs, lpath) = r.target(&left)?;
-            let (rfs, rpath) = r.target(&right)?;
-            let mut res = merge::compare_merge_with((&*bfs, &bpath), (&*lfs, &lpath), (&*rfs, &rpath), &options)?;
+            // An empty base means a two-way merge.
+            // bc5:archives — archives and snapshots open as folders here too
+            let base_target = if base.is_empty() { None } else { Some(r.target_folder(&base)?) };
+            let (lfs, lpath) = r.target_folder(&left)?;
+            let (rfs, rpath) = r.target_folder(&right)?;
+            let mut res = merge::compare_merge_with(
+                base_target.as_ref().map(|(bfs, bpath)| (&**bfs, bpath.as_str())),
+                (&*lfs, &lpath),
+                (&*rfs, &rpath),
+                &options,
+                &merge_options,
+            )?;
             res.base_root = base.clone();
             res.left_root = left.clone();
             res.right_root = right.clone();
             Ok(res)
         });
-        if result.is_err() {
+        if result.is_err() && !base.is_empty() {
             state(&app).remote.forget(&base);
         }
         result
@@ -585,10 +674,12 @@ pub async fn folder_merge_execute(
     blocking(move || {
         require_local_dirs(&[("base", &base), ("left", &left), ("right", &right), ("output", &output)])?;
         for (label, path) in [("base", &base), ("left", &left), ("right", &right)] {
-            require_existing_dir(label, path)?;
+            if !(label == "base" && path.is_empty()) {
+                require_existing_dir(label, path)?;
+            }
         }
         merge::execute_merge(
-            Path::new(&base),
+            (!base.is_empty()).then(|| Path::new(&base)),
             Path::new(&left),
             Path::new(&right),
             Path::new(&output),

@@ -67,6 +67,9 @@ pub enum WarningKind {
     EmptySide,
     /// The plan deletes a large share of the files on one side.
     MassDeletion,
+    /// The plan deletes or replaces files on a remote side, which has no
+    /// Recycle Bin (bc5:remote-write).
+    RemotePermanent,
 }
 
 /// Something about a plan the user must acknowledge before running it.
@@ -111,6 +114,35 @@ pub struct SyncOp {
     /// it. The executor refuses to touch it if it has changed since.
     #[serde(default)]
     pub dst_before: Option<Snap>,
+    /// The left side's own relative path when alignment paired differently
+    /// named items (case, NFC/NFD, ignored extensions, masks); `rel_path` is
+    /// the right side's. `None` when both sides use `rel_path`
+    /// (bc5:file-ops — [`FolderEntry::left_rel_path`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub left_rel_path: Option<String>,
+}
+
+impl SyncOp {
+    /// The op's relative path on one side.
+    pub fn rel_on(&self, side: Direction) -> &str {
+        match side {
+            Direction::ToRight => &self.rel_path,
+            Direction::ToLeft => self.left_rel_path.as_deref().unwrap_or(&self.rel_path),
+        }
+    }
+
+    /// Relative path on the side the op writes to (or deletes from).
+    pub fn dst_rel(&self) -> &str {
+        self.rel_on(self.direction)
+    }
+
+    /// Relative path on the side a copy reads from.
+    pub fn src_rel(&self) -> &str {
+        self.rel_on(match self.direction {
+            Direction::ToRight => Direction::ToLeft,
+            Direction::ToLeft => Direction::ToRight,
+        })
+    }
 }
 
 /// An item the plan deliberately leaves alone, with the reason why.
@@ -246,6 +278,10 @@ struct Planner<'a> {
     opts: &'a FolderCompareOptions,
     baseline: Option<&'a Baseline>,
     conflicts: ConflictPolicy,
+    /// Left-side relative paths of the folders being walked, innermost last,
+    /// so right-only items below an aligned folder land in the left folder it
+    /// was paired with (bc5:file-ops).
+    left_dirs: Vec<String>,
 }
 
 /// The side an operation toward `dir` overwrites or deletes.
@@ -278,6 +314,26 @@ fn side_name(side: Side) -> &'static str {
 }
 
 impl Planner<'_> {
+    /// `e`'s relative path on the left side (bc5:file-ops).
+    fn left_rel(&self, e: &FolderEntry) -> String {
+        if let Some(p) = &e.left_rel_path {
+            return p.clone();
+        }
+        match self.left_dirs.last() {
+            Some(parent) if e.left.is_none() => format!("{parent}/{}", e.name),
+            _ => e.rel_path.clone(),
+        }
+    }
+
+    /// Runs `f` with `e`'s left path as the folder being walked.
+    fn inside<T>(&mut self, e: &FolderEntry, f: impl FnOnce(&mut Self) -> T) -> T {
+        let dir = self.left_rel(e);
+        self.left_dirs.push(dir);
+        let out = f(self);
+        self.left_dirs.pop();
+        out
+    }
+
     fn push(
         &mut self,
         kind: OpKind,
@@ -300,6 +356,7 @@ impl Planner<'_> {
             overwrite: kind == OpKind::Copy && e.left.is_some() && e.right.is_some(),
             reason: reason.to_owned(),
             dst_before,
+            left_rel_path: Some(self.left_rel(e)).filter(|p| *p != e.rel_path),
         };
         match kind {
             OpKind::Mkdir => self.mkdirs.push(op),
@@ -327,9 +384,11 @@ impl Planner<'_> {
     fn copy_orphan(&mut self, e: &FolderEntry, dir: Direction, reason: &str) {
         if e.is_dir {
             self.push(OpKind::Mkdir, dir, e, 0, reason);
-            for c in &e.children {
-                self.copy_orphan(c, dir, reason);
-            }
+            self.inside(e, |p| {
+                for c in &e.children {
+                    p.copy_orphan(c, dir, reason);
+                }
+            });
         } else {
             self.copy(e, dir, reason);
         }
@@ -346,7 +405,7 @@ impl Planner<'_> {
         for e in entries {
             match e.status {
                 EntryStatus::Same | EntryStatus::Similar | EntryStatus::Different if e.is_dir => {
-                    self.walk(&e.children, mode)
+                    self.inside(e, |p| p.walk(&e.children, mode))
                 }
                 // Rules-based "similar" files differ only in unimportant ways.
                 EntryStatus::Same | EntryStatus::Similar => {}
@@ -623,6 +682,7 @@ pub fn plan_from_comparison_with(
         opts,
         baseline,
         conflicts: plan_opts.conflicts,
+        left_dirs: Vec::new(),
     };
     p.walk(&cmp.entries, mode);
     let mut ops = p.mkdirs;
@@ -934,6 +994,7 @@ mod tests {
             overwrite: false,
             reason: String::new(),
             dst_before: None,
+            left_rel_path: None,
         });
         let r = run(&t, &p.ops);
         assert_eq!(r.failed, 2);
@@ -1014,8 +1075,71 @@ mod tests {
             overwrite: false,
             reason: String::new(),
             dst_before: None,
+            left_rel_path: None,
         }];
         assert_eq!(run(&t, &ops).succeeded, 1);
+    }
+
+    /// Names in a folder, sorted, exactly as the file system returns them.
+    fn names(dir: &Path) -> Vec<String> {
+        let mut v: Vec<String> = fs::read_dir(dir)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        v.sort();
+        v
+    }
+
+    #[test]
+    fn aligned_pairs_sync_under_each_sides_own_names() {
+        // bc5:file-ops — the left uses NFC and `.htm`, the right NFD and
+        // `.html`; alignment pairs them, and the sync must write to the name
+        // each side already has instead of creating look-alike duplicates.
+        let dir = tempfile::tempdir().unwrap();
+        let (left, right) = (dir.path().join("L"), dir.path().join("R"));
+        let (nfc, nfd) = ("caf\u{e9}", "cafe\u{301}");
+        write(&left, &format!("{nfc}/menu.txt"), "new menu", NEW);
+        write(&right, &format!("{nfd}/menu.txt"), "old", OLD);
+        write(&left, &format!("{nfc}/left-only.txt"), "l", OLD);
+        write(&right, &format!("{nfd}/right-only.txt"), "r", OLD);
+        write(&left, "index.htm", "page v2", NEW);
+        write(&right, "index.html", "page v1", OLD);
+        let opts = FolderCompareOptions {
+            align: folder::AlignOptions {
+                extension_groups: vec!["htm,html".into()],
+                ..Default::default()
+            },
+            ..opts()
+        };
+        let p = plan_sync(&left, &right, SyncMode::UpdateBoth, &opts).unwrap();
+        let menu = p.ops.iter().find(|o| o.rel_path.ends_with("menu.txt")).unwrap();
+        assert_eq!(menu.rel_path, format!("{nfd}/menu.txt"));
+        assert_eq!(menu.src_rel(), format!("{nfc}/menu.txt"));
+        let back = p.ops.iter().find(|o| o.rel_path.ends_with("right-only.txt")).unwrap();
+        assert_eq!(back.direction, Direction::ToLeft);
+        assert_eq!(back.dst_rel(), format!("{nfc}/right-only.txt"), "lands in the paired left folder");
+        let page = p.ops.iter().find(|o| o.rel_path == "index.html").unwrap();
+        assert_eq!(page.src_rel(), "index.htm");
+
+        let r = exec::execute(
+            &left,
+            &right,
+            &p.ops,
+            &ExecOptions::default(),
+            &PermanentDeleter,
+            &mut NullJournal,
+            &AtomicBool::new(false),
+            &mut |_| {},
+        );
+        assert_eq!(r.failed, 0, "{:?}", r.results);
+        assert_eq!(names(&right), [nfd.to_string(), "index.html".into()]);
+        assert_eq!(names(&left), [nfc.to_string(), "index.htm".into()]);
+        assert_eq!(fs::read_to_string(right.join(nfd).join("menu.txt")).unwrap(), "new menu");
+        assert_eq!(fs::read_to_string(right.join("index.html")).unwrap(), "page v2");
+        assert_eq!(fs::read_to_string(right.join(nfd).join("left-only.txt")).unwrap(), "l");
+        assert_eq!(fs::read_to_string(left.join(nfc).join("right-only.txt")).unwrap(), "r");
+        let again = plan_sync(&left, &right, SyncMode::UpdateBoth, &opts).unwrap();
+        assert!(again.ops.is_empty(), "{:?}", describe(&again));
     }
 
     #[test]

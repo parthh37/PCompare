@@ -1,0 +1,227 @@
+/* bc5:file-ops — Operations panel, file-op dialogs and per-side selection in Folder Compare. */
+
+/* ----- selection ----- */
+/* One side of a row selected: highlight that side's cells (name, size, time, attr). */
+.frow.fc-sel-left > .fcell:nth-child(-n + 3),
+.fc-attrs .frow.fc-sel-left > .fcell:nth-child(4),
+.frow.fc-sel-right > .fcell:nth-last-child(-n + 3),
+.fc-attrs .frow.fc-sel-right > .fcell:nth-last-child(4) {
+  background: var(--sel-bg-strong);
+}
+.ctx-menu .fop-key {
+  margin-left: auto;
+  padding-left: 18px;
+  color: var(--muted);
+  font-size: 11px;
+}
+.frow.fc-focus {
+  outline: 1px dotted var(--accent-border-strong);
+  outline-offset: -1px;
+}
+
+/* ----- operations panel ----- */
+.fop-panel {
+  flex: 0 0 auto;
+  max-height: 34%;
+  display: flex;
+  flex-direction: column;
+  border-top: 1px solid var(--border);
+  background: var(--panel);
+  font-size: 12px;
+}
+.fop-panel-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--hairline);
+}
+.fop-panel-title {
+  font-weight: 600;
+}
+.fop-list {
+  overflow-y: auto;
+  min-height: 0;
+}
+.fop-empty {
+  padding: 8px 12px;
+}
+.fop-row {
+  padding: 5px 8px 6px;
+  border-bottom: 1px solid var(--hairline);
+  display: grid;
+  gap: 4px;
+}
+.fop-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+.fop-twisty {
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: none;
+  background: none;
+  display: grid;
+  place-items: center;
+}
+.fop-title {
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 45%;
+}
+.fop-status {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-variant-numeric: tabular-nums;
+}
+.fop-done .fop-icon {
+  color: var(--ok);
+}
+.fop-errors .fop-icon {
+  color: var(--warn);
+}
+.fop-failed .fop-icon,
+.fop-cancelled .fop-icon {
+  color: var(--muted);
+}
+.fop-failed .fop-status {
+  color: var(--del-fg);
+}
+.fop-spinner {
+  width: 12px;
+  height: 12px;
+  border: 2px solid var(--accent-border);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: fop-spin 0.8s linear infinite;
+  flex: 0 0 auto;
+}
+@keyframes fop-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+.fop-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  font-size: 12px;
+}
+.fop-bar {
+  height: 4px;
+  margin-left: 24px;
+}
+.fop-current {
+  margin-left: 24px;
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  direction: rtl;
+  text-align: left;
+}
+.fop-question {
+  margin-left: 24px;
+  padding: 6px 8px;
+  border: 1px solid var(--accent-border);
+  background: var(--accent-tint);
+  border-radius: 6px;
+  display: grid;
+  gap: 4px;
+}
+.fop-compare {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 16px;
+}
+.fop-answers {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.fop-answers button {
+  padding: 2px 10px;
+  font-size: 12px;
+}
+.fop-error {
+  margin-left: 24px;
+  color: var(--del-fg);
+}
+.fop-issues {
+  margin: 0 0 0 24px;
+  padding-left: 16px;
+  max-height: 140px;
+  overflow-y: auto;
+  font-size: 12px;
+}
+
+/* ----- toolbar toggle ----- */
+.tool-btn .fop-badge {
+  font-variant-numeric: tabular-nums;
+}
+.tool-btn svg.fop-tool {
+  width: 20px;
+  height: 20px;
+}
+
+/* ----- dialogs ----- */
+.fop-dialog {
+  display: grid;
+  gap: 10px;
+  min-width: min(520px, 80vw);
+}
+.fop-dialog .fop-summary {
+  font-size: 13px;
+}
+.fop-dialog .fop-items {
+  margin: 0;
+  padding: 6px 8px 6px 24px;
+  max-height: 150px;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: var(--bg);
+  font-family: var(--mono);
+  font-size: 12px;
+}
+.fop-dialog .fop-warn {
+  color: var(--warn);
+  font-size: 12px;
+}
+.fop-dialog .fop-danger {
+  color: var(--danger-text);
+}
+.fop-dialog .input-row {
+  display: flex;
+  gap: 6px;
+}
+.fop-dialog .input-row input {
+  flex: 1;
+}
+.fop-attr-grid {
+  display: grid;
+  grid-template-columns: auto repeat(3, 56px);
+  gap: 4px 8px;
+  align-items: center;
+}
+.fop-attr-grid .head {
+  color: var(--muted);
+  font-size: 11px;
+  text-align: center;
+}
+.fop-attr-grid input {
+  justify-self: center;
+}
+.fop-attr-list {
+  display: grid;
+  gap: 4px;
+}

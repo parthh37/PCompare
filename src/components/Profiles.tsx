@@ -30,6 +30,14 @@ import {
 
 const REFRESH_TOKEN = "refresh_token";
 
+/** Display names for select options whose stored values are terse keys. */
+const OPTION_LABELS: Record<string, string> = {
+  password: "Password",
+  "keyboard-interactive": "Keyboard-interactive (password, one-time codes)",
+  key: "Private key file",
+  agent: "SSH agent",
+};
+
 /** Generic glyphs tinted with each vendor's brand colour (no trademarked logos). */
 const PROVIDER_ICON: Record<ProviderKind, [LucideIcon, string]> = {
   s3: [Cylinder, "#ff9900"],
@@ -120,8 +128,9 @@ export function Profiles() {
 
   const visible = (f: FieldSpec) => {
     if (!f.showIf || !draft) return true;
+    // `value` may list alternatives: "password|keyboard-interactive".
     const [key, value] = f.showIf;
-    return (draft.settings[key] ?? "") === value;
+    return value.split("|").includes(draft.settings[key] ?? "");
   };
 
   const missing = useMemo(() => {
@@ -210,7 +219,7 @@ export function Profiles() {
           <select value={value} onChange={(e) => setSetting(f.key, e.target.value)}>
             {f.options.map((o) => (
               <option key={o} value={o}>
-                {o}
+                {OPTION_LABELS[o] ?? o}
               </option>
             ))}
           </select>

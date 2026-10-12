@@ -1,0 +1,16 @@
+[package]
+name = "pcompare-script"
+description = "Beyond Compare-style script processor and headless quick compare for PCompare"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+pcompare-core = { path = "../pcompare-core" }
+pcompare-sync = { path = "../pcompare-sync" }
+pcompare-report = { path = "../pcompare-report" }
+chrono = { version = "0.4", default-features = false, features = ["std", "clock"] }
+
+[dev-dependencies]
+tempfile = "3"
