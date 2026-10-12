@@ -13,7 +13,8 @@ A fast, modern file & folder comparison tool for Windows and macOS — inspired 
 | **Text Merge** | 3-way merge of left and right against their common ancestor · non-conflicting changes merged automatically · editable output with marked conflicts · take left / right / both / base per conflict · prev/next conflict (Alt+↑/↓) · works as a `git mergetool` |
 | **Table Compare** | Cell-by-cell CSV/TSV (delimiter sniffing), Excel/ODS workbooks (sheet picker) and HTML tables · align rows on **key columns** or by order · ignore columns · columns paired by header name · ignore case, trim, numeric tolerance |
 | **Picture Compare** | PNG, JPEG, GIF, BMP, ICO, TIFF, WebP, TGA, PNM, QOI · side-by-side with highlighted differences, difference, blend and swipe views · per-channel tolerance · synced zoom and pan · jump to the differing region |
-| **Folder Sync** | Update or mirror left→right / right→left, or update both · preview of every copy, delete and new folder with per-item checkboxes · progress and cancel · deletions go to the Recycle Bin/Trash · timestamps preserved |
+| **Folder Sync** | Update or mirror left→right / right→left, update both, or **two-way with history** (deletions propagate; edits on both sides are conflicts: skip, newer wins, left or right wins) · preview of every copy, delete and new folder with per-item checkboxes · **fail-safe execution**: pre-flight checks (free space, write access, nested folders), copies flushed to disk and swapped in atomically, optional read-back checksum verification, files changed since the preview are never overwritten or deleted, sources modified mid-copy are retried · **locked files** retried with backoff, then deferred to the end of the run, skipped or stop the sync — on Windows the report names the program holding the file · warnings before a mirror from an empty (unmounted?) folder · deleted and replaced files go to the Recycle Bin/Trash, a versioning folder or are deleted permanently · every run is **journaled**: resume or roll back after a crash, retry failed items, roll back a finished sync, history per folder pair |
+| **Scan database** | Embedded SQLite in the app data folder: CRC-32 cache so content compares skip unchanged files on rescans, two-way sync baselines, and the sync job journal · self-heals by setting a corrupt file aside |
 | **Folder Merge** | 3-way merge of folder trees against a common ancestor · classifies every path (changed, added, deleted, conflicts) with a proposed action · resolve text conflicts in Text Merge · writes the result to an output folder or into one side |
 | **Hex Compare** | Streams files of any size in 4 KB pages · byte-level highlighting · next-difference search |
 | **Registry Compare** | `.reg` exports (REGEDIT4 and v5, UTF-16) or live keys such as `HKLM\Software\Vendor` on Windows · key tree with status plus value-by-value differences |
@@ -30,6 +31,7 @@ A fast, modern file & folder comparison tool for Windows and macOS — inspired 
 ### Phase 2 — Beyond Compare parity
 - [x] Editable text panes, copy hunk left ⇄ right, save with original encoding/line endings
 - [x] Folder **sync** actions: copy, move, delete, mirror, update (with preview + undo log)
+- [x] Two-way sync with history, journaled crash-resumable runs, rollback, locked-file handling
 - [x] **Text Merge**: 3-way merge with base, conflict resolution, `git mergetool` support
 - [ ] Better line alignment inside replace blocks (similarity-based pairing)
 - [x] Ignore rules (regex-defined unimportant text) · [ ] language grammars (comments, strings)
@@ -107,7 +109,8 @@ crates/pcompare-remote/  Connection profiles and remote file systems (OpenDAL + 
 crates/pcompare-merge/   3-way text merge (diff3)
 crates/pcompare-table/   Table compare: CSV/TSV, Excel/ODS (calamine), HTML tables
 crates/pcompare-picture/ Picture compare (image crate)
-crates/pcompare-sync/    Folder sync planning/execution and 3-way folder merge
+crates/pcompare-sync/    Folder sync planning, fail-safe execution (retries, locked files, rollback) and 3-way folder merge
+crates/pcompare-index/   Embedded SQLite scan database: checksum cache, two-way sync baselines, job journal
 crates/pcompare-meta/    Registry (.reg / live), executable version (pelite) and audio tag (lofty) compare
 src-tauri/               Tauri shell exposing the engines as commands
 src/                     React + TypeScript UI
