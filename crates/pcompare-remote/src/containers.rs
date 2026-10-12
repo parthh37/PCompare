@@ -114,7 +114,7 @@ impl RemoteManager {
 /// `svn:` path — paths [`crate::is_remote`] doesn't cover but that aren't
 /// plain files either.
 pub fn is_container_path(path: &str) -> bool {
-    pcompare_archive::is_svn(path)
+    pcompare_archive::is_repo_path(path) // araxis:vcs — svn:, git: and hg:
         || (pcompare_archive::may_be_container_path(path)
             && split_path(path, true, |p| Path::new(p).is_file()).is_some())
 }
@@ -123,7 +123,7 @@ pub fn is_container_path(path: &str) -> bool {
 /// a bare archive file). Such files are read-only in the viewers: they open
 /// from an extracted copy.
 pub fn is_inside_container(path: &str) -> bool {
-    pcompare_archive::is_svn(path)
+    pcompare_archive::is_repo_path(path) // araxis:vcs — svn:, git: and hg:
         || (pcompare_archive::may_be_container_path(path)
             && split_path(path, false, |p| Path::new(p).is_file()).is_some())
 }

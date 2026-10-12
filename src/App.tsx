@@ -48,6 +48,12 @@ import { workspaceApi, type RecentSession, type Workspace, type WorkspaceTab } f
 import { openExternalIfAlways } from "./lib/convertApi"; // bc5:converters
 import { isContainerPath } from "./lib/archiveApi"; // bc5:archives
 import { toLaunchOptions, type LaunchOptions } from "./lib/cliApi"; // bc5:reports-script
+import { vcsApi } from "./lib/vcsApi"; // araxis:vcs
+// araxis:text-review — comparison archives (.pcmpz) open as read-only review tabs.
+import { ReviewArchiveView } from "./components/ReviewArchiveView";
+import { isReviewArchivePath } from "./lib/reviewApi";
+// araxis:text-review end
+import { dropOnPathField, highlightPathField } from "./lib/pathDrop"; // araxis:folder
 
 export type { SessionKind } from "./lib/sessions";
 
@@ -67,6 +73,8 @@ export interface Tab {
   /** bc5:reports-script — command-line tab labels (`/title1=`, `/title2=`) and read-only sides. */
   labels?: { left?: string; right?: string };
   readOnly?: { left: boolean; right: boolean };
+  /** araxis:vcs — opened by `pcompare --wait`: closing the tab lets that process exit. */
+  waitToken?: string;
 }
 
 /** `dbNames` titles Database Compare tabs by connection name rather than `db://` id. */
@@ -184,6 +192,7 @@ export default function App() {
   const openAuto = useCallback(
     // bc5:reports-script — `extra` carries command-line titles / read-only sides.
     async (left: string, right: string, extra: Partial<Tab> = {}) => {
+      if (isReviewArchivePath(left) && !right) return openTab("review", left, "", extra); // araxis:text-review
       // A missing side takes the other's kind, so one folder still opens a folder compare.
       const [lk, rk] = await Promise.all([api.pathKind(left), api.pathKind(right || left)]);
       if (lk === "directory" && rk === "directory") return openTab("folder", left, right, extra);
@@ -191,7 +200,10 @@ export default function App() {
       const asFolder = (p: string, k: string) => k === "directory" || isContainerPath(p);
       if (asFolder(left, lk) && asFolder(right || left, rk)) return openTab("folder", left, right, extra);
       // bc5:converters — pairs matching an "always use" external tool open there instead.
-      if (right && (await openExternalIfAlways(left, right))) return;
+      if (right && (await openExternalIfAlways(left, right))) {
+        if (extra.waitToken) vcsApi.waitDone(extra.waitToken).catch(() => {}); // araxis:vcs — no tab to wait for
+        return;
+      }
       let kind = sessionForFiles(left, right || left);
       // `.db` is ambiguous (Thumbs.db, BerkeleyDB...): only SQLite files open as databases.
       if (kind === "hex" && right && extension(left) === "db" && extension(right) === "db") {
@@ -257,6 +269,7 @@ export default function App() {
     dirtyTabs.current.delete(id);
     const closing = tabs.find((t) => t.id === id); // bc5:app-shell
     if (closing) autoSaveOnClose(closing);
+    if (closing?.waitToken) vcsApi.waitDone(closing.waitToken).catch((e) => setToast(errorMessage(e))); // araxis:vcs
     setTabs((ts) => {
       const idx = ts.findIndex((t) => t.id === id);
       const rest = ts.filter((t) => t.id !== id);
@@ -273,8 +286,14 @@ export default function App() {
       // bc5:reports-script — switches: forced viewer (`/fv=`), tab titles, read-only sides.
       const o = toLaunchOptions(launch);
       const [left, right, base, output] = o.paths;
-      if (!left) return;
+      // araxis:vcs — `--wait` launches report back when their tab closes.
+      if (!left) {
+        if (o.waitToken) vcsApi.waitDone(o.waitToken).catch(() => {});
+        return;
+      }
       const extra: Partial<Tab> = {};
+      if (o.waitToken) extra.waitToken = o.waitToken;
+      // araxis:vcs end
       if (o.titleLeft || o.titleRight) extra.labels = { left: o.titleLeft ?? undefined, right: o.titleRight ?? undefined };
       if (o.readOnlyLeft || o.readOnlyRight) extra.readOnly = { left: o.readOnlyLeft, right: o.readOnlyRight };
       if (base) Object.assign(extra, { base, output: output ?? o.mergeOutput ?? "" });
@@ -307,6 +326,9 @@ export default function App() {
       });
     if (!restored.length) return;
     dirtyTabs.current.clear();
+    // araxis:vcs — replaced tabs close too, as far as `--wait` launches are concerned.
+    tabs.forEach((t) => t.waitToken && vcsApi.waitDone(t.waitToken).catch(() => {}));
+    // araxis:vcs end
     setTabs(restored);
     setActive(restored[Math.min(Math.max(0, activeIndex), restored.length - 1)].id);
   };
@@ -379,6 +401,12 @@ export default function App() {
     let unlisten: (() => void) | undefined;
     getCurrentWebview()
       .onDragDropEvent((e) => {
+        // araxis:folder — hovering marks the path field under the cursor; one path dropped on it fills it.
+        const p = e.payload;
+        if (p.type === "enter" || p.type === "over") highlightPathField(p.position);
+        else highlightPathField(null);
+        if (p.type === "drop" && p.paths.length === 1 && dropOnPathField(p.paths[0], p.position)) return;
+        // araxis:folder end
         if (e.payload.type !== "drop") return;
         const [first, second] = e.payload.paths;
         if (second) return openAuto(first, second);
@@ -395,6 +423,10 @@ export default function App() {
   const dropOne = useRef((_path: string) => {});
   dropOne.current = (path: string) => {
     const t = activeTab;
+    // araxis:text-review — a dropped .pcmpz opens as its own tab unless an empty archive tab is waiting for it.
+    if (isReviewArchivePath(path) && !(t?.kind === "review" && !t.left))
+      return void openAuto(path, "").catch((e) => setToast(errorMessage(e)));
+    // araxis:text-review end
     // bc5:editor-patch — one-file sessions take the drop only while empty and unedited.
     if (t && isCompareKind(t.kind) && SESSIONS[t.kind].single) {
       if (!t.left && !dirtyTabs.current.has(t.id)) updateTab(t.id, { left: path });
@@ -605,6 +637,8 @@ export default function App() {
             onOpenCompare={(left, memory) => openTab("text", left, "", { settings: { memory } })}
           />
         );
+      case "review":
+        return <ReviewArchiveView {...two} />; // araxis:text-review
     }
   };
 

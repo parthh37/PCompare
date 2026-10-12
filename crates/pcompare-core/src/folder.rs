@@ -58,6 +58,22 @@ pub enum ContentMethod {
     Version,
 }
 
+/// What a content comparison does with files above
+/// [`FolderCompareOptions::large_file_threshold`] instead of the configured
+/// [`ContentMethod`] — reading a multi-GB pair as text (or even fully for a
+/// CRC) is rarely worth it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum LargeFileMethod {
+    /// Byte-by-byte: exact, stops reading at the first difference.
+    #[default]
+    Binary,
+    /// Equal sizes are the same; nothing is read.
+    Size,
+    /// Equal sizes and timestamps (within tolerance) are the same; nothing is read.
+    SizeTimestamp,
+}
+
 /// DOS file attribute bits, as reported in [`EntryMeta::attributes`].
 pub mod attr {
     pub const READONLY: u32 = 0x1;
@@ -135,6 +151,10 @@ pub struct FolderCompareOptions {
     pub time_tolerance_secs: u64,
     /// Treat timestamps exactly one hour apart as equal (DST shifts on FAT/exFAT).
     pub ignore_dst_shift: bool,
+    /// Pairs where either file is larger than this many bytes skip
+    /// [`Self::content`] and use [`Self::large_file_method`]. `None`: no limit.
+    pub large_file_threshold: Option<u64>,
+    pub large_file_method: LargeFileMethod,
 }
 
 impl Default for FolderCompareOptions {
@@ -155,6 +175,8 @@ impl Default for FolderCompareOptions {
             follow_links: true,
             time_tolerance_secs: 2,
             ignore_dst_shift: false,
+            large_file_threshold: None,
+            large_file_method: LargeFileMethod::Binary,
         }
     }
 }
@@ -676,6 +698,26 @@ fn quick_tests_pass(l: &EntryMeta, r: &EntryMeta, opts: &FolderCompareOptions) -
         && (!opts.compare_timestamp || timestamps_match(l.modified_ms, r.modified_ms, opts))
 }
 
+/// The content method a pair is compared with: [`FolderCompareOptions::content`],
+/// or the large-file fallback when either file exceeds the threshold. `None`
+/// means the fallback is metadata-only (size, or size and timestamp).
+fn content_method_for(
+    l: &EntryMeta,
+    r: &EntryMeta,
+    opts: &FolderCompareOptions,
+) -> Option<ContentMethod> {
+    let large = opts
+        .large_file_threshold
+        .is_some_and(|limit| l.size.max(r.size) > limit);
+    if !large || opts.content == ContentMethod::Off {
+        return Some(opts.content);
+    }
+    match opts.large_file_method {
+        LargeFileMethod::Binary => Some(ContentMethod::Binary),
+        LargeFileMethod::Size | LargeFileMethod::SizeTimestamp => None,
+    }
+}
+
 /// CRC-32 of one side, from the cache when it still describes the file.
 fn cached_crc(ctx: &Ctx, side: Side, path: &str, meta: &EntryMeta) -> Result<u32> {
     if let Some(hit) = ctx.control.cache.and_then(|c| c.get(side, path, meta)) {
@@ -739,7 +781,21 @@ fn compare_file_pair(
         status: EntryStatus::Different,
         crc,
     };
-    match opts.content {
+    let Some(content) = content_method_for(l, r, opts) else {
+        // Too large to read: the configured metadata fallback decides.
+        let same = l.size == r.size
+            && (opts.large_file_method != LargeFileMethod::SizeTimestamp
+                || timestamps_match(l.modified_ms, r.modified_ms, opts));
+        return Ok(ContentVerdict {
+            status: if same {
+                EntryStatus::Same
+            } else {
+                EntryStatus::Different
+            },
+            crc: None,
+        });
+    };
+    match content {
         ContentMethod::Crc if ctx.control.cache.is_some() => {
             let crc = [
                 cached_crc(ctx, Side::Left, lp, l)?,
@@ -766,7 +822,7 @@ fn compare_file_pair(
                 ctx.right,
                 rp,
                 r.size,
-                opts.content,
+                content,
                 &opts.rules,
             ),
         },
@@ -777,7 +833,7 @@ fn compare_file_pair(
             ctx.right,
             rp,
             r.size,
-            opts.content,
+            content,
             &opts.rules,
         ),
     }
@@ -1132,7 +1188,11 @@ fn compare_pair(
                     let as_links = !ctx.opts.follow_links
                         && (l.meta.link_target.is_some() || r.meta.link_target.is_some());
                     if ctx.opts.content != ContentMethod::Off && !as_links {
-                        entry.content_checked = Some(ctx.opts.content);
+                        // What actually ran: large files may have used the fallback.
+                        entry.content_checked = Some(
+                            content_method_for(&l.meta, &r.meta, ctx.opts)
+                                .unwrap_or(ContentMethod::Off),
+                        );
                     }
                     if ctx.opts.compare_attributes
                         && entry.status != EntryStatus::Different
@@ -1882,5 +1942,92 @@ mod feature_tests {
         let err =
             compare_folders_controlled(&LocalFs, &ls, &LocalFs, &rs, &opts(), control).unwrap_err();
         assert_eq!(err.to_string(), CANCELLED);
+    }
+
+    #[test]
+    fn large_files_fall_back_from_rules_based() {
+        let p = pair();
+        // Same size, differing only in case: rules-based (ignoring case) calls these similar.
+        write(&p.l, "small.txt", b"Alpha\nBeta\n");
+        write(&p.r, "small.txt", b"alpha\nbeta\n");
+        write(&p.l, "big.txt", &b"Line\n".repeat(400));
+        write(&p.r, "big.txt", &b"line\n".repeat(400));
+        // Sizes differ: every fallback calls these different.
+        write(&p.l, "grown.txt", &b"x\n".repeat(600));
+        write(&p.r, "grown.txt", &b"x\n".repeat(700));
+        let old = std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1_000_000_000);
+        fs::File::options()
+            .write(true)
+            .open(p.l.join("big.txt"))
+            .unwrap()
+            .set_modified(old)
+            .unwrap();
+        let rules = FolderCompareOptions {
+            content: ContentMethod::Rules,
+            rules: TextDiffOptions {
+                ignore_case: true,
+                ..Default::default()
+            },
+            large_file_threshold: Some(1024),
+            ..opts()
+        };
+        let checked =
+            |res: &FolderCompareResult, rel: &str| find(&res.entries, rel).unwrap().content_checked;
+
+        // Byte-by-byte for the big pair; the small one is still rules-based.
+        let res = run(&p, &rules);
+        assert_eq!(status(&res, "small.txt"), EntryStatus::Similar);
+        assert_eq!(checked(&res, "small.txt"), Some(ContentMethod::Rules));
+        assert_eq!(status(&res, "big.txt"), EntryStatus::Different);
+        assert_eq!(checked(&res, "big.txt"), Some(ContentMethod::Binary));
+        assert_eq!(status(&res, "grown.txt"), EntryStatus::Different);
+
+        // Size only: equal sizes are the same without reading anything.
+        let res = run(
+            &p,
+            &FolderCompareOptions {
+                large_file_method: LargeFileMethod::Size,
+                ..rules.clone()
+            },
+        );
+        assert_eq!(status(&res, "big.txt"), EntryStatus::Same);
+        assert_eq!(checked(&res, "big.txt"), Some(ContentMethod::Off));
+        assert_eq!(status(&res, "grown.txt"), EntryStatus::Different);
+        assert_eq!(status(&res, "small.txt"), EntryStatus::Similar);
+
+        // Size and timestamp: the left big file is decades older.
+        let res = run(
+            &p,
+            &FolderCompareOptions {
+                large_file_method: LargeFileMethod::SizeTimestamp,
+                ..rules.clone()
+            },
+        );
+        assert_eq!(status(&res, "big.txt"), EntryStatus::Different);
+        assert_eq!(status(&res, "small.txt"), EntryStatus::Similar);
+
+        // No threshold: everything is rules-based.
+        let res = run(
+            &p,
+            &FolderCompareOptions {
+                large_file_threshold: None,
+                ..rules
+            },
+        );
+        assert_eq!(status(&res, "big.txt"), EntryStatus::Similar);
+    }
+
+    #[test]
+    fn options_saved_before_the_large_file_fallback_still_load() {
+        let o: FolderCompareOptions = serde_json::from_str(r#"{"content":"rules"}"#).unwrap();
+        assert_eq!(o.large_file_threshold, None);
+        assert_eq!(o.large_file_method, LargeFileMethod::Binary);
+        let o: FolderCompareOptions =
+            serde_json::from_str(r#"{"largeFileThreshold":10,"largeFileMethod":"sizeTimestamp"}"#)
+                .unwrap();
+        assert_eq!(
+            (o.large_file_threshold, o.large_file_method),
+            (Some(10), LargeFileMethod::SizeTimestamp)
+        );
     }
 }

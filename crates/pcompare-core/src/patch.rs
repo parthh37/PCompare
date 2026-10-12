@@ -819,6 +819,12 @@ pub struct HunkOutcome {
     pub fuzz: usize,
     /// A failed hunk whose new text is already there: the patch looks applied.
     pub already_applied: bool,
+    /// Left out on purpose (not among the selected hunks); `applied` is false.
+    #[serde(default)]
+    pub skipped: bool,
+    /// Why a hunk failed, in words.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
 }
 
 /// The result of applying a file's hunks.
@@ -862,13 +868,37 @@ fn find_block(lines: &[&str], pattern: &[&str], from: usize, expected: usize) ->
 /// Applies `hunks` to a file's lines. Hunks that don't fit are skipped and
 /// reported; the rest still apply, in order and without overlapping.
 pub fn apply_hunks(original: &[&str], trailing_newline: bool, hunks: &[PatchHunk]) -> Applied {
+    apply_selected_hunks(original, trailing_newline, hunks, None)
+}
+
+/// [`apply_hunks`] restricted to the hunk indices in `selected` (`None` =
+/// all). Hunks are located in the original's own line numbers, so leaving
+/// one out never shifts where the later ones are looked for.
+pub fn apply_selected_hunks(
+    original: &[&str],
+    trailing_newline: bool,
+    hunks: &[PatchHunk],
+    selected: Option<&[usize]>,
+) -> Applied {
     let mut out: Vec<String> = Vec::with_capacity(original.len());
     let mut outcomes = Vec::with_capacity(hunks.len());
     let mut pos = 0;
     // Like `patch`, a hunk found away from its stated line shifts the guesses for the next ones.
     let mut drift: isize = 0;
     let mut trailing = trailing_newline;
-    for h in hunks {
+    for (index, h) in hunks.iter().enumerate() {
+        if selected.is_some_and(|sel| !sel.contains(&index)) {
+            outcomes.push(HunkOutcome {
+                applied: false,
+                line: h.old_start.max(1),
+                offset: 0,
+                fuzz: 0,
+                already_applied: false,
+                skipped: true,
+                reason: None,
+            });
+            continue;
+        }
         let old: Vec<&str> = h
             .lines
             .iter()
@@ -924,12 +954,26 @@ pub fn apply_hunks(original: &[&str], trailing_newline: bool, hunks: &[PatchHunk
                     let part = &new[fuzz.min(lead)..new.len() - fuzz.min(trail)];
                     !part.is_empty() && find_block(original, part, 0, guess).is_some()
                 });
+            let reason = if already {
+                "its new lines are already in the file".to_owned()
+            } else if old.is_empty() {
+                format!("line {} is past the end of the file", guess + 1)
+            } else if pos > 0 && find_block(original, &old, 0, guess).is_some() {
+                "its lines overlap an earlier hunk".to_owned()
+            } else {
+                format!(
+                    "the lines it changes were not found near line {} (even ignoring {MAX_FUZZ} context lines)",
+                    guess + 1
+                )
+            };
             outcomes.push(HunkOutcome {
                 applied: false,
                 line: guess + 1,
                 offset: 0,
                 fuzz: 0,
                 already_applied: already,
+                skipped: false,
+                reason: Some(reason),
             });
             continue;
         };
@@ -963,6 +1007,8 @@ pub fn apply_hunks(original: &[&str], trailing_newline: bool, hunks: &[PatchHunk
             offset,
             fuzz,
             already_applied: false,
+            skipped: false,
+            reason: None,
         });
     }
     out.extend(original[pos..].iter().map(|s| (*s).to_owned()));
@@ -1017,6 +1063,22 @@ pub fn detect_strip(patch: &Patch, base: &Path) -> usize {
     best.1
 }
 
+/// What writing a file's patched text did on disk.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum WriteAction {
+    /// The original was rewritten in place.
+    Modified,
+    /// A new file was created.
+    Created,
+    /// The patch deleted the file and every hunk applied.
+    Deleted,
+    /// The patched text went to the new name and the old file was removed.
+    Renamed,
+    /// The patched text went to a new file next to the untouched original.
+    Copied,
+}
+
 /// One file of a patch applied against a folder.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -1033,17 +1095,31 @@ pub struct FileApply {
     /// The patched text, joined with the original's line endings.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub text: Option<String>,
+    /// What [`write_to_folder`] did; `None` when nothing was written.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub written: Option<WriteAction>,
 }
 
-/// Applies file `index` of `patch` to the files under `base`, read in their
-/// detected encodings. `with_text` includes the patched text.
-pub fn apply_to_folder(
+/// A file's patched text, ready to be written.
+struct Patched {
+    old: Option<PathBuf>,
+    new: Option<PathBuf>,
+    text: String,
+    format: textfile::TextFormat,
+    /// The patched file has no lines left.
+    empty: bool,
+}
+
+/// Applies file `index` of `patch` (only the `selected` hunks, `None` = all)
+/// to its original under `base`. `Patched` is `None` when the file can't be
+/// patched at all; the reason is in `FileApply::error`.
+fn apply_file(
     patch: &Patch,
     base: &Path,
     strip: usize,
     index: usize,
-    with_text: bool,
-) -> Result<FileApply> {
+    selected: Option<&[usize]>,
+) -> Result<(FileApply, Option<Patched>)> {
     let f = patch
         .files
         .get(index)
@@ -1061,41 +1137,147 @@ pub fn apply_to_folder(
         hunks: Vec::new(),
         error: None,
         text: None,
+        written: None,
     };
     if f.binary {
         result.error = Some("binary changes can't be applied here".into());
-        return Ok(result);
+        return Ok((result, None));
     }
-    let (text, eol) = match &old {
+    let (text, format) = match &old {
         Some(path) if path.is_file() => {
             result.original = Some(path.display().to_string());
             let loaded = textfile::load_text(path)?;
-            let eol = textfile::save_line_ending(&loaded.text);
-            (loaded.text, eol)
+            let format = loaded.format();
+            (loaded.text, format)
         }
         Some(path) => {
             result.missing = true;
             result.error = Some(format!("{} not found", path.display()));
-            return Ok(result);
+            return Ok((result, None));
         }
-        None => (String::new(), LineEnding::Lf),
+        None => (
+            String::new(),
+            textfile::TextFormat {
+                encoding: "UTF-8".into(),
+                has_bom: false,
+                line_ending: LineEnding::Lf,
+            },
+        ),
     };
     let (lines, eols) = textfile::split_lines_with_endings(&text);
     let trailing = eols.last().is_some_and(|e| *e != LineEnding::None);
-    let applied = apply_hunks(&lines, trailing, &f.hunks);
-    if with_text {
-        let sep = match eol {
-            LineEnding::Crlf => "\r\n",
-            LineEnding::Cr => "\r",
-            _ => "\n",
-        };
-        let mut joined = applied.lines.join(sep);
-        if applied.trailing_newline {
-            joined.push_str(sep);
-        }
-        result.text = Some(joined);
+    let applied = apply_selected_hunks(&lines, trailing, &f.hunks, selected);
+    let sep = match format.line_ending {
+        LineEnding::Crlf => "\r\n",
+        LineEnding::Cr => "\r",
+        _ => "\n",
+    };
+    let mut joined = applied.lines.join(sep);
+    if applied.trailing_newline {
+        joined.push_str(sep);
     }
     result.hunks = applied.hunks;
+    let patched = Patched {
+        old,
+        new,
+        text: joined,
+        format,
+        empty: applied.lines.is_empty(),
+    };
+    Ok((result, Some(patched)))
+}
+
+/// Applies file `index` of `patch` to the files under `base`, read in their
+/// detected encodings, using only the `selected` hunks (`None` = all).
+/// `with_text` includes the patched text. Nothing is written.
+pub fn apply_to_folder(
+    patch: &Patch,
+    base: &Path,
+    strip: usize,
+    index: usize,
+    selected: Option<&[usize]>,
+    with_text: bool,
+) -> Result<FileApply> {
+    let (mut result, patched) = apply_file(patch, base, strip, index, selected)?;
+    if with_text {
+        result.text = patched.map(|p| p.text);
+    }
+    Ok(result)
+}
+
+/// Writes `text` to a file that must not exist yet, creating its folder.
+fn create_file(path: &Path, text: &str, format: &textfile::TextFormat) -> Result<()> {
+    if path.exists() {
+        return Err(CoreError::Other(format!(
+            "{} already exists",
+            path.display()
+        )));
+    }
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir).map_err(|e| CoreError::io(dir, e))?;
+    }
+    textfile::save_text(path, text, format)?;
+    Ok(())
+}
+
+/// Applies the `selected` hunks (`None` = all) of file `index` to the real
+/// file under `base` and writes the result: the original rewritten in its
+/// own encoding and line endings, a new file created, or a renamed/deleted
+/// file's old version handed to `remove` (the app moves it to the Trash).
+/// A file deletion only happens when every hunk was selected and applied.
+/// Nothing is written when no selected hunk applies.
+pub fn write_to_folder(
+    patch: &Patch,
+    base: &Path,
+    strip: usize,
+    index: usize,
+    selected: Option<&[usize]>,
+    remove: &dyn Fn(&Path) -> std::io::Result<()>,
+) -> Result<FileApply> {
+    let f = &patch
+        .files
+        .get(index)
+        .ok_or_else(|| CoreError::Other(format!("the patch has no file #{}", index + 1)))?;
+    let (mut result, patched) = apply_file(patch, base, strip, index, selected)?;
+    let Some(p) = patched else { return Ok(result) };
+    let applied = result.hunks.iter().filter(|h| h.applied).count();
+    let complete = applied == result.hunks.len();
+    // A rename or copy without content changes still moves the file.
+    let moves = matches!(f.change, ChangeKind::Renamed | ChangeKind::Copied) && f.hunks.is_empty();
+    if applied == 0 && !moves {
+        return Ok(result);
+    }
+    let removed = |path: &Path| remove(path).map_err(|e| CoreError::io(path, e));
+    let action = match (&p.old, &p.new) {
+        (Some(old), None) if complete && p.empty => {
+            removed(old)?;
+            WriteAction::Deleted
+        }
+        // A partial deletion keeps the file with the selected hunks applied.
+        (Some(old), None) => {
+            textfile::save_text(old, &p.text, &p.format)?;
+            WriteAction::Modified
+        }
+        (None, Some(new)) => {
+            create_file(new, &p.text, &p.format)?;
+            WriteAction::Created
+        }
+        (Some(old), Some(new)) if old == new => {
+            textfile::save_text(old, &p.text, &p.format)?;
+            WriteAction::Modified
+        }
+        (Some(old), Some(new)) => {
+            create_file(new, &p.text, &p.format)?;
+            if f.change == ChangeKind::Copied {
+                WriteAction::Copied
+            } else {
+                removed(old)?;
+                WriteAction::Renamed
+            }
+        }
+        (None, None) => return Ok(result),
+    };
+    result.written = Some(action);
     Ok(result)
 }
 
@@ -1409,7 +1591,7 @@ new mode 100755
         let p = parse_patch(GIT).unwrap();
         assert_eq!(detect_strip(&p, dir.path()), 1);
 
-        let r = apply_to_folder(&p, dir.path(), 1, 0, true).unwrap();
+        let r = apply_to_folder(&p, dir.path(), 1, 0, None, true).unwrap();
         assert_eq!(r.hunks.iter().filter(|h| h.applied).count(), 2);
         let text = r.text.unwrap();
         assert!(
@@ -1418,19 +1600,19 @@ new mode 100755
         );
         assert!(text.ends_with("c\r\nd\r\n"));
 
-        let r = apply_to_folder(&p, dir.path(), 1, 1, true).unwrap();
+        let r = apply_to_folder(&p, dir.path(), 1, 1, None, true).unwrap();
         assert!(r.original.unwrap().ends_with("old name.txt"));
         assert!(r.target.unwrap().ends_with("new name.txt"));
         assert_eq!(r.text.as_deref(), Some("hello world\n"));
 
-        let r = apply_to_folder(&p, dir.path(), 1, 2, true).unwrap();
+        let r = apply_to_folder(&p, dir.path(), 1, 2, None, true).unwrap();
         assert_eq!((r.original, r.text.as_deref()), (None, Some("one\ntwo")));
 
-        let r = apply_to_folder(&p, dir.path(), 1, 3, false).unwrap();
+        let r = apply_to_folder(&p, dir.path(), 1, 3, None, false).unwrap();
         assert!(r.missing);
         assert!(r.error.is_some());
         assert!(
-            apply_to_folder(&p, dir.path(), 1, 4, false)
+            apply_to_folder(&p, dir.path(), 1, 4, None, false)
                 .unwrap()
                 .error
                 .is_some(),
@@ -1438,6 +1620,130 @@ new mode 100755
         );
 
         let evil = parse_patch("--- a/../x\n+++ b/../x\n@@ -1 +1 @@\n-a\n+b\n").unwrap();
-        assert!(apply_to_folder(&evil, dir.path(), 1, 0, true).is_err());
+        assert!(apply_to_folder(&evil, dir.path(), 1, 0, None, true).is_err());
+    }
+
+    #[test]
+    fn applies_only_selected_hunks() {
+        // Hunk 0 inserts two lines at the top; hunk 1 changes "e"; hunk 2 appends "h".
+        let h = hunks(
+            "--- a\n+++ b\n@@ -1,2 +1,4 @@\n+x\n+y\n a\n b\n@@ -4,3 +6,3 @@\n d\n-e\n+E\n f\n@@ -6,2 +8,3 @@\n f\n g\n+h\n",
+        );
+        let original = ["a", "b", "c", "d", "e", "f", "g"];
+        let all = apply_hunks(&original, true, &h);
+        assert_eq!(
+            all.lines,
+            ["x", "y", "a", "b", "c", "d", "E", "f", "g", "h"]
+        );
+
+        // Skipping the insertion leaves the later hunks at their own lines: no offset.
+        let r = apply_selected_hunks(&original, true, &h, Some(&[1, 2]));
+        assert_eq!(r.lines, ["a", "b", "c", "d", "E", "f", "g", "h"]);
+        assert!(r.hunks[0].skipped && !r.hunks[0].applied);
+        assert!(r.hunks[0].reason.is_none());
+        assert_eq!((r.hunks[1].line, r.hunks[1].offset), (4, 0));
+        assert_eq!((r.hunks[2].line, r.hunks[2].offset), (6, 0));
+        assert_eq!(r.failed(), 1, "the skipped hunk counts as not applied");
+
+        // Only the middle hunk.
+        let r = apply_selected_hunks(&original, true, &h, Some(&[1]));
+        assert_eq!(r.lines, ["a", "b", "c", "d", "E", "f", "g"]);
+        assert!(r.trailing_newline);
+        assert!(r.hunks[2].skipped);
+
+        // Nothing selected: the file is unchanged.
+        let r = apply_selected_hunks(&original, true, &h, Some(&[]));
+        assert_eq!(r.lines, original);
+        assert!(r.hunks.iter().all(|o| o.skipped));
+    }
+
+    #[test]
+    fn skipped_hunks_keep_offsets_of_shifted_files() {
+        let h =
+            hunks("--- a\n+++ b\n@@ -2,3 +2,3 @@\n b\n-c\n+C\n d\n@@ -6,2 +6,3 @@\n f\n g\n+h\n");
+        // Two lines were added at the top of the real file: hunk 1 is found 2 lines down
+        // even when hunk 0 (which would have set the drift) is left out.
+        let shifted = ["x", "y", "a", "b", "c", "d", "e", "f", "g"];
+        let r = apply_selected_hunks(&shifted, true, &h, Some(&[1]));
+        assert_eq!(r.lines, ["x", "y", "a", "b", "c", "d", "e", "f", "g", "h"]);
+        assert_eq!((r.hunks[1].line, r.hunks[1].offset), (8, 2));
+    }
+
+    #[test]
+    fn explains_failed_hunks() {
+        let h = hunks(
+            "--- a\n+++ b\n@@ -1,3 +1,3 @@\n a\n-b\n+B\n c\n@@ -8,3 +8,3 @@\n x\n-y\n+Y\n z\n",
+        );
+        let r = apply_hunks(&["a", "B", "c"], true, &h);
+        assert!(r.hunks[0].already_applied);
+        assert!(r.hunks[0].reason.as_deref().unwrap().contains("already"));
+        assert!(r.hunks[1].reason.as_deref().unwrap().contains("not found"));
+    }
+
+    #[test]
+    fn writes_selected_hunks_to_a_folder() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        let main = "#include <stdio.h>\r\nint x = 1;\r\nint y;\r\nint z;\r\n5\r\n6\r\n7\r\n8\r\n9\r\na\r\nb\r\nc\r\n";
+        std::fs::write(root.join("src/main.c"), main).unwrap();
+        std::fs::write(root.join("old name.txt"), "hello\n").unwrap();
+        std::fs::write(root.join("gone.txt"), "bye\n").unwrap();
+        let p = parse_patch(GIT).unwrap();
+        let removed = std::cell::RefCell::new(Vec::new());
+        let remove = |path: &Path| {
+            removed.borrow_mut().push(path.to_path_buf());
+            std::fs::remove_file(path)
+        };
+
+        // Only the second hunk of main.c: x stays 1, d is appended, CRLF kept.
+        let r = write_to_folder(&p, root, 1, 0, Some(&[1]), &remove).unwrap();
+        assert_eq!(r.written, Some(WriteAction::Modified));
+        assert!(r.hunks[0].skipped && r.hunks[1].applied);
+        let text = std::fs::read_to_string(root.join("src/main.c")).unwrap();
+        assert!(
+            text.starts_with("#include <stdio.h>\r\nint x = 1;\r\n"),
+            "{text:?}"
+        );
+        assert!(text.ends_with("c\r\nd\r\n"), "{text:?}");
+
+        // Now the first one too.
+        let r = write_to_folder(&p, root, 1, 0, Some(&[0]), &remove).unwrap();
+        assert_eq!(r.written, Some(WriteAction::Modified));
+        assert!(r.hunks[0].applied && r.hunks[1].skipped);
+        let text = std::fs::read_to_string(root.join("src/main.c")).unwrap();
+        assert!(text.contains("int x = 2;\r\n"));
+        assert_eq!(text.matches("d\r\n").count(), 1);
+
+        // Nothing selected: nothing written.
+        let r = write_to_folder(&p, root, 1, 0, Some(&[]), &remove).unwrap();
+        assert_eq!(r.written, None);
+
+        // Rename with changes: new name created, old one handed to `remove`.
+        let r = write_to_folder(&p, root, 1, 1, None, &remove).unwrap();
+        assert_eq!(r.written, Some(WriteAction::Renamed));
+        assert_eq!(
+            std::fs::read_to_string(root.join("new name.txt")).unwrap(),
+            "hello world\n"
+        );
+        assert!(!root.join("old name.txt").exists());
+
+        // New file, then again: it already exists.
+        let r = write_to_folder(&p, root, 1, 2, None, &remove).unwrap();
+        assert_eq!(r.written, Some(WriteAction::Created));
+        assert_eq!(
+            std::fs::read_to_string(root.join("added.txt")).unwrap(),
+            "one\ntwo"
+        );
+        assert!(write_to_folder(&p, root, 1, 2, None, &remove).is_err());
+
+        // Deleting a file goes through `remove`, and only when its hunk is selected.
+        let r = write_to_folder(&p, root, 1, 3, Some(&[]), &remove).unwrap();
+        assert_eq!(r.written, None);
+        assert!(root.join("gone.txt").exists());
+        let r = write_to_folder(&p, root, 1, 3, None, &remove).unwrap();
+        assert_eq!(r.written, Some(WriteAction::Deleted));
+        assert!(!root.join("gone.txt").exists());
+        assert_eq!(removed.borrow().len(), 2);
     }
 }

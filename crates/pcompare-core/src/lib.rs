@@ -11,6 +11,9 @@ pub mod hex;
 pub mod hex_align; // bc5:hex
 pub mod hex_edit; // bc5:hex
 pub mod hex_find; // bc5:hex
+                  // araxis:text-engine
+pub mod numeric;
+// araxis:text-engine end
 pub mod patch; // bc5:editor-patch
 pub mod secrets;
 pub mod session;

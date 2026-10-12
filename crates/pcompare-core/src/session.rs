@@ -27,6 +27,7 @@ pub const SESSION_KINDS: &[&str] = &[
     // bc5:editor-patch — Text Edit (one file) and Patch Viewer
     "edit",
     "patch",
+    "review", // araxis:text-review — a comparison archive (.pcmpz), opened read-only
 ];
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -111,7 +112,8 @@ impl SessionStore {
     pub fn list(&self) -> Result<Vec<SavedSession>> {
         let _g = self.guard();
         let mut file: SessionFile = read_json(&self.path)?;
-        file.sessions.sort_by_key(|s| std::cmp::Reverse(s.modified_ms));
+        file.sessions
+            .sort_by_key(|s| std::cmp::Reverse(s.modified_ms));
         Ok(file.sessions)
     }
 
@@ -121,7 +123,10 @@ impl SessionStore {
             return Err(CoreError::Other("session name cannot be empty".into()));
         }
         if !SESSION_KINDS.contains(&input.kind.as_str()) {
-            return Err(CoreError::Other(format!("unknown session kind `{}`", input.kind)));
+            return Err(CoreError::Other(format!(
+                "unknown session kind `{}`",
+                input.kind
+            )));
         }
         let _g = self.guard();
         let mut file: SessionFile = read_json(&self.path)?;
@@ -200,7 +205,10 @@ impl SessionStore {
     /// rather than resurrecting it.
     pub fn autosave(&self, id: &str, input: SessionInput) -> Result<Option<SavedSession>> {
         if !SESSION_KINDS.contains(&input.kind.as_str()) {
-            return Err(CoreError::Other(format!("unknown session kind `{}`", input.kind)));
+            return Err(CoreError::Other(format!(
+                "unknown session kind `{}`",
+                input.kind
+            )));
         }
         let _g = self.guard();
         let mut file: SessionFile = read_json(&self.path)?;
@@ -280,7 +288,10 @@ mod tests {
         let mut same = input("Nightly");
         same.id = Some(a.id.clone());
         assert_eq!(store.save(same).unwrap().name, "Nightly");
-        assert_eq!(store.rename(&a.id, "Nightly (2)").unwrap().name, "Nightly (2) (2)");
+        assert_eq!(
+            store.rename(&a.id, "Nightly (2)").unwrap().name,
+            "Nightly (2) (2)"
+        );
     }
 
     // bc5:app-shell

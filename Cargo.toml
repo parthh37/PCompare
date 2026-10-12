@@ -14,6 +14,7 @@ members = [
     "crates/pcompare-report", # bc5:reports-script
     "crates/pcompare-script", # bc5:reports-script
     "crates/pcompare-archive", # bc5:archives
+    "crates/pcompare-review", # araxis:text-review
     "src-tauri",
 ]
 

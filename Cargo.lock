@@ -4930,6 +4930,7 @@ dependencies = [
  "pcompare-picture",
  "pcompare-remote",
  "pcompare-report",
+ "pcompare-review",
  "pcompare-script",
  "pcompare-sync",
  "pcompare-table",
@@ -5099,8 +5100,20 @@ dependencies = [
  "chrono",
  "pcompare-core",
  "pcompare-table",
+ "quick-xml 0.42.0",
  "serde",
  "tempfile",
+]
+
+[[package]]
+name = "pcompare-review"
+version = "0.2.0"
+dependencies = [
+ "pcompare-core",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "zip 8.6.0",
 ]
 
 [[package]]

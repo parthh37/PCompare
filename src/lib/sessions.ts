@@ -19,6 +19,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { FileDiff, FilePen } from "lucide-react"; // bc5:editor-patch
+import { Package } from "lucide-react"; // araxis:text-review
 import { isArchivePath } from "./archiveApi"; // bc5:archives
 
 export type CompareKind =
@@ -36,7 +37,8 @@ export type CompareKind =
   | "database"
   // bc5:editor-patch
   | "edit"
-  | "patch";
+  | "patch"
+  | "review"; // araxis:text-review — a comparison archive (.pcmpz), read-only
 
 export type SessionKind = "home" | "profiles" | CompareKind;
 
@@ -156,6 +158,15 @@ export const SESSIONS: Record<SessionKind, SessionInfo> = {
     description: "View a .patch or .diff side by side, and apply it to a folder to compare the result.",
     single: true,
   },
+  // araxis:text-review — opened from Home ("Open comparison archive…"), a dropped .pcmpz or the command line.
+  review: {
+    label: "Comparison Archive",
+    icon: Package,
+    color: "#facc15",
+    description: "Review a saved comparison (.pcmpz) read-only, with its bookmarks and comments.",
+    single: true,
+  },
+  // araxis:text-review end
 };
 
 /** Order of the "new session" cards on Home. */
@@ -180,7 +191,9 @@ export const isCompareKind = (k: SessionKind): k is CompareKind => k !== "home" 
 
 /** Lower-cased extension without the dot ("" when there is none). */
 export function extension(path: string): string {
-  const name = path.replace(/[\\/]+$/, "").split(/[\\/]/).pop() ?? "";
+  let name = path.replace(/[\\/]+$/, "").split(/[\\/]/).pop() ?? "";
+  // araxis:vcs — `git:/x/a.png@HEAD~1`: the revision isn't part of the name.
+  if (/^(git|hg|svn):/i.test(path)) name = name.replace(/@[^@]*$/, "");
   const dot = name.lastIndexOf(".");
   return dot > 0 ? name.slice(dot + 1).toLowerCase() : "";
 }

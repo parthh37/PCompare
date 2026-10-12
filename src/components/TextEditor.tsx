@@ -52,6 +52,10 @@ import { loadBackups, textApi, type TextDocument } from "../lib/textApi";
 import {
   columnOf,
   indexAtColumn,
+  // araxis:text-view — shared block indent helpers
+  indentRange,
+  indentUnitOf,
+  // araxis:text-view end
   insertAt,
   joinWithNext,
   joinWithPrevious,
@@ -60,6 +64,7 @@ import {
   splitText,
   type EditResult,
 } from "../lib/textEdit";
+import { isComposing } from "../lib/ime"; // araxis:text-view araxis:text-view end
 import { composeRuns, displayWidth, visualLines, wrapRuns, type Run, type StyledRange } from "../lib/textRuns";
 import { FindBar } from "./FindBar";
 import { PathField } from "./PathField";
@@ -171,25 +176,6 @@ function fromLoaded(d: TextDocument): Doc {
     saved: lines,
     savedFormat: d.format,
   };
-}
-
-/** Indentation the file already uses: tabs, else spaces (tabs for a file with none). */
-function indentUnitOf(lines: string[]): string {
-  let spaces = false;
-  for (let i = 0; i < lines.length && i < 5000; i++) {
-    const c = lines[i][0];
-    if (c === "\t") return "\t";
-    if (c === " " && lines[i].startsWith("  ")) spaces = true;
-  }
-  return spaces ? " ".repeat(TAB_SIZE) : "\t";
-}
-
-/** Removes one level of indentation (a tab or up to a tab's worth of spaces). */
-function outdent(line: string): string {
-  if (line.startsWith("\t")) return line.slice(1);
-  let n = 0;
-  while (n < TAB_SIZE && line[n] === " ") n++;
-  return line.slice(n);
 }
 
 const shiftMarks = (marks: number[], start: number, removed: number, inserted: number) =>
@@ -489,13 +475,7 @@ export function TextEditor({ left: path, onPathsChange, settings, onSettingsChan
   /** Tab / Shift+Tab over the selected lines (or the caret line). */
   const indentLines = (dir: 1 | -1) => {
     const [a, b] = pickRange();
-    const unit = indentUnitOf(lines);
-    const next = lines.slice();
-    for (let i = a; i <= b; i++) {
-      if (dir > 0) {
-        if (next[i] || a === b) next[i] = unit + next[i];
-      } else next[i] = outdent(next[i]);
-    }
+    const next = indentRange(lines, a, b, dir, indentUnitOf(lines, TAB_SIZE), TAB_SIZE); // araxis:text-view araxis:text-view end
     const shift = next[caret.line].length - lines[caret.line].length;
     commit(next, { line: caret.line, col: Math.max(0, caret.col + shift) });
   };
@@ -806,6 +786,7 @@ export function TextEditor({ left: path, onPathsChange, settings, onSettingsChan
   };
 
   const onEditorKey = (e: ReactKeyboardEvent<HTMLTextAreaElement>) => {
+    if (isComposing(e)) return; // araxis:text-view — Enter/Tab/arrows pick IME candidates araxis:text-view end
     const ta = e.currentTarget;
     const { selectionStart: s, selectionEnd: end, value } = ta;
     const line = caret.line;
@@ -814,7 +795,7 @@ export function TextEditor({ left: path, onPathsChange, settings, onSettingsChan
     const key = e.key.toLowerCase();
     if (selRange && plain && (e.key === "Backspace" || e.key === "Delete")) deleteLines(selRange);
     else if (plain && e.key === "Tab" && (selRange || e.shiftKey)) indentLines(e.shiftKey ? -1 : 1);
-    else if (plain && !e.shiftKey && e.key === "Tab") apply(insertAt(lines, line, s, end, indentUnitOf(lines)));
+    else if (plain && !e.shiftKey && e.key === "Tab") apply(insertAt(lines, line, s, end, indentUnitOf(lines, TAB_SIZE)));
     else if (plain && e.key === "Enter") {
       // Keep the line's indentation on the new line.
       const indent = /^[\t ]*/.exec(value.slice(0, s))?.[0] ?? "";
@@ -903,6 +884,7 @@ export function TextEditor({ left: path, onPathsChange, settings, onSettingsChan
     const onKey = (e: KeyboardEvent) => {
       // Inactive tabs stay mounted but hidden; only the visible session reacts.
       if (e.defaultPrevented || !root.current?.offsetParent) return;
+      if (isComposing(e)) return; // araxis:text-view araxis:text-view end
       const t = e.target as HTMLElement | null;
       const inEditor = !!t && t === editorEl.current;
       const inField = !!t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.tagName === "SELECT");
@@ -1164,6 +1146,7 @@ export function TextEditor({ left: path, onPathsChange, settings, onSettingsChan
               onChange={(e) => setGotoText(e.target.value)}
               onFocus={(e) => e.currentTarget.select()}
               onKeyDown={(e) => {
+                if (isComposing(e)) return; // araxis:text-view araxis:text-view end
                 if (e.key === "Enter") gotoLine();
                 else if (e.key === "Escape") setGotoOpen(false);
                 else return;

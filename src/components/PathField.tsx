@@ -1,9 +1,12 @@
 import { open, save, type DialogFilter } from "@tauri-apps/plugin-dialog";
 import { FileArchive, FolderOpen, Globe } from "lucide-react";
 import { CONTAINER_FILTERS } from "../lib/archiveApi"; // bc5:archives
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { PATH_DROP_EVENT } from "../lib/pathDrop"; // araxis:folder
 import { useShell } from "../lib/shell";
 import { RemoteBrowser } from "./RemoteBrowser";
+import { GitBranch } from "lucide-react"; // araxis:vcs
+import { VcsRevisionDialog } from "./VcsRevisionDialog"; // araxis:vcs
 
 interface Props {
   value: string;
@@ -39,6 +42,20 @@ export function PathField({
 }: Props) {
   const shell = useShell();
   const [remote, setRemote] = useState(false);
+  const [revision, setRevision] = useState(false); // araxis:vcs
+
+  // araxis:folder — a file or folder dropped onto this field fills it (see pathDrop.ts).
+  const box = useRef<HTMLDivElement>(null);
+  const pick = useRef(onPick);
+  pick.current = onPick;
+  useEffect(() => {
+    const el = box.current;
+    if (!el) return;
+    const onDrop = (e: Event) => pick.current((e as CustomEvent<string>).detail);
+    el.addEventListener(PATH_DROP_EVENT, onDrop);
+    return () => el.removeEventListener(PATH_DROP_EVENT, onDrop);
+  }, []);
+  // araxis:folder end
 
   const browse = async () => {
     const picked = saveDialog && !directory
@@ -48,7 +65,7 @@ export function PathField({
   };
 
   return (
-    <div className="pathfield">
+    <div className="pathfield" ref={box /* araxis:folder */}>
       {label && <span className="pathfield-label">{label}</span>}
       <input
         value={value}
@@ -73,6 +90,24 @@ export function PathField({
           <FileArchive size={15} />
         </button>
       )}
+      {/* araxis:vcs — a git/hg revision of a working-tree file or folder */}
+      {!saveDialog && (
+        <button className="icon-btn" title="Compare a Git or Mercurial revision (git:/hg: path)" onClick={() => setRevision(true)}>
+          <GitBranch size={15} />
+        </button>
+      )}
+      {revision && (
+        <VcsRevisionDialog
+          initial={value}
+          directory={directory}
+          onClose={() => setRevision(false)}
+          onPick={(p) => {
+            onPick(p);
+            setRevision(false);
+          }}
+        />
+      )}
+      {/* araxis:vcs end */}
       {!localOnly && (
         <button className="icon-btn" title="Browse remote (S3, SFTP, OneDrive…)" onClick={() => setRemote(true)}>
           <Globe size={15} />

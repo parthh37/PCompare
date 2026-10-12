@@ -1,0 +1,195 @@
+/* araxis:text-review — Bookmarks & comments panel, comment marks, statistics, comparison archives. */
+
+.rv-panel {
+  position: absolute;
+  top: 8px;
+  right: 18px;
+  z-index: 6;
+  width: min(340px, 45%);
+  max-height: calc(100% - 16px);
+  display: flex;
+  flex-direction: column;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  box-shadow: 0 8px 24px var(--shadow);
+}
+.rv-panel-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--border);
+  font-weight: 600;
+}
+.rv-panel-head .muted {
+  font-weight: normal;
+}
+.rv-panel-head .spacer {
+  flex: 1;
+}
+.rv-mini {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 0 6px;
+  height: 18px;
+  font-size: 11px;
+  color: var(--muted);
+}
+.rv-empty {
+  margin: 0;
+  padding: 12px;
+  line-height: 1.5;
+}
+.rv-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  overflow: auto;
+}
+.rv-list li {
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--hairline);
+}
+.rv-list li.stale .rv-jump {
+  opacity: 0.6;
+}
+.rv-item-head {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.rv-jump {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  gap: 6px;
+  align-items: baseline;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+}
+.rv-jump:hover b {
+  color: var(--accent);
+}
+.rv-jump b {
+  white-space: nowrap;
+}
+.rv-detail {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 11px;
+}
+.rv-list textarea {
+  width: 100%;
+  box-sizing: border-box;
+  margin-top: 4px;
+  resize: vertical;
+  font: inherit;
+  font-size: 12px;
+}
+
+/* A bookmark with a comment: a small speech bubble in the gutter / name cell. */
+.rv-mark {
+  display: inline-flex;
+  align-items: center;
+  margin-left: 4px;
+  color: var(--accent);
+  vertical-align: middle;
+  cursor: help;
+}
+.ln .rv-mark {
+  position: absolute;
+  left: 13px;
+  top: 4px;
+  margin: 0;
+}
+.frow.rv-bookmarked .name {
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+
+/* Statistics */
+.rv-stats {
+  width: 100%;
+  border-collapse: collapse;
+  font-variant-numeric: tabular-nums;
+}
+.rv-stats th,
+.rv-stats td {
+  padding: 3px 8px;
+  text-align: left;
+}
+.rv-stats thead th {
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--muted);
+  font-weight: normal;
+}
+.rv-stats .rv-stats-group th {
+  padding-top: 10px;
+  border-bottom: 1px solid var(--border);
+  font-weight: 600;
+}
+.rv-stats td.num {
+  text-align: right;
+}
+.rv-stats td.span {
+  text-align: center;
+}
+.rv-stats tbody tr:not(.rv-stats-group):hover td {
+  background: var(--row-hover);
+}
+
+/* Comparison archive (review) sessions */
+.rv-banner {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 10px;
+  background: var(--accent-tint);
+  border-bottom: 1px solid var(--accent-border);
+  font-size: 12px;
+}
+.rv-banner .spacer {
+  flex: 1;
+}
+.rv-banner b {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.rv-session {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  min-width: 0;
+  min-height: 0;
+  height: 100%;
+}
+.rv-session > .session {
+  flex: 1;
+  min-height: 0;
+}
+.rv-embedded {
+  color: var(--accent);
+  margin-left: 4px;
+}
+.rv-archive-dialog .field input[type="number"] {
+  width: 90px;
+}
+.tool-btn svg.rv-tool {
+  width: 20px;
+  height: 20px;
+  color: var(--accent);
+}

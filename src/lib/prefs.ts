@@ -38,6 +38,22 @@ export interface Prefs {
   diffColors: Partial<Record<DiffColorKey, string>>;
   /** Shortcut overrides by command id (see keymap.ts); "" = unbound. */
   keys: Record<string, string>;
+  /** The Getting started overview was closed (it shows once on Home). */
+  gettingStartedDismissed: boolean; // araxis:vcs araxis:vcs end
+  // araxis:text-view
+  /** Text Compare pads the shorter side of a difference with blank rows (off = linked lines). */
+  textPadding: boolean;
+  // araxis:text-view end
+  // araxis:folder — Folder Compare's split view (file comparison below the folder list).
+  folderSplitView: boolean;
+  /** Share of the height the folder list keeps (0.15–0.85). */
+  folderSplitRatio: number;
+  // araxis:folder end
+  // araxis:reports — printed reports' running header/footer templates (see reportApi.ts) and paper size.
+  printHeader: string;
+  printFooter: string;
+  printPaper: "a4" | "letter";
+  // araxis:reports end
 }
 
 export const DEFAULT_PREFS: Prefs = {
@@ -51,6 +67,15 @@ export const DEFAULT_PREFS: Prefs = {
   editorFontSize: 13,
   diffColors: {},
   keys: {},
+  gettingStartedDismissed: false, // araxis:vcs araxis:vcs end
+  textPadding: true, // araxis:text-view araxis:text-view end
+  folderSplitView: false, // araxis:folder
+  folderSplitRatio: 0.5, // araxis:folder
+  // araxis:reports
+  printHeader: "{title}|{date}",
+  printFooter: "{left} ↔ {right}|Page {page} of {pages}",
+  printPaper: "a4",
+  // araxis:reports end
 };
 
 /** Size limits keep fixed-height diff rows (20px) readable. */
@@ -86,6 +111,20 @@ export function sanitizePrefs(raw: unknown): Prefs {
     editorFontSize: clamp(r.editorFontSize, EDITOR_FONT_SIZES, d.editorFontSize),
     diffColors: stringRecord(r.diffColors) as Prefs["diffColors"],
     keys: stringRecord(r.keys),
+    gettingStartedDismissed: bool(r.gettingStartedDismissed, d.gettingStartedDismissed), // araxis:vcs araxis:vcs end
+    textPadding: bool(r.textPadding, d.textPadding), // araxis:text-view araxis:text-view end
+    // araxis:folder
+    folderSplitView: bool(r.folderSplitView, d.folderSplitView),
+    folderSplitRatio:
+      typeof r.folderSplitRatio === "number" && Number.isFinite(r.folderSplitRatio)
+        ? Math.min(0.85, Math.max(0.15, r.folderSplitRatio))
+        : d.folderSplitRatio,
+    // araxis:folder end
+    // araxis:reports — templates keep their spacing; empty means no header/footer.
+    printHeader: typeof r.printHeader === "string" ? r.printHeader : d.printHeader,
+    printFooter: typeof r.printFooter === "string" ? r.printFooter : d.printFooter,
+    printPaper: r.printPaper === "letter" ? "letter" : "a4",
+    // araxis:reports end
   };
 }
 

@@ -1,7 +1,8 @@
 // Patch Viewer: shows a unified/context diff (.patch, .diff) as a file list
 // plus a side-by-side view of each file's hunks, and can apply the patch
 // against a folder: the patched text opens in Text Compare (in memory) next
-// to the original file, with hunks that failed to apply reported.
+// to the original file, with hunks that failed to apply reported. Hunks and
+// files can be ticked/unticked and only the ticked ones written to disk.
 import { open } from "@tauri-apps/plugin-dialog";
 import {
   ArrowDown,
@@ -9,10 +10,12 @@ import {
   ChevronDown,
   ChevronUp,
   CircleCheck,
+  CircleMinus,
   CircleX,
   FilePen,
   FolderOpen,
   Info,
+  ListChecks,
   RefreshCw,
   X,
 } from "lucide-react";
@@ -26,11 +29,15 @@ import {
   patchApi,
   type ChangeKind,
   type FileApply,
+  type FileSelection,
+  type HunkOutcome,
   type MemorySide,
   type PatchCheck,
   type PatchFileView,
   type PatchHunkView,
   type PatchView,
+  type WriteAction,
+  type WrittenFile,
 } from "../lib/patchApi";
 import { languageFor, lineTokens } from "../lib/syntax";
 import { composeRuns, segmentRanges, type Run, type StyledRange } from "../lib/textRuns";
@@ -77,6 +84,53 @@ const CHANGE_BADGE: Record<ChangeKind, { letter: string; title: string }> = {
 
 type Item = { hunk: number } | { hunk: number; row: number };
 
+const WRITE_TEXT: Record<WriteAction, string> = {
+  modified: "patched in place",
+  created: "created",
+  deleted: "deleted (moved to the Trash)",
+  renamed: "written under its new name (old file moved to the Trash)",
+  copied: "copied to its new name",
+};
+
+/** Key of an unticked hunk (`file:hunk`) or of an unticked file without hunks (`file:*`). */
+const hunkKey = (file: number, hunk: number | "*") => `${file}:${hunk}`;
+
+/** Whether a hunk failed for real (not just left out). */
+const hunkFailed = (h: HunkOutcome) => !h.applied && !h.skipped;
+
+/** A checkbox that can show a partial (some hunks ticked) state. */
+function TriCheck({
+  state,
+  onChange,
+  title,
+  disabled,
+}: {
+  state: "all" | "some" | "none";
+  onChange: (on: boolean) => void;
+  title: string;
+  disabled?: boolean;
+}) {
+  return (
+    <input
+      type="checkbox"
+      className="pv-pick"
+      checked={state === "all"}
+      ref={(el) => {
+        if (el) el.indeterminate = state === "some";
+      }}
+      disabled={disabled}
+      title={title}
+      aria-label={title}
+      onClick={(e) => e.stopPropagation()}
+      onChange={(e) => {
+        onChange(e.target.checked);
+        // Hand the keyboard back to the viewer's shortcuts (Space, Alt+↓…).
+        e.currentTarget.blur();
+      }}
+    />
+  );
+}
+
 const segText = (segs: Segment[]) => (segs.length === 1 ? segs[0].text : segs.map((s) => s.text).join(""));
 const renderRun = (r: Run, i: number) => (
   <span key={i} className={r.cls || undefined}>
@@ -118,6 +172,13 @@ export function PatchViewer({ left: path, onPathsChange, settings, onSettingsCha
   const [checking, setChecking] = useState(false);
   /** Outcome of the last "Open in Text Compare", shown until dismissed. */
   const [report, setReport] = useState<{ file: string; apply: FileApply } | null>(null);
+  /** Unticked hunks/files (see `hunkKey`); everything is ticked after a load. */
+  const [unpicked, setUnpicked] = useState<Set<string>>(() => new Set());
+  /** Outcome of the last "Apply selected", shown until dismissed. */
+  const [written, setWritten] = useState<WrittenFile[] | null>(null);
+  const [writing, setWriting] = useState(false);
+  /** Bumped to re-run the dry run after files were written. */
+  const [checkNonce, setCheckNonce] = useState(0);
   const [hx, setHx] = useState(0);
   const root = useRef<HTMLDivElement>(null);
   const list = useRef<VarListHandle>(null);
@@ -127,6 +188,8 @@ export function PatchViewer({ left: path, onPathsChange, settings, onSettingsCha
     const seq = ++loadSeq.current;
     setCheck(null);
     setReport(null);
+    setWritten(null);
+    setUnpicked(new Set());
     if (!path) {
       setView(null);
       setError(null);
@@ -175,7 +238,7 @@ export function PatchViewer({ left: path, onPathsChange, settings, onSettingsCha
         setCheckError(errorMessage(e));
       })
       .finally(() => seq === checkSeq.current && setChecking(false));
-  }, [view, base, strip, path]);
+  }, [view, base, strip, path, checkNonce]);
 
   const files = view?.files ?? [];
   const hasDescription = !!view?.preamble.trim();
@@ -227,18 +290,63 @@ export function PatchViewer({ left: path, onPathsChange, settings, onSettingsCha
     }
   };
 
+  const isPicked = (f: number, h: number | "*") => !unpicked.has(hunkKey(f, h));
+  /** Whether a file's hunks are all, some or none ticked. */
+  const fileState = (f: number): "all" | "some" | "none" => {
+    const hunks = files[f]?.hunks ?? [];
+    if (!hunks.length) return isPicked(f, "*") ? "all" : "none";
+    const n = hunks.filter((_, h) => isPicked(f, h)).length;
+    return n === hunks.length ? "all" : n ? "some" : "none";
+  };
+  const setPicked = (keys: string[], on: boolean) =>
+    setUnpicked((cur) => {
+      const next = new Set(cur);
+      for (const k of keys) {
+        if (on) next.delete(k);
+        else next.add(k);
+      }
+      return next;
+    });
+  const fileKeys = (f: number) => {
+    const hunks = files[f]?.hunks ?? [];
+    return hunks.length ? hunks.map((_, h) => hunkKey(f, h)) : [hunkKey(f, "*")];
+  };
+  /** Ticked hunks of a file, or undefined when all of them are ticked. */
+  const pickedHunks = (f: number): number[] | undefined => {
+    const hunks = files[f]?.hunks ?? [];
+    const picked = hunks.flatMap((_, h) => (isPicked(f, h) ? [h] : []));
+    return picked.length === hunks.length ? undefined : picked;
+  };
+  /** What "Apply selected" would write: ticked hunks of text files, plus ticked bare renames/copies. */
+  const selection = useMemo(() => {
+    const out: FileSelection[] = [];
+    let hunks = 0;
+    files.forEach((f, i) => {
+      if (f.binary) return;
+      if (!f.hunks.length) {
+        if ((f.change === "renamed" || f.change === "copied") && !unpicked.has(hunkKey(i, "*"))) out.push({ index: i });
+        return;
+      }
+      const picked = f.hunks.flatMap((_, h) => (unpicked.has(hunkKey(i, h)) ? [] : [h]));
+      if (!picked.length) return;
+      hunks += picked.length;
+      out.push(picked.length === f.hunks.length ? { index: i } : { index: i, hunks: picked });
+    });
+    return { files: out, hunks };
+  }, [files, unpicked]);
+
   const [opening, setOpening] = useState(false);
-  /** Applies the selected file's hunks to its original and opens the result in Text Compare. */
+  /** Applies the selected file's ticked hunks to its original and opens the result in Text Compare. */
   const openInCompare = async () => {
     if (!file || !check || !base || opening) return;
     setOpening(true);
     try {
-      const r = await patchApi.applyFile(path, base, check.strip, sel);
+      const r = await patchApi.applyFile(path, base, check.strip, sel, pickedHunks(sel));
       if (r.error || r.text === undefined) {
         setReport({ file: file.display, apply: r });
         return;
       }
-      setReport(r.hunks.some((h) => !h.applied) ? { file: file.display, apply: r } : null);
+      setReport(r.hunks.some(hunkFailed) ? { file: file.display, apply: r } : null);
       const label = file.change === "deleted" ? `Deleted: ${file.display}` : `Patched: ${file.display}`;
       onOpenCompare(r.original ?? "", {
         left: r.original ? undefined : { text: "", label: `New file: ${file.display}` },
@@ -251,7 +359,34 @@ export function PatchViewer({ left: path, onPathsChange, settings, onSettingsCha
     }
   };
 
+  /** Writes the ticked hunks into the real files, after confirming. */
+  const applySelected = async () => {
+    if (!check || !base || writing || !selection.files.length) return;
+    const n = selection.files.length;
+    const what = selection.hunks
+      ? `${selection.hunks} hunk${selection.hunks === 1 ? "" : "s"} in ${n} file${n === 1 ? "" : "s"}`
+      : `${n} file${n === 1 ? "" : "s"}`;
+    if (
+      !window.confirm(
+        `Apply ${what} to ${base}?\n\nThe files are changed in place. Deleted files and the old names of renamed files go to the Trash.`,
+      )
+    )
+      return;
+    setWriting(true);
+    setReport(null);
+    try {
+      setWritten(await patchApi.writeSelected(path, base, check.strip, selection.files));
+      setCheckError(null);
+    } catch (e) {
+      setCheckError(errorMessage(e));
+    } finally {
+      setWriting(false);
+      setCheckNonce((x) => x + 1);
+    }
+  };
+
   const canOpenCompare = !!file && !!check && !file.binary && !fileCheck?.error;
+  const canApplySelected = !!check && !!selection.files.length && !writing;
   const target = fileCheck?.target ?? fileCheck?.original ?? null;
 
   useEffect(() => {
@@ -267,6 +402,9 @@ export function PatchViewer({ left: path, onPathsChange, settings, onSettingsCha
       else if (keyMatches(e, "patch.applyFolder")) chooseBase();
       else if (keyMatches(e, "patch.openCompare")) canOpenCompare && openInCompare();
       else if (keyMatches(e, "patch.reload")) load();
+      else if (keyMatches(e, "patch.toggleHunk") && sel >= 0 && file?.hunks[hunkIdx])
+        setPicked([hunkKey(sel, hunkIdx)], !isPicked(sel, hunkIdx));
+      else if (keyMatches(e, "patch.applySelected")) canApplySelected && applySelected();
       else return;
       e.preventDefault();
     };
@@ -298,8 +436,14 @@ export function PatchViewer({ left: path, onPathsChange, settings, onSettingsCha
 
   const renderHunkHeader = (h: PatchHunkView, i: number) => {
     const outcome = fileCheck?.hunks[i];
+    const on = isPicked(sel, i);
     return (
-      <div className={`pv-hunk${i === hunkIdx ? " current" : ""}`} onClick={() => setHunkIdx(i)}>
+      <div className={`pv-hunk${i === hunkIdx ? " current" : ""}${on ? "" : " unpicked"}`} onClick={() => setHunkIdx(i)}>
+        <TriCheck
+          state={on ? "all" : "none"}
+          onChange={(v) => setPicked([hunkKey(sel, i)], v)}
+          title={`${on ? "Untick" : "Tick"} this hunk for Apply selected / Open in Text Compare (${shortcutLabel("patch.toggleHunk")})`}
+        />
         <span className="pv-hunk-range">
           @@ -{h.oldStart},{h.oldLines} +{h.newStart},{h.newLines} @@
         </span>
@@ -319,7 +463,10 @@ export function PatchViewer({ left: path, onPathsChange, settings, onSettingsCha
     if (!("row" in it)) return renderHunkHeader(h, it.hunk);
     const r: DiffRow = h.rows[it.row];
     return (
-      <div className={`trow k-${r.kind}${it.hunk === hunkIdx ? " current" : ""}`} onClick={() => setHunkIdx(it.hunk)}>
+      <div
+        className={`trow k-${r.kind}${it.hunk === hunkIdx ? " current" : ""}${isPicked(sel, it.hunk) ? "" : " pv-unpicked"}`}
+        onClick={() => setHunkIdx(it.hunk)}
+      >
         <span className="ln">{r.leftNo ?? ""}</span>
         {renderCell(r.left)}
         <span className="mid" />
@@ -332,7 +479,7 @@ export function PatchViewer({ left: path, onPathsChange, settings, onSettingsCha
   const fileStatus = (i: number) => {
     const c = check?.files[i];
     if (!c) return null;
-    const failed = c.error || c.hunks.some((h) => !h.applied);
+    const failed = c.error || c.hunks.some(hunkFailed);
     return (
       <span className={`pv-status ${failed ? "fail" : "ok"}`} title={applySummary(c)}>
         {failed ? <CircleX size={12} /> : <CircleCheck size={12} />}
@@ -341,7 +488,7 @@ export function PatchViewer({ left: path, onPathsChange, settings, onSettingsCha
   };
 
   const totals = files.reduce((t, f) => ({ added: t.added + f.added, removed: t.removed + f.removed }), { added: 0, removed: 0 });
-  const cleanFiles = check ? check.files.filter((c) => !c.error && c.hunks.every((h) => h.applied)).length : 0;
+  const cleanFiles = check ? check.files.filter((c) => !c.error && !c.hunks.some(hunkFailed)).length : 0;
 
   return (
     <div className="session pv-session" ref={root}>
@@ -388,6 +535,19 @@ export function PatchViewer({ left: path, onPathsChange, settings, onSettingsCha
             </select>
           </label>
         )}
+        {base && (
+          <button
+            onClick={applySelected}
+            disabled={!canApplySelected}
+            title={
+              check
+                ? `Write the ticked hunks into the files under ${base} (${shortcutLabel("patch.applySelected")}); untick hunks or files to leave them out`
+                : "Waiting for the dry run against the folder"
+            }
+          >
+            <ListChecks size={14} /> {writing ? "Applying…" : `Apply selected${selection.hunks ? ` (${selection.hunks})` : ""}`}
+          </button>
+        )}
         <span className="spacer" />
         <label className="check">
           <input type="checkbox" checked={syntaxOn} onChange={(e) => setSyntaxOn(e.target.checked)} />
@@ -406,6 +566,34 @@ export function PatchViewer({ left: path, onPathsChange, settings, onSettingsCha
       </div>
 
       {checkError && <div className="banner error">{checkError}</div>}
+      {written && (
+        <div className={`pv-report pv-written${written.some((w) => w.error || w.hunks.some(hunkFailed)) ? " error" : ""}`}>
+          <span>
+            <b>Applied to {basename(base) || base}</b>:{" "}
+            {written.filter((w) => w.written).length} of {written.length} file{written.length === 1 ? "" : "s"} changed
+          </span>
+          <div className="pv-written-list">
+            {written.map((w) => (
+              <div key={w.index} className="pv-written-file">
+                <span className={w.error || w.hunks.some(hunkFailed) ? "pv-fail" : w.written ? "pv-ok" : "muted"}>
+                  {w.error || w.hunks.some(hunkFailed) ? <CircleX size={12} /> : <CircleCheck size={12} />}{" "}
+                  <b>{files[w.index]?.display ?? `file ${w.index + 1}`}</b>:{" "}
+                  {w.error ?? (w.written ? WRITE_TEXT[w.written] : "nothing to change")}
+                </span>
+                {w.hunks.map((h, i) => (
+                  <span key={i} className={`pv-written-hunk ${h.applied ? "ok" : h.skipped ? "skip" : "fail"}`}>
+                    {h.applied ? <CircleCheck size={11} /> : h.skipped ? <CircleMinus size={11} /> : <CircleX size={11} />} hunk{" "}
+                    {i + 1} {hunkOutcomeText(h)}
+                  </span>
+                ))}
+              </div>
+            ))}
+          </div>
+          <button className="icon-btn" aria-label="Dismiss" onClick={() => setWritten(null)}>
+            <X size={12} />
+          </button>
+        </div>
+      )}
       {report && (
         <div className={`pv-report${report.apply.error ? " error" : ""}`}>
           <span>
@@ -415,7 +603,7 @@ export function PatchViewer({ left: path, onPathsChange, settings, onSettingsCha
           {!report.apply.error && (
             <span className="pv-report-list">
               {report.apply.hunks.map((h, i) =>
-                h.applied ? null : (
+                !hunkFailed(h) ? null : (
                   <span key={i}>
                     hunk {i + 1} {hunkOutcomeText(h)}
                   </span>
@@ -457,6 +645,16 @@ export function PatchViewer({ left: path, onPathsChange, settings, onSettingsCha
                   // The clicks before it already selected this file.
                   onDoubleClick={() => canOpenCompare && openInCompare()}
                 >
+                  <TriCheck
+                    state={f.binary ? "none" : fileState(i)}
+                    disabled={f.binary}
+                    onChange={(v) => setPicked(fileKeys(i), v)}
+                    title={
+                      f.binary
+                        ? "Binary changes can't be applied"
+                        : `${fileState(i) === "all" ? "Untick" : "Tick"} every hunk of this file for Apply selected`
+                    }
+                  />
                   <span className={`pv-badge c-${f.change}`}>{f.binary ? "B" : CHANGE_BADGE[f.change].letter}</span>
                   <span className="pv-name">
                     <span className="pv-dir">{dirOf(f.display)}</span>
@@ -492,7 +690,7 @@ export function PatchViewer({ left: path, onPathsChange, settings, onSettingsCha
                       </span>
                     )}
                     {fileCheck && (
-                      <span className={fileCheck.error || fileCheck.hunks.some((h) => !h.applied) ? "pv-fail" : "pv-ok"}>
+                      <span className={fileCheck.error || fileCheck.hunks.some(hunkFailed) ? "pv-fail" : "pv-ok"}>
                         {applySummary(fileCheck)}
                       </span>
                     )}
