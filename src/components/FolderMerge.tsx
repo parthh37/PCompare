@@ -216,7 +216,7 @@ export function FolderMerge({
   const update = (patch: Partial<FolderMergeSettings>) => setCfg((c) => ({ ...c, ...patch }));
   const reportSettings = useRef(onSettingsChange);
   reportSettings.current = onSettingsChange;
-  useEffect(() => reportSettings.current?.(cfg), [cfg]);
+  useEffect(() => void reportSettings.current?.(cfg), [cfg]);
 
   // Path fields are edited locally and committed on Enter or browse.
   const [draft, setDraft] = useState<MergePaths>({ left, base, right, output });

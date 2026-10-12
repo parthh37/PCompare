@@ -106,7 +106,7 @@ export function PatchViewer({ left: path, onPathsChange, settings, onSettingsCha
   const [syntaxOn, setSyntaxOn] = useState(settings?.syntax ?? true);
   const reportSettings = useRef(onSettingsChange);
   reportSettings.current = onSettingsChange;
-  useEffect(() => reportSettings.current?.({ base, strip, syntax: syntaxOn }), [base, strip, syntaxOn]);
+  useEffect(() => void reportSettings.current?.({ base, strip, syntax: syntaxOn }), [base, strip, syntaxOn]);
 
   const [view, setView] = useState<PatchView | null>(null);
   const [error, setError] = useState<string | null>(null);
