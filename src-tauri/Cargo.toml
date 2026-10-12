@@ -17,6 +17,7 @@ pcompare-table = { path = "../crates/pcompare-table" }
 pcompare-picture = { path = "../crates/pcompare-picture" }
 pcompare-sync = { path = "../crates/pcompare-sync" }
 pcompare-meta = { path = "../crates/pcompare-meta" }
+pcompare-index = { path = "../crates/pcompare-index" }
 pcompare-db = { path = "../crates/pcompare-db" }
 serde.workspace = true
 serde_json.workspace = true

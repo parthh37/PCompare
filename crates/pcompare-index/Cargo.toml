@@ -1,0 +1,19 @@
+[package]
+name = "pcompare-index"
+description = "Embedded SQLite index for PCompare: checksum cache, sync baselines and job journal"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+pcompare-core = { path = "../pcompare-core" }
+pcompare-sync = { path = "../pcompare-sync" }
+# 0.39 shares libsqlite3-sys 0.37 with sqlx (pcompare-db); only one crate may link sqlite3.
+rusqlite = { version = "0.39", features = ["bundled"] }
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+tempfile = "3"
