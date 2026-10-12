@@ -1,5 +1,6 @@
 import { open, save, type DialogFilter } from "@tauri-apps/plugin-dialog";
-import { FolderOpen, Globe } from "lucide-react";
+import { FileArchive, FolderOpen, Globe } from "lucide-react";
+import { CONTAINER_FILTERS } from "../lib/archiveApi"; // bc5:archives
 import { useState } from "react";
 import { useShell } from "../lib/shell";
 import { RemoteBrowser } from "./RemoteBrowser";
@@ -59,6 +60,19 @@ export function PathField({
       <button className="icon-btn" title="Browse…" onClick={browse}>
         <FolderOpen size={15} />
       </button>
+      {/* bc5:archives — folder sides can also be an archive or a snapshot file */}
+      {directory && !saveDialog && (
+        <button
+          className="icon-btn"
+          title="Open an archive (zip, tar, 7z…) or a snapshot (.pcsnap) as a folder"
+          onClick={async () => {
+            const picked = await open({ multiple: false, filters: CONTAINER_FILTERS, title: "Choose archive or snapshot" });
+            if (typeof picked === "string") onPick(picked);
+          }}
+        >
+          <FileArchive size={15} />
+        </button>
+      )}
       {!localOnly && (
         <button className="icon-btn" title="Browse remote (S3, SFTP, OneDrive…)" onClick={() => setRemote(true)}>
           <Globe size={15} />

@@ -1,0 +1,41 @@
+/* bc5:archives — archive / snapshot banner and the snapshot dialog. */
+.banner.info.archive-banner {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin: 6px 10px 0;
+  font-size: 12px;
+}
+.archive-banner > svg {
+  flex: none;
+  margin-top: 2px;
+}
+.archive-banner-text {
+  flex: 1;
+  min-width: 0;
+}
+.archive-banner-notice {
+  margin-top: 2px;
+  font-weight: 600;
+}
+.archive-banner .link {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  white-space: nowrap;
+}
+.snapshot-dialog {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 460px;
+}
+.snapshot-dialog .pathfield {
+  width: 100%;
+}
+.snapshot-sides .field.radio span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

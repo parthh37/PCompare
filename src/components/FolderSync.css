@@ -13,8 +13,8 @@
   height: 22px;
   border-radius: 5px;
   color: var(--accent);
-  background: rgba(91, 156, 255, 0.12);
-  border: 1px solid rgba(91, 156, 255, 0.35);
+  background: var(--accent-tint);
+  border: 1px solid var(--accent-border);
 }
 .sync-mode-icon.mirror {
   color: var(--warn);
@@ -79,10 +79,10 @@
   user-select: none;
 }
 .sync-row:hover {
-  background: rgba(255, 255, 255, 0.03);
+  background: var(--row-hover);
 }
 .sync-row.selected {
-  background: rgba(91, 156, 255, 0.16);
+  background: var(--sel-bg);
 }
 .sync-cell {
   padding: 0 6px;
@@ -165,7 +165,7 @@
   background: var(--panel);
   border: 1px solid var(--border);
   border-radius: 9px;
-  box-shadow: 0 18px 60px rgba(0, 0, 0, 0.5);
+  box-shadow: 0 18px 60px var(--shadow-strong);
   display: grid;
   gap: 10px;
   font-size: 13px;
@@ -277,8 +277,8 @@
 .sync-chip.note {
   display: inline-flex;
   align-items: center;
-  border-color: rgba(91, 156, 255, 0.35);
-  background: rgba(91, 156, 255, 0.1);
+  border-color: var(--accent-border);
+  background: var(--accent-tint);
 }
 .sync-group-title {
   font-size: 11.5px;
@@ -313,7 +313,7 @@
   padding: 0 6px;
   border-radius: 4px;
   font-size: 11px;
-  color: #ffb4b4;
+  color: var(--danger-text);
   background: rgba(239, 68, 68, 0.15);
 }
 .sync-failures .path {
@@ -389,7 +389,7 @@
   border: 1px solid rgba(245, 163, 92, 0.4);
 }
 .sync-warning.w-emptySide {
-  color: #ffb4b4;
+  color: var(--danger-text);
   background: rgba(239, 68, 68, 0.12);
   border-color: rgba(239, 68, 68, 0.45);
 }
@@ -428,7 +428,7 @@
 
 /* confirmation: warnings, pre-flight, safety line */
 .sync-confirm-warn.sync-danger {
-  color: #ffb4b4;
+  color: var(--danger-text);
   background: rgba(239, 68, 68, 0.12);
   border-color: rgba(239, 68, 68, 0.45);
 }
@@ -438,7 +438,7 @@
   border-radius: 5px;
   display: grid;
   gap: 5px;
-  color: #ffb4b4;
+  color: var(--danger-text);
   background: rgba(239, 68, 68, 0.12);
   border: 1px solid rgba(239, 68, 68, 0.45);
 }
@@ -554,7 +554,7 @@
   min-height: 26px;
   cursor: default;
   user-select: none;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.03);
+  border-bottom: 1px solid var(--row-hover);
 }
 .sync-history-row > span {
   overflow: hidden;
@@ -562,10 +562,10 @@
   white-space: nowrap;
 }
 .sync-history-row:hover {
-  background: rgba(255, 255, 255, 0.03);
+  background: var(--row-hover);
 }
 .sync-history-row.selected {
-  background: rgba(91, 156, 255, 0.16);
+  background: var(--sel-bg);
 }
 .sync-job-status.js-completed {
   color: var(--ok);

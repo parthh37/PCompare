@@ -45,7 +45,8 @@ pub struct FieldSpec {
     pub help: &'static str,
     pub default: &'static str,
     pub options: &'static [&'static str],
-    /// Only show this field when another field has a given value: `(key, value)`.
+    /// Only show this field when another field has a given value: `(key, value)`;
+    /// `value` may list alternatives separated by `|`.
     pub show_if: Option<(&'static str, &'static str)>,
 }
 
@@ -117,6 +118,16 @@ impl FieldSpec {
 }
 
 use FieldKind::*;
+
+#[cfg(unix)]
+const AGENT_PLACEHOLDER: &str = "$SSH_AUTH_SOCK";
+#[cfg(unix)]
+const AGENT_HELP: &str = "Keys held by ssh-agent are tried in turn. Leave empty to use SSH_AUTH_SOCK, or enter the agent's socket path.";
+#[cfg(windows)]
+const AGENT_PLACEHOLDER: &str = r"\\.\pipe\openssh-ssh-agent";
+#[cfg(windows)]
+const AGENT_HELP: &str =
+    "Keys held by the agent are tried in turn. Leave empty to use the Windows OpenSSH Authentication Agent, or Pageant if that isn't running.";
 
 fn root() -> FieldSpec {
     field("root", "Root folder", Text)
@@ -216,13 +227,19 @@ pub fn catalog() -> Vec<ProviderSpec> {
                 field("port", "Port", Number).default("22"),
                 field("user", "User", Text).required(),
                 field("auth", "Authentication", Select)
-                    .options(&["password", "key"])
+                    .options(&["password", "keyboard-interactive", "key", "agent"])
                     .default("password"),
-                field("password", "Password", Secret).show_if("auth", "password"),
+                field("password", "Password", Secret)
+                    .show_if("auth", "password|keyboard-interactive")
+                    .help("Answers password prompts. Other questions (e.g. a verification code) are asked when connecting."),
                 field("private_key_path", "Private key file", File)
                     .show_if("auth", "key")
                     .placeholder("~/.ssh/id_ed25519"),
                 field("passphrase", "Key passphrase", Secret).show_if("auth", "key"),
+                field("agent_socket", "Agent", Text)
+                    .show_if("auth", "agent")
+                    .placeholder(AGENT_PLACEHOLDER)
+                    .help(AGENT_HELP),
                 field("root", "Root folder", Text)
                     .placeholder("~ (home directory)")
                     .help("Absolute path, or relative to the home directory."),

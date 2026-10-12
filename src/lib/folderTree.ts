@@ -1,5 +1,6 @@
 // Pure helpers over the folder-compare result tree: display filters, name
-// search, flattening, and re-tallying after per-file content re-checks.
+// search, flattening, "ignore" marks, and re-tallying after per-file content
+// re-checks.
 import type { ContentVerdict, EntryStatus, FolderEntry, FolderStats } from "./api";
 
 export type DisplayFilter =
@@ -27,11 +28,16 @@ export const DISPLAY_FILTERS: { value: DisplayFilter; label: string; primary?: b
 
 const isOrphan = (s: EntryStatus) => s === "leftOnly" || s === "rightOnly";
 
+/** The status filters and totals go by: entries marked "ignore" count as same. */
+export const effectiveStatus = (e: FolderEntry): EntryStatus => (e.ignored ? "same" : e.status);
+
 /**
  * "Similar" files (only unimportant differences under rules-based compare)
- * count as same, so "Differences" shows exactly what needs attention.
+ * and ignored ones count as same, so "Differences" shows exactly what needs
+ * attention.
  */
-export function matchesFilter(e: FolderEntry, f: DisplayFilter): boolean {
+export function matchesFilter(entry: FolderEntry, f: DisplayFilter): boolean {
+  const e = entry.ignored ? { status: "same" as EntryStatus, newer: null } : entry;
   switch (f) {
     case "all":
       return true;
@@ -111,41 +117,48 @@ export function pairedFiles(entries: FolderEntry[], out: FolderEntry[] = []): Fo
   return out;
 }
 
-/** Mirrors `folder_status` in pcompare-core. */
+/** Mirrors `folder_status` in pcompare-core, with ignored entries as same. */
 function folderStatus(children: FolderEntry[]): EntryStatus {
-  if (children.every((c) => c.status === "same")) return "same";
-  if (children.every((c) => c.status === "same" || c.status === "similar")) return "similar";
+  const st = children.map(effectiveStatus);
+  if (st.every((s) => s === "same")) return "same";
+  if (st.every((s) => s === "same" || s === "similar")) return "similar";
   return "different";
 }
 
 /**
  * Applies per-file content verdicts (from "Compare contents" on selected
- * rows) and recomputes the status of every ancestor folder.
+ * rows) and "ignore" marks (relative paths; a folder's mark covers
+ * everything below it), then recomputes the status of every ancestor folder.
  */
 export function applyVerdicts(
   entries: FolderEntry[],
   verdicts: Map<string, ContentVerdict & { method: FolderEntry["contentChecked"] }>,
+  ignored: ReadonlySet<string> = new Set(),
 ): FolderEntry[] {
-  if (verdicts.size === 0) return entries;
-  const walk = (list: FolderEntry[]): FolderEntry[] =>
+  if (verdicts.size === 0 && ignored.size === 0) return entries;
+  const walk = (list: FolderEntry[], inherited: boolean): FolderEntry[] =>
     list.map((e) => {
+      const ignore = inherited || ignored.has(e.relPath);
+      let next = e;
       if (e.isDir) {
-        if (!e.children.length || e.status === "leftOnly" || e.status === "rightOnly" || e.status === "error")
-          return e;
-        const children = walk(e.children);
-        return { ...e, children, status: folderStatus(children) };
+        const children = walk(e.children, ignore);
+        const keep = !e.children.length || e.status === "leftOnly" || e.status === "rightOnly" || e.status === "error";
+        next = { ...e, children, status: keep ? e.status : folderStatus(children) };
+      } else {
+        const v = verdicts.get(e.relPath);
+        if (v) next = { ...e, status: v.status, crc: v.crc ?? e.crc, contentChecked: v.method };
       }
-      const v = verdicts.get(e.relPath);
-      return v ? { ...e, status: v.status, crc: v.crc ?? e.crc, contentChecked: v.method } : e;
+      return ignore ? { ...next, ignored: true } : next;
     });
-  return walk(entries);
+  return walk(entries, false);
 }
 
-/** Mirrors `tally` in pcompare-core so stats stay right after re-checks. */
+/** Mirrors `tally` in pcompare-core so stats stay right after re-checks and ignore marks. */
 export function tally(entries: FolderEntry[], stats: FolderStats = emptyStats()): FolderStats {
   for (const e of entries) {
     if (!e.isDir) {
-      switch (e.status) {
+      if (e.ignored) stats.ignored = (stats.ignored ?? 0) + 1;
+      switch (effectiveStatus(e)) {
         case "same":
           stats.same++;
           break;
@@ -166,7 +179,7 @@ export function tally(entries: FolderEntry[], stats: FolderStats = emptyStats())
           stats.errors++;
           break;
       }
-    } else if (e.status === "error") stats.errors++;
+    } else if (effectiveStatus(e) === "error") stats.errors++;
     tally(e.children, stats);
   }
   return stats;

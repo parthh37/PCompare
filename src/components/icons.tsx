@@ -203,7 +203,9 @@ export type ToolIconName =
   | "compareTo"
   | "text"
   | "hex"
-  | "copy";
+  | "copy"
+  | "report" // bc5:reports-script
+  | "snapshot"; // bc5:archives
 
 /** A small page used inside toolbar glyphs. */
 const MiniPage = ({ x = 0, y = 0 }: { x?: number; y?: number }) => (
@@ -339,6 +341,21 @@ const TOOL: Record<ToolIconName, ReactNode> = {
     <>
       <MiniPage x={3.5} y={-0.5} />
       <MiniPage x={0.5} y={3} />
+    </>
+  ),
+  // bc5:reports-script — a page with a small bar chart.
+  report: (
+    <>
+      <MiniPage x={2} />
+      <path d="M6.5 11.5V9M8.5 11.5V6.8M10.5 11.5V8" stroke="#2f7cf6" strokeWidth="1.4" strokeLinecap="round" />
+    </>
+  ),
+  // bc5:archives — a camera: "Save snapshot"
+  snapshot: (
+    <>
+      <path d="M1.5 5.5h3l1.2-2h4.6l1.2 2h3v8h-13z" fill="#e8ecf3" stroke={INK} strokeLinejoin="round" />
+      <circle cx="8" cy="9.3" r="2.6" fill="#2f7cf6" stroke={INK} strokeWidth="0.8" />
+      <circle cx="8" cy="9.3" r="1" fill="#cfe0ff" />
     </>
   ),
 };

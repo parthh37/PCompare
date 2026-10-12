@@ -1,0 +1,80 @@
+/* Line Details pane under the Text Compare panes. */
+.line-details {
+  flex-shrink: 0;
+  border-top: 1px solid var(--border);
+  background: var(--panel);
+  font-size: 12px;
+}
+.ld-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 3px 10px;
+  border-bottom: 1px solid var(--border);
+}
+.ld-head .spacer {
+  flex: 1;
+}
+.ld-body {
+  display: flex;
+  font-family: var(--mono);
+  font-size: 13px;
+  line-height: 20px;
+}
+.ld-labels {
+  display: flex;
+  flex-direction: column;
+  flex-shrink: 0;
+  padding: 4px 8px;
+  color: var(--muted);
+  font-size: 11px;
+  text-align: right;
+  border-right: 1px solid var(--border);
+  user-select: none;
+}
+.ld-labels span {
+  height: 20px;
+}
+.ld-scroll {
+  flex: 1;
+  min-width: 0;
+  overflow-x: auto;
+  padding: 4px 6px;
+}
+.ld-row {
+  display: flex;
+  height: 20px;
+  white-space: pre;
+}
+.ld-sep {
+  display: block;
+  height: 6px !important;
+}
+.ld-ch,
+.ld-hex {
+  flex-shrink: 0;
+  text-align: center;
+}
+.ld-ch {
+  width: 1ch;
+}
+.ld-hex {
+  color: var(--muted);
+  border-left: 1px solid transparent;
+}
+.ld-ch.ws {
+  color: var(--muted);
+}
+.ld-ch.diff,
+.ld-hex.diff {
+  color: var(--text);
+  background: var(--del-mark);
+}
+.ld-ch.gap,
+.ld-hex.gap {
+  background: var(--hatch);
+}
+.ld-ch.gap.diff,
+.ld-hex.gap.diff {
+  background: var(--hatch), rgba(239, 68, 68, 0.2);
+}

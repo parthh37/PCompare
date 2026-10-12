@@ -11,7 +11,7 @@
   border-inline: 1px solid var(--border);
 }
 .tc-editable .trow.current .mid {
-  background: rgba(91, 156, 255, 0.12);
+  background: var(--accent-tint);
 }
 .tc-gutter-btn {
   height: 17px;
@@ -31,18 +31,38 @@
 .tc-editable .tcell {
   position: relative;
 }
-.tc-edit-input {
-  position: absolute;
-  inset: 0;
-  width: 100%;
+/* The line editor floats over the edited cell (see renderEditor). */
+.tc-editor-layer {
+  z-index: 2;
+  pointer-events: none;
+}
+.tc-editor-layer .trow {
+  background: transparent;
+}
+.tc-editable .tc-edit-area {
+  pointer-events: auto;
+  min-width: 0;
   height: 100%;
-  padding: 0 5px;
+  margin: 0;
+  padding: 0 4px 0 6px;
+  resize: none;
+  overflow: hidden;
+  /* An outline takes no room, so the text lines up with the rows around it. */
+  border: none;
+  outline: 1px solid var(--accent);
+  outline-offset: -1px;
   border-radius: 0;
-  border-color: var(--accent);
   background: var(--bg);
-  font-family: var(--mono);
-  font-size: 13px;
-  line-height: 18px;
+  color: var(--text);
+  font: inherit;
+  line-height: 20px;
+  white-space: pre;
+  tab-size: 4;
+}
+.tc-editable .tc-edit-area[wrap="soft"] {
+  white-space: pre-wrap;
+  word-break: break-all;
+  overflow-wrap: anywhere;
 }
 .tc-dirty {
   color: var(--warn);
@@ -66,4 +86,172 @@
 }
 .statusbar .tc-stale {
   color: var(--warn);
+}
+
+/* ---------- bc5:text-ui: selection, bookmarks, find, syntax, wrap, clipboard ---------- */
+:root {
+  --syn-kw: #c792ea;
+  --syn-type: #82aaff;
+  --syn-lit: #f78c6c;
+  --syn-str: #c3e88d;
+  --syn-num: #f78c6c;
+  --syn-com: #6f7c93;
+  --syn-meta: #89ddff;
+  --syn-tag: #f07178;
+  --syn-attr: #ffcb6b;
+  --find-hit: rgba(255, 213, 79, 0.3);
+  --find-hit-border: rgba(255, 213, 79, 0.65);
+  --find-cur: rgba(255, 152, 0, 0.7);
+  --bookmark: #5b9cff;
+}
+:root[data-theme="light"] {
+  --syn-kw: #7c3aed;
+  --syn-type: #1d4ed8;
+  --syn-lit: #c2410c;
+  --syn-str: #15803d;
+  --syn-num: #b45309;
+  --syn-com: #7b8597;
+  --syn-meta: #0e7490;
+  --syn-tag: #b91c1c;
+  --syn-attr: #a16207;
+  --find-hit: rgba(250, 204, 21, 0.35);
+  --find-hit-border: rgba(202, 138, 4, 0.7);
+  --find-cur: rgba(249, 115, 22, 0.55);
+  --bookmark: #2f6fde;
+}
+.syn-kw {
+  color: var(--syn-kw);
+}
+.syn-type {
+  color: var(--syn-type);
+}
+.syn-lit {
+  color: var(--syn-lit);
+}
+.syn-str {
+  color: var(--syn-str);
+}
+.syn-num {
+  color: var(--syn-num);
+}
+.syn-com {
+  color: var(--syn-com);
+  font-style: italic;
+}
+.syn-meta {
+  color: var(--syn-meta);
+}
+.syn-tag {
+  color: var(--syn-tag);
+}
+.syn-attr {
+  color: var(--syn-attr);
+}
+.find-hit {
+  border-radius: 2px;
+  background: var(--find-hit);
+  box-shadow: 0 0 0 1px var(--find-hit-border);
+}
+.find-hit.find-cur {
+  background: var(--find-cur);
+}
+
+/* Measures the editor font's character width (see TextCompare `metrics`). */
+.tc-editable .text-grid {
+  position: relative;
+}
+.tc-probe {
+  position: absolute;
+  top: 0;
+  left: 0;
+  visibility: hidden;
+  pointer-events: none;
+  white-space: pre;
+  font-family: var(--mono);
+  font-size: var(--editor-font-size);
+}
+
+/* Word wrap: every visual line is one row tall; the row grows to the taller side. */
+.tc-vline {
+  height: 20px;
+  white-space: pre;
+}
+.tc-wrap .trow .mid {
+  align-items: flex-start;
+  padding-top: 1px;
+}
+
+/* Caret line and line selection (inset shadows paint over the diff backgrounds, under the text). */
+.tc-editable .tcell.tc-caret {
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+.tc-editable .tcell.tc-sel {
+  box-shadow: inset 0 0 0 9999px var(--sel-bg);
+}
+.tc-editable .tcell.tc-sel.tc-caret {
+  box-shadow:
+    inset 2px 0 0 var(--accent),
+    inset 0 0 0 9999px var(--sel-bg);
+}
+.tc-editable .trow .ln {
+  position: relative;
+  cursor: default;
+}
+.tc-editable .trow .ln.tc-bm::before {
+  content: "";
+  position: absolute;
+  left: 5px;
+  top: 4px;
+  width: 7px;
+  height: 11px;
+  background: var(--bookmark);
+  clip-path: polygon(0 0, 100% 0, 100% 100%, 50% 70%, 0 100%);
+}
+.ov-bm {
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 2px;
+  background: var(--bookmark);
+}
+.tc-gutter-btn.sel {
+  color: var(--accent);
+}
+
+.tc-editable .toolbar .icon-btn.active {
+  color: var(--accent);
+  border-color: var(--accent-border);
+  background: var(--accent-tint);
+}
+
+/* Clipboard sides. */
+.tc-clip {
+  display: inline-flex;
+  gap: 4px;
+  margin-left: auto;
+  padding-left: 8px;
+}
+.tc-mini {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 0 6px;
+  height: 18px;
+  font-size: 11px;
+  color: var(--muted);
+}
+.tc-empty-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: center;
+}
+
+.tc-menu .tc-menu-key {
+  float: right;
+  margin-left: 24px;
+  color: var(--muted);
+  font-size: 11px;
+}
+.statusbar .tc-notice {
+  color: var(--ok);
 }

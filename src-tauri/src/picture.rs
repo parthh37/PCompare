@@ -2,7 +2,10 @@
 
 use crate::CmdResult;
 use pcompare_core::CoreError;
-use pcompare_picture::{PictureComparison, PicturePair, PictureSources, DEFAULT_MAX_DISPLAY_DIM};
+use pcompare_picture::{
+    DiffOptions, PictureComparison, PicturePair, PictureSources, PixelProbe, Transform, DEFAULT_MAX_DISPLAY_DIM,
+};
+use serde::Deserialize;
 use std::collections::VecDeque;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
@@ -16,10 +19,20 @@ const CACHE_CAPACITY: usize = 3;
 /// File length and modification time, used to notice files changed on disk.
 type Stamp = (u64, Option<SystemTime>);
 
+/// Rotation, flips and scaling of both sides, applied before comparing.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct PairTransform {
+    left: Transform,
+    right: Transform,
+}
+
 struct Cached {
     paths: (String, String),
     stamps: [Stamp; 2],
     pair: Arc<PicturePair>,
+    /// The most recently requested transformed variant of `pair`.
+    transformed: Option<(PairTransform, Arc<PicturePair>)>,
 }
 
 static CACHE: Mutex<VecDeque<Cached>> = Mutex::new(VecDeque::new());
@@ -57,21 +70,104 @@ fn pair(app: &AppHandle, left: &str, right: &str, reload: bool) -> pcompare_core
         paths,
         stamps,
         pair: pair.clone(),
+        transformed: None,
     });
     cache.truncate(CACHE_CAPACITY);
     Ok(pair)
 }
 
-/// Decodes both images (re-reading them from disk) and returns their info
-/// and display images. Call [`picture_diff`] afterwards for the comparison.
-#[tauri::command]
-pub async fn picture_load(app: AppHandle, left: String, right: String) -> CmdResult<PictureSources> {
-    crate::blocking(move || pair(&app, &left, &right, true)?.sources()).await
+/// Like [`pair`], with both sides rotated, flipped and scaled as requested.
+/// The last transformed variant is cached alongside the decoded pair.
+fn transformed_pair(
+    app: &AppHandle,
+    left: &str,
+    right: &str,
+    reload: bool,
+    transforms: PairTransform,
+) -> pcompare_core::Result<Arc<PicturePair>> {
+    let base = pair(app, left, right, reload)?;
+    if transforms == PairTransform::default() {
+        return Ok(base);
+    }
+    let lookup = |cache: &VecDeque<Cached>| {
+        cache
+            .iter()
+            .find(|c| Arc::ptr_eq(&c.pair, &base))
+            .and_then(|c| c.transformed.as_ref())
+            .filter(|(t, _)| *t == transforms)
+            .map(|(_, p)| p.clone())
+    };
+    if let Some(hit) = lookup(&CACHE.lock().unwrap_or_else(|e| e.into_inner())) {
+        return Ok(hit);
+    }
+    let Some(variant) = base.transformed(&transforms.left, &transforms.right, DEFAULT_MAX_DISPLAY_DIM)? else {
+        return Ok(base);
+    };
+    let variant = Arc::new(variant);
+    let mut cache = CACHE.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some(entry) = cache.iter_mut().find(|c| Arc::ptr_eq(&c.pair, &base)) {
+        entry.transformed = Some((transforms, variant.clone()));
+    }
+    Ok(variant)
 }
 
-/// Compares the pictures at `tolerance` (0–255 per channel), reusing the
-/// decoded images from [`picture_load`] when the files haven't changed.
+/// Returns both images' info and display images, after `transforms`.
+/// `reload` re-reads both files from disk (set it for a fresh load or a
+/// refresh; leave it unset when only the transforms changed). Call
+/// [`picture_diff`] afterwards for the comparison.
 #[tauri::command]
-pub async fn picture_diff(app: AppHandle, left: String, right: String, tolerance: u8) -> CmdResult<PictureComparison> {
-    crate::blocking(move || pair(&app, &left, &right, false)?.compare(tolerance)).await
+pub async fn picture_load(
+    app: AppHandle,
+    left: String,
+    right: String,
+    transforms: Option<PairTransform>,
+    reload: Option<bool>,
+) -> CmdResult<PictureSources> {
+    crate::blocking(move || {
+        transformed_pair(
+            &app,
+            &left,
+            &right,
+            reload.unwrap_or(true),
+            transforms.unwrap_or_default(),
+        )?
+        .sources()
+    })
+    .await
+}
+
+/// Compares the (transformed) pictures under `options`, reusing the decoded
+/// images from [`picture_load`] when the files haven't changed.
+#[tauri::command]
+pub async fn picture_diff(
+    app: AppHandle,
+    left: String,
+    right: String,
+    transforms: Option<PairTransform>,
+    options: DiffOptions,
+) -> CmdResult<PictureComparison> {
+    crate::blocking(move || {
+        transformed_pair(&app, &left, &right, false, transforms.unwrap_or_default())?.compare(&options)
+    })
+    .await
+}
+
+/// Full-resolution pixels of both sides around canvas position (`x`, `y`),
+/// for the loupe.
+#[allow(clippy::too_many_arguments)]
+#[tauri::command]
+pub async fn picture_probe(
+    app: AppHandle,
+    left: String,
+    right: String,
+    transforms: Option<PairTransform>,
+    options: DiffOptions,
+    x: u32,
+    y: u32,
+    radius: u32,
+) -> CmdResult<PixelProbe> {
+    crate::blocking(move || {
+        Ok(transformed_pair(&app, &left, &right, false, transforms.unwrap_or_default())?.probe(x, y, radius, &options))
+    })
+    .await
 }

@@ -4,11 +4,18 @@
 //! by key (case-insensitively, as the registry does) into a [`RegKeyDiff`]
 //! tree with per-value differences.
 
+mod edit;
 mod live;
+mod reg_doc;
 mod reg_file;
 mod reg_query;
 
-pub use live::load_live;
+pub use edit::{
+    apply_edits, format_command, live_plan, parse_value_input, EditableSource, RegEdit, Side,
+    SideEdit,
+};
+pub use live::{load_live, run_live_plan};
+pub use reg_doc::RegDocument;
 pub use reg_file::parse_reg;
 pub use reg_query::parse_reg_query;
 
@@ -82,6 +89,26 @@ impl RegType {
         })
     }
 
+    /// The `winnt.h` type number; `None` for [`RegType::Delete`].
+    pub fn code(self) -> Option<u32> {
+        Some(match self {
+            RegType::None => 0,
+            RegType::Sz => 1,
+            RegType::ExpandSz => 2,
+            RegType::Binary => 3,
+            RegType::Dword => 4,
+            RegType::DwordBigEndian => 5,
+            RegType::Link => 6,
+            RegType::MultiSz => 7,
+            RegType::ResourceList => 8,
+            RegType::FullResourceDescriptor => 9,
+            RegType::ResourceRequirementsList => 10,
+            RegType::Qword => 11,
+            RegType::Other(n) => n,
+            RegType::Delete => return None,
+        })
+    }
+
     pub fn name(self) -> String {
         match self {
             RegType::None => "REG_NONE".into(),
@@ -117,7 +144,12 @@ impl ValueData {
     pub fn from_bytes(kind: RegType, bytes: Vec<u8>, utf16: bool) -> Self {
         let text = |b: &[u8]| -> String {
             if utf16 {
-                let units: Vec<u16> = b.as_chunks::<2>().0.iter().map(|&c| u16::from_le_bytes(c)).collect();
+                let units: Vec<u16> = b
+                    .as_chunks::<2>()
+                    .0
+                    .iter()
+                    .map(|&c| u16::from_le_bytes(c))
+                    .collect();
                 String::from_utf16_lossy(&units)
             } else {
                 pcompare_core::textfile::decode(b).0
@@ -147,6 +179,23 @@ impl ValueData {
                 ValueData::U64(u64::from_le_bytes(b))
             }
             _ => ValueData::Bytes(bytes),
+        }
+    }
+
+    /// The text the value editor starts from; [`edit::parse_value_input`]
+    /// reads it back. Numbers are `0x` hex, binary data is spaced hex bytes
+    /// (never truncated) and multi-strings are one item per line.
+    pub fn edit_text(&self) -> String {
+        match self {
+            ValueData::Str(s) => s.clone(),
+            ValueData::Multi(items) => items.join("\n"),
+            ValueData::U32(v) => format!("0x{v:08x}"),
+            ValueData::U64(v) => format!("0x{v:016x}"),
+            ValueData::Bytes(b) => b
+                .iter()
+                .map(|x| format!("{x:02x}"))
+                .collect::<Vec<_>>()
+                .join(" "),
         }
     }
 
@@ -188,6 +237,14 @@ impl RegValue {
             self.data.display()
         }
     }
+
+    fn edit_text(&self) -> String {
+        if self.kind == RegType::Delete {
+            String::new()
+        } else {
+            self.data.edit_text()
+        }
+    }
 }
 
 // ---------- keys ----------
@@ -222,6 +279,12 @@ impl RegKey {
 
     pub fn child(&self, name: &str) -> Option<&RegKey> {
         self.children.get(&name.to_lowercase())
+    }
+
+    /// The value named `name` (case-insensitively; empty for the default).
+    pub fn value(&self, name: &str) -> Option<&RegValue> {
+        let lower = name.to_lowercase();
+        self.values.iter().find(|v| v.name.to_lowercase() == lower)
     }
 
     /// Later assignments to the same (case-insensitive) name win, as on import.
@@ -473,6 +536,9 @@ pub struct RegValueDiff {
     pub right_type: Option<String>,
     pub left: Option<String>,
     pub right: Option<String>,
+    /// Full data in the value editor's format (see [`ValueData::edit_text`]).
+    pub left_text: Option<String>,
+    pub right_text: Option<String>,
     pub status: DiffStatus,
 }
 
@@ -482,6 +548,10 @@ pub struct RegKeyDiff {
     pub name: String,
     /// Lower-case path from the compare root; unique within the result.
     pub id: String,
+    /// Full key path on each side (`HKEY_…\…`), for edits. A side missing the
+    /// key gets the path the key would have there.
+    pub left_path: String,
+    pub right_path: String,
     /// Status of the whole subtree.
     pub status: DiffStatus,
     /// This key's own values (or deletion marker) differ, or it is an orphan.
@@ -554,11 +624,21 @@ pub fn compare_trees(left: &RegTree, right: &RegTree) -> RegistryDiff {
     let mut stats = RegistryStats::default();
 
     let roots = if lb.is_empty() {
-        diff_key(lnode, rnode, String::new(), String::new(), &mut stats).children
+        let paths = (String::new(), String::new());
+        diff_key(
+            lnode,
+            rnode,
+            String::new(),
+            String::new(),
+            paths,
+            &mut stats,
+        )
+        .children
     } else {
         let name = lb.join("\\");
         let id = name.to_lowercase();
-        vec![diff_key(lnode, rnode, name, id, &mut stats)]
+        let paths = (name.clone(), rb.join("\\"));
+        vec![diff_key(lnode, rnode, name, id, paths, &mut stats)]
     };
     RegistryDiff {
         roots,
@@ -597,10 +677,20 @@ fn diff_values(
                 right_type: rv.map(|v| v.kind.name()),
                 left: lv.map(RegValue::display),
                 right: rv.map(RegValue::display),
+                left_text: lv.map(RegValue::edit_text),
+                right_text: rv.map(RegValue::edit_text),
                 status,
             }
         })
         .collect()
+}
+
+fn join_path(parent: &str, name: &str) -> String {
+    if parent.is_empty() {
+        name.to_owned()
+    } else {
+        format!("{parent}\\{name}")
+    }
 }
 
 fn diff_key(
@@ -608,6 +698,7 @@ fn diff_key(
     r: Option<&RegKey>,
     name: String,
     id: String,
+    (left_path, right_path): (String, String),
     stats: &mut RegistryStats,
 ) -> RegKeyDiff {
     let values = diff_values(l, r, stats);
@@ -628,7 +719,11 @@ fn diff_key(
             } else {
                 format!("{id}\\{lower}")
             };
-            diff_key(lc, rc, child_name, child_id, stats)
+            let paths = (
+                join_path(&left_path, lc.map_or(&child_name, |c| &c.name)),
+                join_path(&right_path, rc.map_or(&child_name, |c| &c.name)),
+            );
+            diff_key(lc, rc, child_name, child_id, paths, stats)
         })
         .collect();
 
@@ -661,6 +756,8 @@ fn diff_key(
     RegKeyDiff {
         name,
         id,
+        left_path,
+        right_path,
         status,
         values_differ,
         left_deleted,

@@ -251,6 +251,78 @@ pub fn merge3<S: AsRef<str>>(
     Ok(MergeResult { chunks, stats })
 }
 
+/// Two-way merge of `left` and `right` without a common ancestor.
+///
+/// With no base to tell which side changed, every region where the files
+/// differ becomes a [`ChunkKind::Conflict`] for the user to resolve; the
+/// regions where they agree are `Stable`. There is no base, so every chunk's
+/// `base` range is empty. Lines are matched through a [`LineNormalizer`]
+/// like [`merge3`].
+pub fn merge2<S: AsRef<str>>(left: &[S], right: &[S], opts: &TextDiffOptions) -> pcompare_core::Result<MergeResult> {
+    let norm = LineNormalizer::new(opts)?;
+    let keys = |lines: &[S]| -> Vec<String> { lines.iter().map(|l| norm.key(l.as_ref())).collect() };
+    let (left_keys, right_keys) = (keys(left), keys(right));
+    let none = LineRange::new(0, 0);
+    let mut chunks = Vec::new();
+    let mut stats = MergeStats::default();
+    // A hunk's `base` is the left range here: the right file is diffed against the left.
+    let (mut l, mut r) = (0, 0);
+    let stable = |chunks: &mut Vec<MergeChunk>, l: usize, r: usize, len: usize| {
+        if len > 0 {
+            chunks.push(MergeChunk {
+                kind: ChunkKind::Stable,
+                base: none,
+                left: LineRange::new(l, l + len),
+                right: LineRange::new(r, r + len),
+                conflict: None,
+            });
+        }
+    };
+    for h in hunks(&left_keys, &right_keys, opts) {
+        stable(&mut chunks, l, r, h.base.start - l);
+        stats.conflicts += 1;
+        chunks.push(MergeChunk {
+            kind: ChunkKind::Conflict,
+            base: none,
+            left: h.base,
+            right: h.side,
+            conflict: Some(stats.conflicts),
+        });
+        (l, r) = (h.base.end, h.side.end);
+    }
+    stable(&mut chunks, l, r, left.len() - l);
+    Ok(MergeResult { chunks, stats })
+}
+
+/// A whole-file merge: the chunks and the rendered output text.
+#[derive(Debug, Clone, Serialize)]
+pub struct MergedText {
+    pub merge: MergeResult,
+    /// Merged text (`\n` line breaks) with conflict markers around every
+    /// unresolved conflict.
+    pub text: String,
+}
+
+/// Merges whole texts: [`merge3`] when `base` is given, else [`merge2`].
+/// The trailing line break is merged three-way, or taken from the left text
+/// in a two-way merge.
+pub fn merge_text(base: Option<&str>, left: &str, right: &str, opts: &TextDiffOptions) -> pcompare_core::Result<MergedText> {
+    let (l, lt) = crate::split_lines(left);
+    let (r, rt) = crate::split_lines(right);
+    let (merge, trailing) = match base {
+        Some(base) => {
+            let (b, bt) = crate::split_lines(base);
+            (merge3(&b, &l, &r, opts)?, merge_trailing_newline(bt, lt, rt))
+        }
+        None => (merge2(&l, &r, opts)?, lt),
+    };
+    let lines = render_output(&merge, &l, &r);
+    Ok(MergedText {
+        text: crate::join_lines(&lines, trailing),
+        merge,
+    })
+}
+
 /// The opening marker line of conflict `n`.
 pub fn conflict_start_marker(n: usize) -> String {
     format!("{CONFLICT_START} Left #{n}")
@@ -539,6 +611,82 @@ mod tests {
             ..Default::default()
         };
         assert!(merge3(&["a"], &["b"], &["c"], &bad).is_err());
+    }
+
+    fn merge_two(left: &str, right: &str) -> Merged {
+        let (l, r) = (lines(left), lines(right));
+        let result = merge2(&l, &r, &TextDiffOptions::default()).unwrap();
+        // Chunks tile both files; stable chunks pair equal-length runs.
+        let (mut li, mut ri) = (0, 0);
+        for c in &result.chunks {
+            assert_eq!((c.left.start, c.right.start), (li, ri), "gap before {c:?}");
+            if c.kind == ChunkKind::Stable {
+                assert_eq!(c.left.len(), c.right.len());
+            }
+            (li, ri) = (c.left.end, c.right.end);
+        }
+        assert_eq!((li, ri), (l.len(), r.len()));
+        let output = render_output(&result, &l, &r);
+        Merged { result, output }
+    }
+
+    #[test]
+    fn two_way_merge_makes_every_difference_a_conflict() {
+        let m = merge_two("a\nb\nc\nd\n", "a\nB\nc\nd\nnew\n");
+        assert_eq!(kinds(&m), vec![Stable, Conflict, Stable, Conflict]);
+        assert_eq!(m.result.stats.conflicts, 2);
+        assert_eq!(m.result.stats.auto_merged(), 0);
+        let c = &m.result.chunks[3];
+        assert_eq!((c.left, c.right, c.conflict), (LineRange::new(4, 4), LineRange::new(4, 5), Some(2)));
+        assert!(m.result.chunks.iter().all(|c| c.base.is_empty()));
+        assert_eq!(
+            m.output,
+            vec![
+                "a",
+                "<<<<<<< Left #1",
+                "b",
+                "=======",
+                "B",
+                ">>>>>>> Right #1",
+                "c",
+                "d",
+                "<<<<<<< Left #2",
+                "=======",
+                "new",
+                ">>>>>>> Right #2"
+            ]
+        );
+    }
+
+    #[test]
+    fn two_way_merge_of_identical_or_empty_files() {
+        assert_eq!(kinds(&merge_two("a\nb\n", "a\nb\n")), vec![Stable]);
+        assert!(merge_two("", "").result.chunks.is_empty());
+        assert_eq!(kinds(&merge_two("", "x\n")), vec![Conflict]);
+        assert_eq!(kinds(&merge_two("x\n", "")), vec![Conflict]);
+        // Normalization options decide what differs, as in a 3-way merge.
+        let opts = TextDiffOptions {
+            ignore_case: true,
+            ..Default::default()
+        };
+        let m = merge2(&lines("A\nb"), &lines("a\nb"), &opts).unwrap();
+        assert_eq!(m.chunks.len(), 1);
+        assert_eq!(m.stats.conflicts, 0);
+    }
+
+    #[test]
+    fn whole_text_merge() {
+        let opts = TextDiffOptions::default();
+        let clean = merge_text(Some("a\nb\nc\n"), "A\nb\nc\n", "a\nb\nC", &opts).unwrap();
+        assert_eq!(clean.merge.stats.conflicts, 0);
+        // Right dropped the final line break; that change is merged too.
+        assert_eq!(clean.text, "A\nb\nC");
+        let conflict = merge_text(Some("a\n"), "l\n", "r\n", &opts).unwrap();
+        assert_eq!(conflict.merge.stats.conflicts, 1);
+        assert_eq!(conflict.text, "<<<<<<< Left #1\nl\n=======\nr\n>>>>>>> Right #1\n");
+        let two = merge_text(None, "x\ny\n", "x\nz", &opts).unwrap();
+        assert_eq!(two.merge.stats.conflicts, 1);
+        assert!(two.text.ends_with(">>>>>>> Right #1\n"), "{:?}", two.text);
     }
 
     #[test]

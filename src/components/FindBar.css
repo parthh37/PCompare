@@ -1,0 +1,42 @@
+/* Find / Replace strip of the Text Compare view. */
+.findbar {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 5px 10px;
+  border-bottom: 1px solid var(--border);
+  background: var(--panel);
+}
+.fb-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.fb-icon {
+  color: var(--muted);
+  flex-shrink: 0;
+}
+.fb-input {
+  flex: 0 1 320px;
+  min-width: 140px;
+  font-family: var(--mono);
+  font-size: 12.5px;
+}
+.fb-input.fb-miss {
+  border-color: var(--different);
+}
+.fb-toggle.active,
+.findbar .icon-btn.active {
+  color: var(--accent);
+  border-color: var(--accent);
+  background: rgba(91, 156, 255, 0.14);
+}
+.fb-status {
+  min-width: 80px;
+  color: var(--muted);
+  font-size: 12px;
+  white-space: nowrap;
+}
+.fb-status.error {
+  color: var(--different);
+}

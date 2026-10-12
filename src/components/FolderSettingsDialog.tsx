@@ -1,6 +1,6 @@
 import { useState } from "react";
-import type { ContentMethod, WhitespaceMode } from "../lib/api";
-import type { CompareSettings } from "../lib/folderSettings";
+import { ATTR, type ContentMethod, type WhitespaceMode } from "../lib/api";
+import { parseAlignRules, type CompareSettings } from "../lib/folderSettings";
 import { Modal } from "./Modal";
 
 interface Props {
@@ -9,7 +9,14 @@ interface Props {
   onClose: () => void;
 }
 
-type Page = "comparison" | "filters" | "rules";
+type Page = "comparison" | "alignment" | "filters" | "rules";
+
+/** Attribute exclusions offered on the Filters page (hidden has its own switch). */
+const ATTR_FILTERS: { bit: number; label: string }[] = [
+  { bit: ATTR.readonly, label: "Read-only" },
+  { bit: ATTR.system, label: "System" },
+  { bit: ATTR.archive, label: "Archive" },
+];
 
 const CONTENT_METHODS: { value: ContentMethod; label: string; help: string }[] = [
   { value: "off", label: "Off", help: "Only the quick tests decide." },
@@ -20,6 +27,11 @@ const CONTENT_METHODS: { value: ContentMethod; label: string; help: string }[] =
     label: "Rules-based",
     help: "Compares text with the rules tab: encoding, line endings, whitespace, case and ignored patterns can be unimportant (shown as ≈ similar). Binary files fall back to binary.",
   },
+  {
+    value: "version",
+    label: "Exe/dll version",
+    help: "Executables and libraries with the same version resource are the same even if their bytes differ. Other files fall back to binary.",
+  },
 ];
 
 /** Beyond Compare-style session settings: comparison, filters, text rules. */
@@ -29,6 +41,9 @@ export function FolderSettingsDialog({ value, onApply, onClose }: Props) {
   const set = <K extends keyof CompareSettings>(k: K, v: CompareSettings[K]) => setS((p) => ({ ...p, [k]: v }));
   const setRules = (patch: Partial<CompareSettings["rules"]>) => setS((p) => ({ ...p, rules: { ...p.rules, ...patch } }));
   const num = (v: string) => (v.trim() === "" ? null : Math.max(0, Number(v)));
+  const toggleAttr = (bit: number, on: boolean) =>
+    setS((p) => ({ ...p, excludeAttributes: on ? p.excludeAttributes | bit : p.excludeAttributes & ~bit }));
+  const badRules = parseAlignRules(s.alignRules).invalid;
 
   return (
     <Modal
@@ -54,6 +69,7 @@ export function FolderSettingsDialog({ value, onApply, onClose }: Props) {
         {(
           [
             ["comparison", "Comparison"],
+            ["alignment", "Alignment"],
             ["filters", "Filters"],
             ["rules", "Text rules"],
           ] as [Page, string][]
@@ -99,6 +115,17 @@ export function FolderSettingsDialog({ value, onApply, onClose }: Props) {
               />
               Ignore 1-hour differences (DST / FAT)
             </label>
+            <label className="field check">
+              <input
+                type="checkbox"
+                checked={s.compareAttributes}
+                onChange={(e) => set("compareAttributes", e.target.checked)}
+              />
+              Compare attributes
+            </label>
+            <small className="muted">
+              Read-only, hidden and system attributes (Unix: permission bits) must match too. Archive is ignored.
+            </small>
           </fieldset>
 
           <fieldset>
@@ -130,6 +157,88 @@ export function FolderSettingsDialog({ value, onApply, onClose }: Props) {
               When on, contents decide (identical files with different timestamps are “same”). When off, files must
               pass both.
             </small>
+          </fieldset>
+        </div>
+      )}
+
+      {page === "alignment" && (
+        <div className="settings-grid">
+          <fieldset>
+            <legend>Names</legend>
+            <label className="field check">
+              <input
+                type="checkbox"
+                checked={s.caseSensitiveNames}
+                onChange={(e) => set("caseSensitiveNames", e.target.checked)}
+              />
+              Case-sensitive filenames
+            </label>
+            <small className="muted">When off, Readme.md lines up with README.md (the Windows default).</small>
+            <label className="field check">
+              <input type="checkbox" checked={s.alignUnicode} onChange={(e) => set("alignUnicode", e.target.checked)} />
+              Align different Unicode forms
+            </label>
+            <small className="muted">
+              Pairs composed (NFC) and decomposed (NFD) spellings of a name — macOS stores the latter.
+            </small>
+            <label className="field check">
+              <input type="checkbox" checked={s.followLinks} onChange={(e) => set("followLinks", e.target.checked)} />
+              Follow symbolic links and junctions
+            </label>
+            <small className="muted">
+              When off, links are listed as links (marked with a link icon) and compared by where they point.
+            </small>
+            {/* bc5:archives */}
+            <label className="field check">
+              <input
+                type="checkbox"
+                checked={s.expandArchives}
+                onChange={(e) => set("expandArchives", e.target.checked)}
+              />
+              Expand archives as folders
+            </label>
+            <small className="muted">
+              Zip, jar, tar(.gz/.bz2/.xz), gz and 7z files in the trees open like folders and their contents are
+              compared. When off (the default), archives are compared as files.
+            </small>
+          </fieldset>
+
+          <fieldset>
+            <legend>Alignment overrides</legend>
+            <label className="field check">
+              <input
+                type="checkbox"
+                checked={s.ignoreExtensions}
+                onChange={(e) => set("ignoreExtensions", e.target.checked)}
+              />
+              Ignore file extensions (report.txt ↔ report.md)
+            </label>
+            <label className="field">
+              <span>Equivalent extensions (one group per line)</span>
+              <textarea
+                rows={3}
+                spellCheck={false}
+                disabled={s.ignoreExtensions}
+                placeholder={"htm, html\njpg, jpeg"}
+                value={s.extensionGroups}
+                onChange={(e) => set("extensionGroups", e.target.value)}
+              />
+            </label>
+            <label className="field">
+              <span>Align names (one rule per line: left =&gt; right)</span>
+              <textarea
+                rows={3}
+                spellCheck={false}
+                placeholder={"Apples* => Bananas*\nreport-?.csv => summary-?.csv"}
+                value={s.alignRules}
+                onChange={(e) => set("alignRules", e.target.value)}
+              />
+              {badRules.length > 0 ? (
+                <small className="fc-error-text">Not a rule (needs “=&gt;”): {badRules.join(" · ")}</small>
+              ) : (
+                <small className="muted">* matches any text, ? one character; the matched parts must be equal.</small>
+              )}
+            </label>
           </fieldset>
         </div>
       )}
@@ -205,6 +314,73 @@ export function FolderSettingsDialog({ value, onApply, onClose }: Props) {
               </label>
             </div>
             <small className="muted">Size and date filters apply to files only.</small>
+          </fieldset>
+
+          <fieldset>
+            <legend>Contents</legend>
+            <label className="field">
+              <span>Only files containing</span>
+              <input
+                value={s.includeContaining}
+                placeholder="(any contents)"
+                spellCheck={false}
+                onChange={(e) => set("includeContaining", e.target.value)}
+              />
+            </label>
+            <label className="field">
+              <span>Exclude files containing</span>
+              <input
+                value={s.excludeContaining}
+                placeholder="DO NOT EDIT"
+                spellCheck={false}
+                onChange={(e) => set("excludeContaining", e.target.value)}
+              />
+            </label>
+            <div className="field-row">
+              <label className="field check">
+                <input
+                  type="checkbox"
+                  checked={s.containingRegex}
+                  onChange={(e) => set("containingRegex", e.target.checked)}
+                />
+                Regular expression
+              </label>
+              <label className="field check">
+                <input
+                  type="checkbox"
+                  checked={s.containingMatchCase}
+                  onChange={(e) => set("containingMatchCase", e.target.checked)}
+                />
+                Match case
+              </label>
+            </div>
+            <small className="muted">
+              Reads the first 4 MB of each text file; binary files never match. A pair stays if either side passes.
+            </small>
+          </fieldset>
+
+          <fieldset>
+            <legend>Attributes</legend>
+            <small className="muted">Exclude entries that are…</small>
+            {ATTR_FILTERS.map((a) => (
+              <label key={a.bit} className="field check">
+                <input
+                  type="checkbox"
+                  checked={(s.excludeAttributes & a.bit) !== 0}
+                  onChange={(e) => toggleAttr(a.bit, e.target.checked)}
+                />
+                {a.label}
+              </label>
+            ))}
+            <label className="field check">
+              <input
+                type="checkbox"
+                checked={s.excludeExecutable}
+                onChange={(e) => set("excludeExecutable", e.target.checked)}
+              />
+              Executable (Unix)
+            </label>
+            <small className="muted">Hidden files: see “Include hidden files”. Remote folders have no attributes.</small>
           </fieldset>
         </div>
       )}
