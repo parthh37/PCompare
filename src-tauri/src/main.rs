@@ -1,6 +1,7 @@
 // Hide the console window on Windows release builds.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod db;
 mod merge;
 mod meta;
 mod picture;
@@ -20,6 +21,7 @@ use pcompare_remote::provider::{self, ProviderKind, ProviderSpec};
 use pcompare_remote::RemoteManager;
 use serde::Serialize;
 use std::path::PathBuf;
+use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 use tauri::{AppHandle, Manager};
 use tauri_plugin_opener::OpenerExt;
@@ -28,6 +30,10 @@ struct AppState {
     sessions: SessionStore,
     remote: RemoteManager,
     watchers: watch::Watchers,
+    /// Saved database connections (passwords in the OS keychain).
+    db: pcompare_db::connection::ConnectionStore,
+    /// Set by `db_cancel` to stop a running data compare between tables.
+    db_cancel: AtomicBool,
 }
 
 fn state(app: &AppHandle) -> tauri::State<'_, AppState> {
@@ -418,6 +424,11 @@ fn main() {
                 sessions: SessionStore::new(config_dir.join("sessions.json")),
                 remote,
                 watchers: watch::Watchers::default(),
+                db: pcompare_db::connection::ConnectionStore::new(
+                    config_dir.join("db-connections.json"),
+                    Box::new(KeyringSecrets),
+                ),
+                db_cancel: AtomicBool::new(false),
             });
             Ok(())
         })
@@ -467,6 +478,20 @@ fn main() {
             meta::compare_registry,
             meta::compare_versions,
             meta::compare_audio,
+            // --- database compare (db.rs) ---
+            db::db_list_connections,
+            db::db_save_connection,
+            db::db_delete_connection,
+            db::db_test_connection,
+            db::db_list_databases,
+            db::db_is_sqlite,
+            db::db_compare_schema,
+            db::db_schema_script,
+            db::db_compare_data,
+            db::db_table_data,
+            db::db_data_script,
+            db::db_cancel,
+            db::db_execute_script,
         ])
         .run(tauri::generate_context!())
         .expect("error while running PCompare");
