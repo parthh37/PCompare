@@ -32,3 +32,43 @@ jobs:
       - run: npm ci
       - run: npm run build
       - run: cargo clippy --workspace --all-targets -- -D warnings
+
+  # Installable builds of every PR: the Windows NSIS installer (which also
+  # exercises the Explorer context-menu hooks) and an Apple Silicon DMG.
+  # Updater signing is switched off so PRs don't need the release key.
+  bundles:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: windows-x64
+            platform: windows-latest
+            args: --bundles nsis
+            target: ""
+          - name: macos-apple-silicon
+            platform: macos-latest
+            args: --target aarch64-apple-darwin --bundles dmg
+            target: aarch64-apple-darwin
+    runs-on: ${{ matrix.platform }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: bundle-${{ matrix.name }}
+      - run: npm ci
+      - run: npx tauri build ${{ matrix.args }} --config '{"bundle":{"createUpdaterArtifacts":false}}'
+        shell: bash
+      - uses: actions/upload-artifact@v4
+        with:
+          name: PCompare-${{ matrix.name }}
+          path: |
+            target/release/bundle/nsis/*.exe
+            target/aarch64-apple-darwin/release/bundle/dmg/*.dmg
+          if-no-files-found: error

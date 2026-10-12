@@ -8,8 +8,6 @@ import {
   CircleX,
   Equal,
   EqualNot,
-  File,
-  Folder,
   GitMerge,
   Minus,
   Plus,
@@ -36,6 +34,7 @@ import { Modal } from "./Modal";
 import { PathField } from "./PathField";
 import { VirtualList, type VirtualListHandle } from "./VirtualList";
 import "./FolderMerge.css";
+import { FileIcon } from "./icons";
 
 type Filter = "all" | "changes" | "conflicts";
 
@@ -382,7 +381,7 @@ export function FolderMerge({
     return (
       <div className={`fm-cell side st-${state}${meta ? "" : " absent"}`} title={tip}>
         {Icon && <Icon size={12} />}
-        {meta && (meta.isDir ? <Folder size={13} className="ic-folder" /> : <span>{formatSize(meta.size)}</span>)}
+        {meta && (meta.isDir ? <FileIcon name="" isDir size={14} /> : <span>{formatSize(meta.size)}</span>)}
       </div>
     );
   };
@@ -415,7 +414,7 @@ export function FolderMerge({
             <span className="chevron" />
           )}
           <span className="ficon">
-            {e.isDir ? <Folder size={14} className="ic-folder" /> : <File size={14} className="ic-file" />}
+            <FileIcon name={e.name} isDir={e.isDir} open={expanded.has(e.relPath)} />
           </span>
           {e.name}
         </div>
