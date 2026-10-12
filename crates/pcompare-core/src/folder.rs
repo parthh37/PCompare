@@ -689,3 +689,31 @@ pub fn compare_folders_with(
         elapsed_ms: started.elapsed().as_millis(),
     })
 }
+
+#[cfg(test)]
+mod timestamp_tests {
+    use super::*;
+
+    const HOUR_MS: i64 = 3_600_000;
+
+    #[test]
+    fn tolerance_absorbs_fat_rounding() {
+        let opts = FolderCompareOptions::default(); // 2 s tolerance
+        let t = 1_700_000_000_000;
+        assert!(timestamps_match(Some(t), Some(t), &opts));
+        assert!(timestamps_match(Some(t), Some(t + 2_000), &opts));
+        assert!(timestamps_match(Some(t + 2_000), Some(t), &opts));
+        assert!(!timestamps_match(Some(t), Some(t + 2_001), &opts));
+    }
+
+    #[test]
+    fn dst_shift_is_exactly_one_hour_within_tolerance() {
+        let t = 1_700_000_000_000;
+        let mut opts = FolderCompareOptions::default();
+        assert!(!timestamps_match(Some(t), Some(t + HOUR_MS), &opts));
+        opts.ignore_dst_shift = true;
+        assert!(timestamps_match(Some(t), Some(t + HOUR_MS), &opts));
+        assert!(timestamps_match(Some(t + HOUR_MS + 1_500), Some(t), &opts));
+        assert!(!timestamps_match(Some(t), Some(t + 2 * HOUR_MS), &opts));
+    }
+}

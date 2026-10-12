@@ -152,15 +152,30 @@ export function extension(path: string): string {
   return dot > 0 ? name.slice(dot + 1).toLowerCase() : "";
 }
 
+// Extensions each engine can open (keep in step with the crates' readers).
+const VIEWER_BY_EXT: Record<string, CompareKind> = {};
+const register = (kind: CompareKind, exts: string) => {
+  for (const ext of exts.split(" ")) VIEWER_BY_EXT[ext] = kind;
+};
+register("table", "csv tsv tab xlsx xlsm xlsb xls xla xlam ods");
+register("picture", "png jpg jpeg gif bmp ico tif tiff webp tga pnm pbm pgm ppm qoi");
+register("mp3", "mp3 flac ogg opus m4a aac wav aif aiff wv ape mpc spx");
+register("version", "exe dll sys ocx cpl drv scr");
+register("registry", "reg");
+register(
+  "hex",
+  "bin dat img iso zip 7z rar gz tgz bz2 xz zst jar war apk class o obj lib a so dylib pdb " +
+    "pdf doc ppt msi cab db sqlite woff woff2 ttf otf mp4 mov mkv avi",
+);
+
 /**
  * Picks the viewer for a pair of *files* (folders always open Folder Compare).
  * Used for drag-and-drop, the command line, and double-clicks in Folder Compare.
+ * A specialised viewer is chosen only when both sides agree on it; anything
+ * else (unknown or mismatched types) opens in Text Compare.
  */
 export function sessionForFiles(left: string, right: string): CompareKind {
-  const l = extension(left);
-  const r = extension(right);
-  // TODO(you): route files to the right viewer by extension — see the chat notes.
-  void l;
-  void r;
-  return "text";
+  const l = VIEWER_BY_EXT[extension(left)];
+  const r = VIEWER_BY_EXT[extension(right)];
+  return l && l === r ? l : "text";
 }
