@@ -7,7 +7,10 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+base64 = "0.23.1"
+lofty = "0.25.4"
 pcompare-core = { path = "../pcompare-core" }
+pelite = "0.10.0"
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true

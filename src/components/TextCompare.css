@@ -1,0 +1,69 @@
+/* Editing additions to the Text Compare view (base styles live in styles.css). */
+.tc-editable .trow {
+  grid-template-columns: 52px 1fr 40px 52px 1fr;
+}
+.tc-editable .trow .mid {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 1px;
+  background: var(--panel);
+  border-inline: 1px solid var(--border);
+}
+.tc-editable .trow.current .mid {
+  background: rgba(91, 156, 255, 0.12);
+}
+.tc-gutter-btn {
+  height: 17px;
+  width: 17px;
+  padding: 0;
+  justify-content: center;
+  border-radius: 3px;
+  border-color: transparent;
+  background: transparent;
+  color: var(--muted);
+}
+.tc-gutter-btn:hover:not(:disabled) {
+  color: var(--accent);
+  border-color: var(--accent);
+  background: var(--panel-2);
+}
+.tc-editable .tcell {
+  position: relative;
+}
+.tc-edit-input {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  padding: 0 5px;
+  border-radius: 0;
+  border-color: var(--accent);
+  background: var(--bg);
+  font-family: var(--mono);
+  font-size: 13px;
+  line-height: 18px;
+}
+.tc-dirty {
+  color: var(--warn);
+}
+.tc-dirty-dot {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--warn);
+  vertical-align: 1px;
+}
+.tc-readonly {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+}
+.statusbar .tc-hint {
+  margin-left: auto;
+  color: var(--muted);
+}
+.statusbar .tc-stale {
+  color: var(--warn);
+}
