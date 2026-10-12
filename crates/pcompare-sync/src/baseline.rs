@@ -112,6 +112,7 @@ mod tests {
             size,
             modified_ms: Some(ms),
             is_dir: false,
+            ..Default::default() // bc5:folder-engine
         }
     }
 
@@ -128,6 +129,7 @@ mod tests {
             error: None,
             content_checked: None::<ContentMethod>,
             crc: None,
+            left_rel_path: None, // bc5:folder-engine
         }
     }
 

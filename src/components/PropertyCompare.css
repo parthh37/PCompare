@@ -7,14 +7,14 @@
 .prop-row {
   display: grid;
   grid-template-columns: minmax(150px, 24%) minmax(0, 1fr) minmax(0, 1fr);
-  border-bottom: 1px solid rgba(255, 255, 255, 0.035);
+  border-bottom: 1px solid var(--hairline);
 }
 .prop-row > div {
   padding: 3px 8px;
   min-width: 0;
 }
 .prop-row:hover {
-  background: rgba(255, 255, 255, 0.03);
+  background: var(--row-hover);
 }
 .prop-head {
   position: sticky;

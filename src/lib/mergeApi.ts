@@ -51,7 +51,8 @@ export interface MergeStats {
 
 export interface MergeLoad {
   left: TextDocument;
-  base: TextDocument;
+  /** `null` in a two-way merge (no base file): every difference is then a conflict. */
+  base: TextDocument | null;
   right: TextDocument;
   merge: { chunks: MergeChunk[]; stats: MergeStats };
   /** Auto-merged output; unresolved conflicts are wrapped in markers (see TextMerge). */
@@ -66,6 +67,7 @@ export const mergeApi = {
     invoke<TextDiffResult>("diff_texts", { left, right, options }),
   saveTextFile: (path: string, text: string, format: TextFormat) =>
     invoke<TextFileInfo>("save_text_file", { path, text, format }),
+  /** An empty `base` runs a two-way merge. */
   loadMerge: (left: string, base: string, right: string, options: TextDiffOptions) =>
     invoke<MergeLoad>("load_merge", { left, base, right, options }),
 };

@@ -13,7 +13,9 @@
 pub mod baseline;
 pub mod exec;
 pub mod failure;
+pub mod fileops; // bc5:file-ops
 pub mod fsops;
 pub mod journal;
 pub mod merge;
+pub mod remote; // bc5:remote-write
 pub mod sync;

@@ -3,8 +3,8 @@
 
 use super::{RegTree, RegType, RegValue, ValueData};
 
-const HEADER_V5: &str = "Windows Registry Editor Version 5.00";
-const HEADER_V4: &str = "REGEDIT4";
+pub(super) const HEADER_V5: &str = "Windows Registry Editor Version 5.00";
+pub(super) const HEADER_V4: &str = "REGEDIT4";
 
 /// Parses the decoded text of a `.reg` file. Malformed lines are skipped and
 /// reported in [`RegTree::warnings`]; only a missing header is fatal.
@@ -51,7 +51,7 @@ pub fn parse_reg(text: &str) -> Result<RegTree, String> {
 
 /// A line continues when it ends in `\` outside of a quoted string
 /// (hex data is wrapped at 80 columns this way).
-fn continues(line: &str) -> bool {
+pub(super) fn continues(line: &str) -> bool {
     let line = line.trim_end();
     if !line.ends_with('\\') {
         return false;
@@ -122,7 +122,7 @@ fn parse_line(
 }
 
 /// Reads a `"…"` string with `\\` and `\"` escapes; returns it and the rest.
-fn quoted(s: &str) -> Result<(String, &str), String> {
+pub(super) fn quoted(s: &str) -> Result<(String, &str), String> {
     let body = s.strip_prefix('"').ok_or("expected '\"'")?;
     let mut out = String::new();
     let mut chars = body.char_indices();

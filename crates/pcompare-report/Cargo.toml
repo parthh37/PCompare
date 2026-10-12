@@ -1,0 +1,17 @@
+[package]
+name = "pcompare-report"
+description = "HTML, text, patch and CSV reports of PCompare text, folder and table comparisons"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+pcompare-core = { path = "../pcompare-core" }
+pcompare-table = { path = "../pcompare-table" }
+serde.workspace = true
+# Local time for "produced" stamps and file dates (pure Rust; no C build).
+chrono = { version = "0.4", default-features = false, features = ["std", "clock"] }
+
+[dev-dependencies]
+tempfile = "3"

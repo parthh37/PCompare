@@ -76,6 +76,9 @@ export interface RegValueDiff {
   rightType: string | null;
   left: string | null;
   right: string | null;
+  /** Full data in the value editor's text form (numbers as 0x hex, binary as spaced hex, multi-strings one per line). */
+  leftText: string | null;
+  rightText: string | null;
   status: DiffStatus;
 }
 
@@ -83,6 +86,9 @@ export interface RegKeyDiff {
   name: string;
   /** Lower-case path from the compare root; unique within a result. */
   id: string;
+  /** Full key path on each side (`HKEY_…\…`); a side missing the key gets the path it would have there. */
+  leftPath: string;
+  rightPath: string;
   /** Status of the whole subtree. */
   status: DiffStatus;
   /** This key's own values (or deletion marker) differ, or it is an orphan. */
@@ -119,9 +125,40 @@ export interface RegistryCompareResult {
   right: RegistrySourceInfo;
 }
 
+export type RegSide = "left" | "right";
+
+/** One registry change; key paths are full (`HKEY_…\…`). */
+export type RegEdit =
+  | { op: "setValue"; key: string; name: string; valueType: string; data: string }
+  | { op: "deleteValue"; key: string; name: string }
+  | { op: "addKey"; key: string }
+  | { op: "deleteKey"; key: string }
+  /** Makes `to` a recursive copy of `from` on the other side (deletes it when `from` is absent there). */
+  | { op: "copyKey"; from: string; to: string }
+  /** Makes the value equal to the other side's (deletes it when absent there). */
+  | { op: "copyValue"; fromKey: string; toKey: string; name: string };
+
+export interface SideEdit {
+  side: RegSide;
+  edit: RegEdit;
+}
+
 export const metaApi = {
-  compareRegistry: (left: string, right: string) =>
-    invoke<RegistryCompareResult>("compare_registry", { left, right }),
+  /**
+   * Compares after replaying `edits` (unsaved .reg changes, oldest first).
+   * `reload` (default true) re-reads live keys instead of reusing the last read.
+   */
+  compareRegistry: (left: string, right: string, edits: SideEdit[] = [], reload = true) =>
+    invoke<RegistryCompareResult>("compare_registry", { left, right, edits, reload }),
+  /** Writes the .reg files of `sides` with `edits` applied, keeping each file's format. */
+  registrySave: (left: string, right: string, edits: SideEdit[], sides: RegSide[]) =>
+    invoke<void>("registry_save", { left, right, edits, sides }),
+  /** The `reg …` commands that would apply `edit` to the live key on `side`. */
+  registryLivePlan: (left: string, right: string, edits: SideEdit[], side: RegSide, edit: RegEdit) =>
+    invoke<string[]>("registry_live_plan", { left, right, edits, side, edit }),
+  /** Applies `edit` to the live key on `side` with reg add / reg delete (Windows only). */
+  registryApplyLive: (left: string, right: string, edits: SideEdit[], side: RegSide, edit: RegEdit) =>
+    invoke<void>("registry_apply_live", { left, right, edits, side, edit }),
   compareVersions: (left: string, right: string) => invoke<VersionCompareResult>("compare_versions", { left, right }),
   compareAudio: (left: string, right: string) => invoke<AudioCompareResult>("compare_audio", { left, right }),
 };

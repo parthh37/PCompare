@@ -1,13 +1,17 @@
 //! Table (CSV / TSV / Excel / HTML) comparison engine for PCompare.
 //!
 //! Both sides are loaded into a grid of strings ([`load`]), columns are paired
-//! (by header name when both sides have headers, otherwise by position), rows
-//! are aligned (by key columns, or by a diff over whole rows) and every paired
-//! row is compared cell by cell.
+//! (by header name when both sides have headers, otherwise by position, or by
+//! an explicit mapping), rows are optionally sorted, then aligned (by key
+//! columns, or by a diff over whole rows) and every paired row is compared
+//! cell by cell. [`sheets`] runs that over every worksheet / HTML table.
 
+pub mod dates;
 pub mod load;
+pub mod sheets;
 
-pub use load::{load_table, LoadOptions, MAX_CELLS, MAX_ROWS};
+pub use load::{load_table, LoadOptions, TableBook, MAX_CELLS, MAX_ROWS};
+pub use sheets::{compare_all_sheets, pair_sheets, SheetColumns, SheetComparison, SheetsCompareResult};
 
 use pcompare_core::Result;
 use serde::{Deserialize, Serialize};
@@ -81,11 +85,32 @@ impl Table {
     }
 }
 
+/// One entry of a manual column mapping: 0-based source columns, either of
+/// which may be `None` to leave the other side's column unmatched.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ColumnPair {
+    pub left: Option<usize>,
+    pub right: Option<usize>,
+}
+
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct TableCompareOptions {
     /// The first row of each side holds column names.
     pub has_header: bool,
+    /// Per-side override of `has_header` (files with and without a header row).
+    pub left_header: Option<bool>,
+    pub right_header: Option<bool>,
+    /// Pairs columns explicitly, in this order, instead of by header name /
+    /// position. Source columns it doesn't mention are appended unmatched.
+    pub column_mapping: Option<Vec<ColumnPair>>,
+    /// Sort both sides before aligning rows.
+    pub sort_rows: bool,
+    /// Indices into the result's `columns` to sort on; empty sorts on all
+    /// columns. Independent of `key_columns` (with keys it orders rows that
+    /// share a key).
+    pub sort_columns: Vec<usize>,
     /// Indices into the result's `columns`; rows are sorted and matched on these.
     pub key_columns: Vec<usize>,
     /// Indices into the result's `columns`; differences there are unimportant.
@@ -95,6 +120,9 @@ pub struct TableCompareOptions {
     /// When set, cells that both parse as numbers are equal if they differ by
     /// at most this much (so `0.0` makes `1.0` equal `1`).
     pub numeric_tolerance: Option<f64>,
+    /// When set, cells that both parse as dates / times ([`dates`]) are equal
+    /// if they are at most this many seconds apart.
+    pub date_tolerance: Option<f64>,
     /// Field delimiter for delimited text; sniffed when `None`.
     pub delimiter: Option<char>,
     /// Worksheet / HTML table index per side.
@@ -102,15 +130,31 @@ pub struct TableCompareOptions {
     pub right_sheet: Option<usize>,
 }
 
+impl TableCompareOptions {
+    /// Whether each side's first row holds column names.
+    pub fn headers(&self) -> (bool, bool) {
+        (
+            self.left_header.unwrap_or(self.has_header),
+            self.right_header.unwrap_or(self.has_header),
+        )
+    }
+}
+
 impl Default for TableCompareOptions {
     fn default() -> Self {
         TableCompareOptions {
             has_header: true,
+            left_header: None,
+            right_header: None,
+            column_mapping: None,
+            sort_rows: false,
+            sort_columns: Vec::new(),
             key_columns: Vec::new(),
             ignored_columns: Vec::new(),
             ignore_case: false,
             trim_whitespace: true,
             numeric_tolerance: None,
+            date_tolerance: None,
             delimiter: None,
             left_sheet: None,
             right_sheet: None,
@@ -184,6 +228,9 @@ pub struct TableCompareResult {
     pub identical: bool,
     /// Either side was cut short by the size caps.
     pub truncated: bool,
+    /// Indices into `columns` the rows were sorted on before aligning
+    /// (`None` when sorting was off).
+    pub sorted_by: Option<Vec<usize>>,
 }
 
 /// Loads both files and compares them.
@@ -204,7 +251,8 @@ pub fn compare_files(left: &Path, right: &Path, options: &TableCompareOptions) -
 
 /// Compares two loaded tables.
 pub fn compare_tables(left: &Table, right: &Table, options: &TableCompareOptions) -> TableCompareResult {
-    let mut columns = pair_columns(left, right, options.has_header);
+    let (lhead, rhead) = options.headers();
+    let mut columns = pair_columns(left, right, lhead, rhead, options.column_mapping.as_deref());
     for &k in &options.key_columns {
         if let Some(c) = columns.get_mut(k) {
             c.key = c.left.is_some() && c.right.is_some();
@@ -217,9 +265,27 @@ pub fn compare_tables(left: &Table, right: &Table, options: &TableCompareOptions
     }
 
     let cmp = Comparer::new(options);
-    let skip = usize::from(options.has_header);
-    let lrows: Vec<usize> = (skip.min(left.rows.len())..left.rows.len()).collect();
-    let rrows: Vec<usize> = (skip.min(right.rows.len())..right.rows.len()).collect();
+    let body =
+        |t: &Table, header: bool| -> Vec<usize> { (usize::from(header).min(t.rows.len())..t.rows.len()).collect() };
+    let mut lrows = body(left, lhead);
+    let mut rrows = body(right, rhead);
+
+    let sorted_by = options.sort_rows.then(|| {
+        let by: Vec<usize> = if options.sort_columns.is_empty() {
+            (0..columns.len()).collect()
+        } else {
+            options
+                .sort_columns
+                .iter()
+                .copied()
+                .filter(|&i| i < columns.len())
+                .collect()
+        };
+        let sort_cols: Vec<&ColumnInfo> = by.iter().map(|&i| &columns[i]).collect();
+        sort_rows(left, &mut lrows, &sort_cols, |c| c.left, &cmp);
+        sort_rows(right, &mut rrows, &sort_cols, |c| c.right, &cmp);
+        by
+    });
 
     let keys: Vec<&ColumnInfo> = columns.iter().filter(|c| c.key).collect();
     let pairs = if keys.is_empty() {
@@ -277,7 +343,24 @@ pub fn compare_tables(left: &Table, right: &Table, options: &TableCompareOptions
         columns,
         rows,
         stats,
+        sorted_by,
     }
+}
+
+/// Stable sort of row indices by the given columns, comparing like keys do
+/// (numbers by value, then text).
+fn sort_rows(
+    t: &Table,
+    rows: &mut [usize],
+    by: &[&ColumnInfo],
+    side: fn(&ColumnInfo) -> Option<usize>,
+    cmp: &Comparer,
+) {
+    rows.sort_by_cached_key(|&i| {
+        by.iter()
+            .map(|c| cmp.key_part(cell(&t.rows[i], side(c))))
+            .collect::<Vec<_>>()
+    });
 }
 
 fn cell(row: &[String], col: Option<usize>) -> &str {
@@ -293,45 +376,90 @@ fn width(t: &Table) -> usize {
     t.rows.iter().map(Vec::len).max().unwrap_or(0)
 }
 
-/// Pairs columns by header name when both sides have headers and at least one
-/// name matches; otherwise by position. Duplicate names pair in order.
-/// Right-only columns are placed after the column holding their nearest
-/// preceding right-side column.
-fn pair_columns(left: &Table, right: &Table, has_header: bool) -> Vec<ColumnInfo> {
+/// Builds the result columns. With a `mapping`, columns follow it; otherwise
+/// they pair by header name when both sides have headers and at least one
+/// name matches, else by position (see [`auto_pairs`]).
+fn pair_columns(
+    left: &Table,
+    right: &Table,
+    lhead: bool,
+    rhead: bool,
+    mapping: Option<&[ColumnPair]>,
+) -> Vec<ColumnInfo> {
     let (lw, rw) = (width(left), width(right));
-    let header = |t: &Table, w: usize| -> Option<Vec<String>> {
-        let first = t.rows.first().filter(|_| has_header)?;
+    let header = |t: &Table, w: usize, has: bool| -> Option<Vec<String>> {
+        let first = t.rows.first().filter(|_| has)?;
         Some((0..w).map(|i| cell(first, Some(i)).trim().to_owned()).collect())
     };
-    let lnames = header(left, lw);
-    let rnames = header(right, rw);
+    let lnames = header(left, lw, lhead);
+    let rnames = header(right, rw, rhead);
+    let pairs = match mapping {
+        Some(m) => mapped_pairs(lw, rw, m),
+        None => auto_pairs(lw, rw, lnames.as_deref(), rnames.as_deref()),
+    };
     let name_of =
         |names: &Option<Vec<String>>, i: Option<usize>| -> Option<String> { Some(names.as_ref()?[i?].clone()) };
-    let column = |l: Option<usize>, r: Option<usize>| ColumnInfo {
-        left: l,
-        right: r,
-        left_name: name_of(&lnames, l),
-        right_name: name_of(&rnames, r),
-        key: false,
-        ignored: false,
-    };
+    pairs
+        .into_iter()
+        .map(|(l, r)| ColumnInfo {
+            left: l,
+            right: r,
+            left_name: name_of(&lnames, l),
+            right_name: name_of(&rnames, r),
+            key: false,
+            ignored: false,
+        })
+        .collect()
+}
 
-    let by_name = match (&lnames, &rnames) {
+/// Applies a manual mapping: out-of-range or already used source columns
+/// become `None`, empty pairs are dropped, and every source column the
+/// mapping leaves out is appended unmatched (left ones first).
+fn mapped_pairs(lw: usize, rw: usize, mapping: &[ColumnPair]) -> Vec<(Option<usize>, Option<usize>)> {
+    let mut lused = vec![false; lw];
+    let mut rused = vec![false; rw];
+    let take = |i: Option<usize>, used: &mut [bool]| {
+        let i = i.filter(|&i| i < used.len() && !used[i])?;
+        used[i] = true;
+        Some(i)
+    };
+    let mut out: Vec<_> = mapping
+        .iter()
+        .filter_map(|p| {
+            let pair = (take(p.left, &mut lused), take(p.right, &mut rused));
+            (pair != (None, None)).then_some(pair)
+        })
+        .collect();
+    out.extend((0..lw).filter(|&i| !lused[i]).map(|i| (Some(i), None)));
+    out.extend((0..rw).filter(|&i| !rused[i]).map(|i| (None, Some(i))));
+    out
+}
+
+/// Pairs by header name when both sides have names and at least one matches;
+/// otherwise by position. Duplicate names pair in order. Right-only columns
+/// are placed after the column holding their nearest preceding right column.
+fn auto_pairs(
+    lw: usize,
+    rw: usize,
+    lnames: Option<&[String]>,
+    rnames: Option<&[String]>,
+) -> Vec<(Option<usize>, Option<usize>)> {
+    let by_name = match (lnames, rnames) {
         (Some(ln), Some(rn)) => match_names(ln, rn),
         _ => None,
     };
     let Some(matched) = by_name else {
         return (0..lw.max(rw))
-            .map(|i| column((i < lw).then_some(i), (i < rw).then_some(i)))
+            .map(|i| ((i < lw).then_some(i), (i < rw).then_some(i)))
             .collect();
     };
 
-    let mut cols: Vec<ColumnInfo> = (0..lw).map(|l| column(Some(l), matched[l])).collect();
+    let mut cols: Vec<(Option<usize>, Option<usize>)> = (0..lw).map(|l| (Some(l), matched[l])).collect();
     let mut used = vec![false; rw];
     matched.iter().flatten().for_each(|&r| used[r] = true);
     for r in (0..rw).filter(|&r| !used[r]) {
         let nearest = |before: bool| {
-            let side = cols.iter().enumerate().filter_map(|(p, c)| c.right.map(|x| (p, x)));
+            let side = cols.iter().enumerate().filter_map(|(p, c)| c.1.map(|x| (p, x)));
             if before {
                 side.filter(|&(_, x)| x < r).max_by_key(|&(_, x)| x).map(|(p, _)| p + 1)
             } else {
@@ -339,7 +467,7 @@ fn pair_columns(left: &Table, right: &Table, has_header: bool) -> Vec<ColumnInfo
             }
         };
         let pos = nearest(true).or_else(|| nearest(false)).unwrap_or(cols.len());
-        cols.insert(pos, column(None, Some(r)));
+        cols.insert(pos, (None, Some(r)));
     }
     cols
 }
@@ -379,6 +507,7 @@ struct Comparer {
     ignore_case: bool,
     trim: bool,
     tolerance: Option<f64>,
+    date_tolerance: Option<f64>,
 }
 
 impl Comparer {
@@ -386,7 +515,8 @@ impl Comparer {
         Comparer {
             ignore_case: o.ignore_case,
             trim: o.trim_whitespace,
-            tolerance: o.numeric_tolerance.map(|t| if t.is_finite() { t.abs() } else { 0.0 }),
+            tolerance: o.numeric_tolerance.map(sanitize_tolerance),
+            date_tolerance: o.date_tolerance.map(sanitize_tolerance),
         }
     }
 
@@ -404,33 +534,61 @@ impl Comparer {
         if a == b {
             return true;
         }
-        match (self.tolerance, parse_number(&a), parse_number(&b)) {
-            (Some(tol), Some(x), Some(y)) => {
-                // Slack for binary rounding, so 0.1 + 0.2 still equals 0.3.
-                let slack = f64::EPSILON * 4.0 * x.abs().max(y.abs());
-                (x - y).abs() <= tol + slack
+        if let Some(tol) = self.tolerance {
+            if let (Some(x), Some(y)) = (parse_number(&a), parse_number(&b)) {
+                return within(x, y, tol);
             }
+        }
+        match (
+            self.date_tolerance,
+            dates::parse_datetime(&a),
+            dates::parse_datetime(&b),
+        ) {
+            (Some(tol), Some(x), Some(y)) => within(x, y, tol),
             _ => false,
         }
     }
 
     /// Canonical text used for row hashing and keys: numbers collapse to one
     /// spelling when numeric comparison is on.
+    /// Dates (with a date tolerance) become their epoch seconds behind a
+    /// marker, so they never collide with plain numbers.
     fn canonical<'a>(&self, s: &'a str) -> Cow<'a, str> {
         let n = self.norm(s);
-        match self.tolerance.and(parse_number(&n)) {
-            Some(v) => Cow::Owned(format!("{}", v + 0.0)), // `+ 0.0` folds -0 into 0
+        if let Some(v) = self.tolerance.and(parse_number(&n)) {
+            return Cow::Owned(format!("{}", v + 0.0)); // `+ 0.0` folds -0 into 0
+        }
+        match self.date_tolerance.and_then(|_| dates::parse_datetime(&n)) {
+            Some(t) => Cow::Owned(format!("\u{1}date:{}", t + 0.0)),
             None => n,
         }
     }
 
     fn key_part(&self, s: &str) -> KeyPart {
+        // Dates never parse as numbers, so checking them first is safe.
+        if let Some(t) = self.date_tolerance.and_then(|_| dates::parse_datetime(&self.norm(s))) {
+            return KeyPart::Date(t, String::new()); // any spelling of the same moment
+        }
         let c = self.canonical(s);
         match parse_number(&c) {
             Some(v) => KeyPart::Num(v, c.into_owned()),
             None => KeyPart::Text(c.into_owned()),
         }
     }
+}
+
+fn sanitize_tolerance(t: f64) -> f64 {
+    if t.is_finite() {
+        t.abs()
+    } else {
+        0.0
+    }
+}
+
+fn within(x: f64, y: f64, tol: f64) -> bool {
+    // Slack for binary rounding, so 0.1 + 0.2 still equals 0.3.
+    let slack = f64::EPSILON * 4.0 * x.abs().max(y.abs());
+    (x - y).abs() <= tol + slack
 }
 
 fn parse_number(s: &str) -> Option<f64> {
@@ -442,11 +600,23 @@ fn parse_number(s: &str) -> Option<f64> {
 }
 
 /// A key component with a total order: numbers (by value, then spelling)
-/// sort before text, so keys like 2 < 10 sort naturally.
+/// sort before dates (by time, then spelling), which sort before text, so
+/// keys like 2 < 10 and 9/1/2024 < 10/1/2024 sort naturally.
 #[derive(Debug, Clone, PartialEq)]
 enum KeyPart {
     Num(f64, String),
+    Date(f64, String),
     Text(String),
+}
+
+impl KeyPart {
+    fn rank(&self) -> u8 {
+        match self {
+            KeyPart::Num(..) => 0,
+            KeyPart::Date(..) => 1,
+            KeyPart::Text(_) => 2,
+        }
+    }
 }
 
 impl Eq for KeyPart {}
@@ -454,10 +624,11 @@ impl Eq for KeyPart {}
 impl Ord for KeyPart {
     fn cmp(&self, other: &Self) -> Ordering {
         match (self, other) {
-            (KeyPart::Num(a, sa), KeyPart::Num(b, sb)) => a.total_cmp(b).then_with(|| sa.cmp(sb)),
-            (KeyPart::Num(..), KeyPart::Text(_)) => Ordering::Less,
-            (KeyPart::Text(_), KeyPart::Num(..)) => Ordering::Greater,
+            (KeyPart::Num(a, sa), KeyPart::Num(b, sb)) | (KeyPart::Date(a, sa), KeyPart::Date(b, sb)) => {
+                a.total_cmp(b).then_with(|| sa.cmp(sb))
+            }
             (KeyPart::Text(a), KeyPart::Text(b)) => a.cmp(b),
+            _ => self.rank().cmp(&other.rank()),
         }
     }
 }
@@ -805,6 +976,189 @@ mod tests {
         assert_eq!(json["rows"][1]["status"], "different");
         assert_eq!(json["stats"]["differentCells"], 1);
         assert!(compare_files(&a, &dir.path().join("missing.csv"), &TableCompareOptions::default()).is_err());
+    }
+
+    #[test]
+    fn date_tolerance_compares_parsed_dates() {
+        let l = table("when\n2024-03-05\n2024-03-05 10:00:00\n05.03.2024\n2024-03-05\nsoon\n12");
+        let r = table("when\n3/5/2024\n2024-03-05T10:00:40Z\n2024-03-06\n5 Mar 2024 00:02\nsoon\n13");
+        let res = compare_tables(&l, &r, &TableCompareOptions::default());
+        assert_eq!(
+            statuses(&res),
+            vec![Different, Different, Different, Different, Same, Different]
+        );
+
+        let exact = TableCompareOptions {
+            date_tolerance: Some(0.0),
+            ..Default::default()
+        };
+        let res = compare_tables(&l, &r, &exact);
+        assert_eq!(
+            statuses(&res),
+            vec![Same, Different, Different, Different, Same, Different]
+        );
+
+        let minute = TableCompareOptions {
+            date_tolerance: Some(60.0),
+            ..Default::default()
+        };
+        let res = compare_tables(&l, &r, &minute);
+        assert_eq!(
+            statuses(&res),
+            vec![Same, Same, Different, Different, Same, Different],
+            "40 s apart is within a minute, 2 min and 1 day are not; numbers are not dates"
+        );
+
+        let day = TableCompareOptions {
+            date_tolerance: Some(86_400.0),
+            ..Default::default()
+        };
+        let res = compare_tables(&l, &r, &day);
+        assert_eq!(statuses(&res), vec![Same, Same, Same, Same, Same, Different]);
+    }
+
+    #[test]
+    fn date_keys_match_across_spellings_and_sort_chronologically() {
+        let l = table("d,v\n10/1/2024,b\n9/1/2024,a");
+        let r = table("d,v\n2024-09-01,a\n2024-10-01,b");
+        let opts = TableCompareOptions {
+            key_columns: vec![0],
+            date_tolerance: Some(0.0),
+            ..Default::default()
+        };
+        let res = compare_tables(&l, &r, &opts);
+        assert_eq!(statuses(&res), vec![Same, Same]);
+        assert_eq!(res.rows[0].left.as_ref().unwrap()[0], "9/1/2024");
+    }
+
+    #[test]
+    fn manual_column_mapping_overrides_header_pairing() {
+        let l = table("id,first,last\n1,Ann,Lee");
+        let r = table("key,surname,given,extra\n1,Lee,Ann,x");
+        // Auto pairing finds no common names, so it goes by position.
+        let res = compare_tables(&l, &r, &TableCompareOptions::default());
+        assert_eq!(statuses(&res), vec![Different]);
+
+        let pair = |l, r| ColumnPair { left: l, right: r };
+        let opts = TableCompareOptions {
+            column_mapping: Some(vec![
+                pair(Some(0), Some(0)),
+                pair(Some(1), Some(2)),
+                pair(Some(2), Some(1)),
+                pair(Some(9), None),    // out of range: dropped
+                pair(Some(1), Some(3)), // left 1 already used: right 3 stays alone
+            ]),
+            ..Default::default()
+        };
+        let res = compare_tables(&l, &r, &opts);
+        let pairs: Vec<_> = res.columns.iter().map(|c| (c.left, c.right)).collect();
+        assert_eq!(
+            pairs,
+            vec![
+                (Some(0), Some(0)),
+                (Some(1), Some(2)),
+                (Some(2), Some(1)),
+                (None, Some(3))
+            ]
+        );
+        assert_eq!(res.columns[1].left_name.as_deref(), Some("first"));
+        assert_eq!(res.columns[1].right_name.as_deref(), Some("given"));
+        assert_eq!(res.rows[0].diffs, vec![3]);
+
+        // Columns the mapping leaves out are appended unmatched.
+        let partial = TableCompareOptions {
+            column_mapping: Some(vec![pair(Some(2), Some(1))]),
+            ..Default::default()
+        };
+        let res = compare_tables(&l, &r, &partial);
+        let pairs: Vec<_> = res.columns.iter().map(|c| (c.left, c.right)).collect();
+        assert_eq!(
+            pairs,
+            vec![
+                (Some(2), Some(1)),
+                (Some(0), None),
+                (Some(1), None),
+                (None, Some(0)),
+                (None, Some(2)),
+                (None, Some(3))
+            ]
+        );
+    }
+
+    #[test]
+    fn per_side_header_rows() {
+        let l = table("id,name\n1,Ann\n2,Bob");
+        let r = table("1,Ann\n2,Bob");
+        let opts = TableCompareOptions {
+            right_header: Some(false),
+            column_mapping: Some(vec![
+                ColumnPair {
+                    left: Some(0),
+                    right: Some(0),
+                },
+                ColumnPair {
+                    left: Some(1),
+                    right: Some(1),
+                },
+            ]),
+            ..Default::default()
+        };
+        let res = compare_tables(&l, &r, &opts);
+        assert!(res.identical);
+        assert_eq!(res.rows.len(), 2);
+        assert_eq!(res.columns[0].left_name.as_deref(), Some("id"));
+        assert_eq!(res.columns[0].right_name, None);
+        assert_eq!((res.rows[0].left_row, res.rows[0].right_row), (Some(2), Some(1)));
+    }
+
+    #[test]
+    fn sorts_rows_before_aligning() {
+        let l = table("id,v\n3,c\n1,a\n2,b\n10,j");
+        let r = table("id,v\n1,a\n10,j\n2,B\n3,c");
+        // In file order the shuffled rows don't line up.
+        let res = compare_tables(&l, &r, &TableCompareOptions::default());
+        assert!(res.stats.different + res.stats.left_only > 1);
+        assert_eq!(res.sorted_by, None);
+
+        // Sorting on all columns lines them up; 2 < 10 numerically.
+        let all = TableCompareOptions {
+            sort_rows: true,
+            ..Default::default()
+        };
+        let res = compare_tables(&l, &r, &all);
+        assert_eq!(res.sorted_by, Some(vec![0, 1]));
+        let ids: Vec<_> = res.rows.iter().map(|r| r.left.as_ref().unwrap()[0].as_str()).collect();
+        assert_eq!(ids, vec!["1", "2", "3", "10"]);
+        assert_eq!(statuses(&res), vec![Same, Different, Same, Same]);
+        assert_eq!(res.rows[1].diffs, vec![1]);
+
+        // Sorting by the second column only.
+        let by_v = TableCompareOptions {
+            sort_rows: true,
+            sort_columns: vec![1, 7],
+            ignore_case: true,
+            ..Default::default()
+        };
+        let res = compare_tables(&l, &r, &by_v);
+        assert_eq!(res.sorted_by, Some(vec![1]));
+        assert!(res.identical);
+    }
+
+    #[test]
+    fn sort_orders_duplicate_keys() {
+        let l = table("k,v\n1,b\n1,a");
+        let r = table("k,v\n1,a\n1,b");
+        let keyed = TableCompareOptions {
+            key_columns: vec![0],
+            ..Default::default()
+        };
+        assert_eq!(statuses(&compare_tables(&l, &r, &keyed)), vec![Different, Different]);
+        let sorted = TableCompareOptions {
+            sort_rows: true,
+            sort_columns: vec![1],
+            ..keyed
+        };
+        assert_eq!(statuses(&compare_tables(&l, &r, &sorted)), vec![Same, Same]);
     }
 
     #[test]

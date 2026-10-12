@@ -18,6 +18,8 @@ import {
   Table2,
   type LucideIcon,
 } from "lucide-react";
+import { FileDiff, FilePen } from "lucide-react"; // bc5:editor-patch
+import { isArchivePath } from "./archiveApi"; // bc5:archives
 
 export type CompareKind =
   | "text"
@@ -31,7 +33,10 @@ export type CompareKind =
   | "registry"
   | "version"
   | "mp3"
-  | "database";
+  | "database"
+  // bc5:editor-patch
+  | "edit"
+  | "patch";
 
 export type SessionKind = "home" | "profiles" | CompareKind;
 
@@ -41,12 +46,14 @@ export interface SessionInfo {
   /** Accent used for the icon tile; keep these distinguishable at a glance. */
   color: string;
   description: string;
-  /** 3-way sessions also take a base (ancestor) and an output path. */
+  /** Merge sessions also take an output path and an optional base (ancestor). */
   threeWay?: boolean;
   /** The path pickers choose folders rather than files. */
   directory?: boolean;
   /** Only meaningful on Windows (shown with a badge elsewhere). */
   windowsOnly?: boolean;
+  /** bc5:editor-patch — works on one file (`left`); `right` stays empty. */
+  single?: boolean;
 }
 
 export const SESSIONS: Record<SessionKind, SessionInfo> = {
@@ -67,7 +74,7 @@ export const SESSIONS: Record<SessionKind, SessionInfo> = {
     label: "Text Merge",
     icon: GitMerge,
     color: "#a78bfa",
-    description: "3-way merge against a common ancestor with an editable output.",
+    description: "2- or 3-way merge with an editable output; the common ancestor is optional.",
     threeWay: true,
   },
   table: {
@@ -100,7 +107,7 @@ export const SESSIONS: Record<SessionKind, SessionInfo> = {
     label: "Folder Merge",
     icon: FolderGit2,
     color: "#fb923c",
-    description: "3-way merge of folder trees against a common ancestor.",
+    description: "2- or 3-way merge of folder trees, with text files merged automatically.",
     threeWay: true,
     directory: true,
   },
@@ -134,6 +141,21 @@ export const SESSIONS: Record<SessionKind, SessionInfo> = {
     color: "#a3e635",
     description: "Schema and data compare for SQL Server, MySQL, PostgreSQL and SQLite with sync scripts.",
   },
+  // bc5:editor-patch
+  edit: {
+    label: "Text Edit",
+    icon: FilePen,
+    color: "#818cf8",
+    description: "Edit one text file: syntax colours, find & replace, bookmarks, encodings and line endings.",
+    single: true,
+  },
+  patch: {
+    label: "Patch Viewer",
+    icon: FileDiff,
+    color: "#e879f9",
+    description: "View a .patch or .diff side by side, and apply it to a folder to compare the result.",
+    single: true,
+  },
 };
 
 /** Order of the "new session" cards on Home. */
@@ -150,6 +172,8 @@ export const COMPARE_KINDS: CompareKind[] = [
   "version",
   "mp3",
   "database",
+  "edit", // bc5:editor-patch
+  "patch",
 ];
 
 export const isCompareKind = (k: SessionKind): k is CompareKind => k !== "home" && k !== "profiles";
@@ -171,13 +195,17 @@ register("picture", "png jpg jpeg gif bmp ico tif tiff webp tga pnm pbm pgm ppm 
 register("mp3", "mp3 flac ogg opus m4a aac wav aif aiff wv ape mpc spx");
 register("version", "exe dll sys ocx cpl drv scr");
 register("registry", "reg");
+register("patch", "patch diff"); // bc5:editor-patch
 // SQLite files open as ad-hoc Database Compare sides. Plain `.db` stays with
 // Hex (many `.db` files aren't SQLite); App sniffs those via `dbApi.isSqlite`.
 register("database", "sqlite sqlite3 db3 s3db sl3");
+// bc5:converters — PDF and Word .doc (like .docx, .rtf, .odt and binary .dfm)
+// open in Text Compare, converted to text by the File formats rules; Hex
+// Compare stays one click away ("Open in Hex").
 register(
   "hex",
   "bin dat img iso zip 7z rar gz tgz bz2 xz zst jar war apk class o obj lib a so dylib pdb " +
-    "pdf doc ppt msi cab db woff woff2 ttf otf mp4 mov mkv avi",
+    "ppt msi cab db woff woff2 ttf otf mp4 mov mkv avi",
 );
 
 /**
@@ -187,7 +215,11 @@ register(
  * else (unknown or mismatched types) opens in Text Compare.
  */
 export function sessionForFiles(left: string, right: string): CompareKind {
+  // bc5:archives — two archives (zip, tar.gz, 7z…) compare as folders of their contents; Hex stays in the menus.
+  if (isArchivePath(left) && isArchivePath(right)) return "folder";
   const l = VIEWER_BY_EXT[extension(left)];
   const r = VIEWER_BY_EXT[extension(right)];
+  // bc5:editor-patch — one-file viewers (a .patch) open alone; a pair of them is a text compare.
+  if (l && SESSIONS[l].single && left !== right) return "text";
   return l && l === r ? l : "text";
 }
