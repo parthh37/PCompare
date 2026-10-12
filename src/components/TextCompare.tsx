@@ -451,7 +451,7 @@ export function TextCompare({
   const dirty = !!docs && SIDES.some((s) => isDirty(docs[s]) && !docs[s].memory);
   const reportDirty = useRef(onDirtyChange);
   reportDirty.current = onDirtyChange;
-  useEffect(() => reportDirty.current?.(dirty), [dirty]);
+  useEffect(() => void reportDirty.current?.(dirty), [dirty]);
 
   const requestSeq = useRef(0);
   /**
