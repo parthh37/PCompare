@@ -1,0 +1,46 @@
+[package]
+name = "pcompare-db"
+description = "Database schema and data comparison (SQL Server, MySQL, PostgreSQL, SQLite) for PCompare"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+pcompare-core = { path = "../pcompare-core" }
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+similar = "2"
+tokio = { version = "1", features = ["rt-multi-thread", "net", "time", "macros", "sync"] }
+futures-util = "0.3"
+chrono = { version = "0.4", default-features = false, features = ["std", "clock"] }
+bigdecimal = "0.4"
+uuid = "1"
+sqlx = { version = "0.9", default-features = false, features = [
+    "runtime-tokio",
+    "tls-rustls-ring-webpki",
+    "mysql",
+    "postgres",
+    "sqlite-bundled",
+    "chrono",
+    "bigdecimal",
+    "uuid",
+    "json",
+] }
+tiberius = { version = "0.13", default-features = false, features = [
+    "tds80",
+    "rustls",
+    "tokio",
+    "sql-browser-tokio",
+    "chrono",
+    "bigdecimal",
+] }
+tokio-util = { version = "0.7", features = ["compat"] }
+
+[target.'cfg(windows)'.dependencies]
+# Windows (integrated) authentication for SQL Server.
+tiberius = { version = "0.13", default-features = false, features = ["winauth"] }
+
+[dev-dependencies]
+tempfile = "3"
