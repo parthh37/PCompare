@@ -1,6 +1,7 @@
 import { getCurrentWebview } from "@tauri-apps/api/webview";
-import { CircleArrowUp, Globe, Plus, Save, X } from "lucide-react";
+import { Globe, Plus, Save, Settings, X } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
+import { AppSettingsDialog } from "./components/AppSettingsDialog";
 import { FolderCompare } from "./components/FolderCompare";
 import { FolderMerge } from "./components/FolderMerge";
 import { FolderSync } from "./components/FolderSync";
@@ -21,7 +22,7 @@ import { basename } from "./lib/format";
 import type { MergePaths } from "./lib/sessionProps";
 import { SESSIONS, isCompareKind, sessionForFiles, type CompareKind, type SessionKind } from "./lib/sessions";
 import { ShellContext } from "./lib/shell";
-import { autoUpdateEnabled, setAutoUpdateEnabled, useUpdater } from "./lib/useUpdater";
+import { useUpdater } from "./lib/useUpdater";
 
 export type { SessionKind } from "./lib/sessions";
 
@@ -61,7 +62,7 @@ export default function App() {
   /** Tabs whose session reported unsaved edits. */
   const dirtyTabs = useRef(new Set<number>());
   const updater = useUpdater(setToast);
-  const [autoUpdate, setAutoUpdate] = useState(autoUpdateEnabled);
+  const [settingsOpen, setSettingsOpen] = useState(false);
 
   const refreshSaved = useCallback(
     () =>
@@ -313,13 +314,8 @@ export default function App() {
           <button className="tab-action" title="Connection profiles" onClick={openProfiles}>
             <Globe size={14} /> Profiles
           </button>
-          <button
-            className="tab-action"
-            title={`PCompare ${updater.version} — check for updates`}
-            disabled={updater.phase.kind === "checking" || updater.phase.kind === "downloading"}
-            onClick={updater.checkNow}
-          >
-            <CircleArrowUp size={14} /> {updater.phase.kind === "checking" ? "Checking…" : "Updates"}
+          <button className="tab-action" title="Settings and updates" onClick={() => setSettingsOpen(true)}>
+            <Settings size={14} /> Settings
           </button>
         </nav>
 
@@ -349,11 +345,8 @@ export default function App() {
                 <label className="check muted">
                   <input
                     type="checkbox"
-                    checked={autoUpdate}
-                    onChange={(e) => {
-                      setAutoUpdateEnabled(e.target.checked);
-                      setAutoUpdate(e.target.checked);
-                    }}
+                    checked={updater.autoCheck}
+                    onChange={(e) => updater.setAutoCheck(e.target.checked)}
                   />
                   Check automatically
                 </label>
@@ -391,6 +384,7 @@ export default function App() {
             }}
           />
         )}
+        {settingsOpen && <AppSettingsDialog updater={updater} onClose={() => setSettingsOpen(false)} />}
         {toast && <div className="toast">{toast}</div>}
       </div>
     </ShellContext.Provider>
