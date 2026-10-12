@@ -340,6 +340,30 @@ select:focus {
 .statusbar .ok {
   color: var(--ok);
 }
+/* A compare running behind a live view, instead of a blocking overlay. */
+.live-progress {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted);
+}
+.live-progress button {
+  padding: 0 8px;
+  font-size: 11px;
+}
+.spinner {
+  width: 10px;
+  height: 10px;
+  border: 1.5px solid currentColor;
+  border-right-color: transparent;
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
 .overlay {
   position: absolute;
   inset: 0;
