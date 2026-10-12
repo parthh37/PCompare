@@ -8,8 +8,6 @@ import {
   ArrowUp,
   CircleCheck,
   CircleX,
-  File,
-  Folder,
   FolderPlus,
   FolderSync as FolderSyncIcon,
   ListChecks,
@@ -38,6 +36,7 @@ import { Modal } from "./Modal";
 import { PathBar } from "./PathBar";
 import { VirtualList } from "./VirtualList";
 import "./FolderSync.css";
+import { FileIcon } from "./icons";
 
 /** "1 file", "3 files". */
 const count = (n: number, noun: string) => `${n.toLocaleString()} ${noun}${n === 1 ? "" : "s"}`;
@@ -307,7 +306,7 @@ export function FolderSync({ left, right, onPathsChange, settings, onSettingsCha
           </div>
           <div className="sync-cell path">
             <span className="ficon">
-              {s.isDir ? <Folder size={14} className="ic-folder" /> : <File size={14} className="ic-file" />}
+              <FileIcon name={s.relPath} isDir={s.isDir} />
             </span>
             {s.relPath}
           </div>
@@ -341,7 +340,7 @@ export function FolderSync({ left, right, onPathsChange, settings, onSettingsCha
         </div>
         <div className="sync-cell path">
           <span className="ficon">
-            {op.isDir ? <Folder size={14} className="ic-folder" /> : <File size={14} className="ic-file" />}
+            <FileIcon name={op.relPath} isDir={op.isDir} />
           </span>
           {op.relPath}
         </div>

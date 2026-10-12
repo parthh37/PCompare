@@ -256,3 +256,21 @@ fn size_and_date_filters_keep_a_pair_when_either_side_matches() {
     // Unknown timestamps can't be proven out of range.
     assert!(pair_passes(Some(&file(1, None)), None, &date));
 }
+
+#[test]
+fn folder_compare_lists_a_single_side() {
+    use pcompare_core::folder::compare_folders_with;
+    use pcompare_core::vfs::{EmptyFs, LocalFs};
+    let l = tempfile::tempdir().unwrap();
+    write(l.path(), "a.txt", b"1");
+    write(l.path(), "sub/b.txt", b"2");
+    let dir = l.path().to_string_lossy();
+
+    let res = compare_folders_with(&LocalFs, &dir, &EmptyFs, "", &content_opts()).unwrap();
+    assert_eq!(find(&res.entries, "a.txt").status, EntryStatus::LeftOnly);
+    assert_eq!(find(&res.entries, "sub/b.txt").status, EntryStatus::LeftOnly);
+    assert_eq!(res.stats.left_only, 2);
+
+    let res = compare_folders_with(&EmptyFs, "", &LocalFs, &dir, &content_opts()).unwrap();
+    assert_eq!(find(&res.entries, "a.txt").status, EntryStatus::RightOnly);
+}

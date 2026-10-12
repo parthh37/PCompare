@@ -13,6 +13,7 @@ import { Profiles } from "./components/Profiles";
 import { RegistryCompare } from "./components/RegistryCompare";
 import { SaveSessionDialog } from "./components/SaveSessionDialog";
 import { SessionIcon } from "./components/SessionIcon";
+import { ToolIcon } from "./components/icons";
 import { TableCompare } from "./components/TableCompare";
 import { TextCompare } from "./components/TextCompare";
 import { TextMerge } from "./components/TextMerge";
@@ -43,7 +44,8 @@ export interface Tab {
 
 function tabTitle(t: Tab): string {
   if (t.sessionName) return t.sessionName;
-  if (!isCompareKind(t.kind) || !t.left || !t.right) return SESSIONS[t.kind].label;
+  if (!isCompareKind(t.kind) || !(t.left || t.right)) return SESSIONS[t.kind].label;
+  if (!t.left || !t.right) return basename(t.left || t.right);
   const l = basename(t.left);
   const r = basename(t.right);
   return l === r ? l : `${l} ↔ ${r}`;
@@ -104,13 +106,36 @@ export default function App() {
         }),
     );
 
-  /** Picks the session type from what the two paths are. */
+  /** Picks the session type from what the two paths are; `right` may be empty to open one side. */
   const openAuto = useCallback(
     async (left: string, right: string) => {
-      const [lk, rk] = await Promise.all([api.pathKind(left), api.pathKind(right)]);
-      openTab(lk === "directory" && rk === "directory" ? "folder" : sessionForFiles(left, right), left, right);
+      // A missing side takes the other's kind, so one folder still opens a folder compare.
+      const [lk, rk] = await Promise.all([api.pathKind(left), api.pathKind(right || left)]);
+      openTab(lk === "directory" && rk === "directory" ? "folder" : sessionForFiles(left, right || left), left, right);
     },
     [openTab],
+  );
+
+  // "Select Left Side for Compare" lives in a file the Explorer menu also
+  // writes, so re-read it whenever the window regains focus.
+  const [leftSelection, setLeftSelection] = useState<string | null>(null);
+  useEffect(() => {
+    const load = () => api.getLeftSelection().then(setLeftSelection).catch(() => {});
+    load();
+    window.addEventListener("focus", load);
+    return () => window.removeEventListener("focus", load);
+  }, []);
+  const selectLeft = useCallback((path: string | null) => {
+    setLeftSelection(path);
+    api.setLeftSelection(path).catch((e) => setToast(errorMessage(e)));
+  }, []);
+  const compareToLeft = useCallback(
+    (path: string) => {
+      if (!leftSelection) return;
+      openAuto(leftSelection, path).catch((e) => setToast(errorMessage(e)));
+      selectLeft(null);
+    },
+    [leftSelection, openAuto, selectLeft],
   );
 
   const updateTab = (id: number, patch: Partial<Tab>) =>
@@ -134,8 +159,8 @@ export default function App() {
     api
       .launchArgs()
       .then(async ([left, right, base, output]) => {
-        if (!left || !right) return;
-        if (!base) return openAuto(left, right);
+        if (!left) return;
+        if (!base) return openAuto(left, right ?? "");
         const kind = (await api.pathKind(base)) === "directory" ? "folderMerge" : "merge";
         openTab(kind, left, right, { base, output: output ?? "" });
       })
@@ -147,9 +172,10 @@ export default function App() {
     let unlisten: (() => void) | undefined;
     getCurrentWebview()
       .onDragDropEvent((e) => {
-        if (e.payload.type === "drop" && e.payload.paths.length >= 2) {
-          openAuto(e.payload.paths[0], e.payload.paths[1]);
-        }
+        if (e.payload.type !== "drop") return;
+        const [first, second] = e.payload.paths;
+        if (second) return openAuto(first, second);
+        if (first) dropOne.current(first);
       })
       .then((u) => (unlisten = u))
       .catch(() => {});
@@ -157,6 +183,17 @@ export default function App() {
   }, [openAuto]);
 
   const activeTab = tabs.find((t) => t.id === active);
+
+  /** One dropped path fills the empty side of the active compare, or opens on its own. */
+  const dropOne = useRef((_path: string) => {});
+  dropOne.current = (path: string) => {
+    const t = activeTab;
+    if (t && isCompareKind(t.kind) && !SESSIONS[t.kind].threeWay && (!t.left || !t.right)) {
+      updateTab(t.id, t.left ? { right: path } : { left: path });
+    } else {
+      openAuto(path, "").catch((e) => setToast(errorMessage(e)));
+    }
+  };
   const canSave = canSaveTab(activeTab);
 
   useEffect(() => {
@@ -274,7 +311,7 @@ export default function App() {
   };
 
   return (
-    <ShellContext.Provider value={{ openProfiles }}>
+    <ShellContext.Provider value={{ openProfiles, leftSelection, selectLeft, compareToLeft }}>
       <div className="app">
         <nav className="tabbar">
           {tabs.map((t) => (
@@ -303,6 +340,15 @@ export default function App() {
             <Plus size={15} />
           </button>
           <span className="spacer" />
+          {leftSelection && (
+            <span className="left-chip" title={`Left side for compare:\n${leftSelection}\nRight-click another item → Compare to`}>
+              <ToolIcon name="selectLeft" size={14} />
+              Left: {basename(leftSelection)}
+              <button aria-label="Clear left side" onClick={() => selectLeft(null)}>
+                <X size={12} />
+              </button>
+            </span>
+          )}
           <button
             className="tab-action"
             title="Save session (Ctrl+Shift+S)"
