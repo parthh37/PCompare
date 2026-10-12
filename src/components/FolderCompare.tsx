@@ -16,6 +16,7 @@ import {
   type ContentMethod,
   type ContentVerdict,
   type EntryStatus,
+  type FolderCompareOptions,
   type FolderCompareResult,
   type FolderEntry,
   type Side,
@@ -149,7 +150,8 @@ export function FolderCompare({
   const [verdicts, setVerdicts] = useState<Verdicts>(new Map());
   const [checking, setChecking] = useState<{ done: number; total: number } | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [loading, setLoading] = useState(false);
+  /** What the running compare is doing; the list stays usable throughout. */
+  const [phase, setPhase] = useState<"scanning" | "contents" | null>(null);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [selected, setSelected] = useState<string | null>(null);
   const [menu, setMenu] = useState<Menu | null>(null);
@@ -160,26 +162,48 @@ export function FolderCompare({
   const engineOptions = useMemo(() => toEngineOptions(cfg), [cfg]);
   const optionsKey = JSON.stringify(engineOptions);
   const requestSeq = useRef(0);
+  const shownPaths = useRef("");
 
-  /** `quiet` refreshes (auto-refresh) keep the current view instead of flashing an overlay. */
+  /**
+   * Compares live: a quick size/timestamp pass fills the list straight away,
+   * then the content pass (CRC, binary, rules) refines it in place. `quiet`
+   * refreshes (auto-refresh) skip the quick pass so settled rows don't flicker.
+   */
   const run = useCallback(
     async (quiet = false) => {
       // One folder is enough: it lists on its own until the other side is picked.
       if (!left && !right) return;
       const seq = ++requestSeq.current;
-      if (!quiet) setLoading(true);
-      try {
-        const res = await api.compareFolders(left, right, JSON.parse(optionsKey));
-        if (seq !== requestSeq.current) return; // a newer compare superseded this one
+      const stale = () => seq !== requestSeq.current; // a newer compare superseded this one
+      const options: FolderCompareOptions = JSON.parse(optionsKey);
+      const show = (res: FolderCompareResult) => {
         setResult(res);
         setVerdicts(new Map());
         setError(null);
+      };
+      // New folders: don't leave the previous pair's rows up while scanning.
+      const pathsKey = `${left}\n${right}`;
+      if (shownPaths.current !== pathsKey) {
+        shownPaths.current = pathsKey;
+        setResult(null);
+      }
+      const twoPass = !quiet && options.content !== "off";
+      try {
+        if (twoPass) {
+          setPhase("scanning");
+          const quick = await api.compareFolders(left, right, { ...options, content: "off" });
+          if (stale()) return;
+          show(quick);
+        }
+        if (!quiet) setPhase(twoPass ? "contents" : "scanning");
+        const res = await api.compareFolders(left, right, options);
+        if (stale()) return;
+        show(res);
       } catch (e) {
-        if (seq !== requestSeq.current) return;
+        if (stale()) return;
         setError(errorMessage(e));
-        if (!quiet) setResult(null);
       } finally {
-        if (seq === requestSeq.current) setLoading(false);
+        if (!stale()) setPhase(null);
       }
     },
     [left, right, optionsKey],
@@ -368,6 +392,12 @@ export function FolderCompare({
   const filterCount = activeFilterCount(cfg);
   const primaryFilters = DISPLAY_FILTERS.filter((f) => f.primary);
   const moreFilters = DISPLAY_FILTERS.filter((f) => !f.primary);
+  const progress = phase && (
+    <span className="live-progress">
+      <span className="spinner" />
+      {phase === "scanning" ? "Scanning folders…" : "Comparing contents…"}
+    </span>
+  );
   const menuFiles = menu ? (menu.entry.isDir ? pairedFiles(menu.entry.children) : paths(menu.entry) ? [menu.entry] : []) : [];
 
   return (
@@ -477,13 +507,13 @@ export function FolderCompare({
         {!left && !right && (
           <div className="empty-state">Choose a folder on either side — its contents list right away.</div>
         )}
-        {loading && <div className="overlay">Comparing folders…</div>}
         {error && <div className="banner error">{error}</div>}
         {result && flat.length === 0 && <div className="empty-state">Nothing to show for this filter.</div>}
         {result && <VirtualList className="folder-list" count={flat.length} rowHeight={24} renderRow={renderRow} />}
       </div>
 
       <div className="statusbar">
+        {!stats && progress}
         {stats && oneSided && (
           <>
             <span>
@@ -491,6 +521,7 @@ export function FolderCompare({
             </span>
             <span className="muted">Choose the other folder to compare</span>
             <span className="spacer" />
+            {progress}
             <span className="muted">{result!.elapsedMs} ms</span>
           </>
         )}
@@ -503,13 +534,15 @@ export function FolderCompare({
             <span className="s-rightOnly-fg">{stats.rightOnly} right only</span>
             {stats.errors > 0 && <span className="s-error-fg">{stats.errors} errors</span>}
             <span className="spacer" />
+            {progress}
             {checking && (
               <span>
                 Comparing contents {checking.done}/{checking.total}…
               </span>
             )}
             <span className="muted">
-              {cfg.content !== "off" ? `${METHOD_LABEL[cfg.content]} · ` : ""}
+              {/* During the content pass, the rows shown are still the quick pass's. */}
+              {cfg.content !== "off" && phase !== "contents" ? `${METHOD_LABEL[cfg.content]} · ` : ""}
               {result!.elapsedMs} ms
             </span>
           </>
