@@ -6,6 +6,7 @@ import {
   ArrowRight,
   ArrowRightToLine,
   ArrowUp,
+  CalendarClock, // automation:ui
   CircleCheck,
   CircleX,
   ClipboardCopy,
@@ -33,7 +34,8 @@ import {
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { errorMessage, isRemote } from "../lib/api";
 import { COMPARE_PRESETS, DEFAULT_FOLDER_SETTINGS, toEngineOptions, type ComparePreset } from "../lib/folderSettings";
-import { formatSize, formatTime, joinPath } from "../lib/format";
+import { basename, formatSize, formatTime, joinPath } from "../lib/format";
+import type { SyncTask } from "../lib/automationApi"; // automation:ui
 import { matches, shortcutLabel } from "../lib/keymap";
 import type { CompareProps } from "../lib/sessionProps";
 import {
@@ -85,9 +87,13 @@ export interface FolderSyncSettings {
 interface Props extends CompareProps<FolderSyncSettings> {
   /** Opens a two-way compare of one file pair; wired by the shell when available. */
   onOpenFiles?: (left: string, right: string) => void;
+  // automation:ui
+  /** Opens the Sync Automation editor pre-filled with this pair and its settings. */
+  onAutomate?: (prefill: Partial<SyncTask>) => void;
+  // automation:ui end
 }
 
-interface ModeInfo {
+export interface ModeInfo { // automation:ui — exported for the Sync Automation editor
   value: SyncMode;
   label: string;
   icon: LucideIcon;
@@ -96,7 +102,7 @@ interface ModeInfo {
   deletes?: boolean;
 }
 
-const MODES: ModeInfo[] = [
+export const MODES: ModeInfo[] = [ // automation:ui — exported
   {
     value: "updateLeftToRight",
     label: "Update left → right",
@@ -138,9 +144,10 @@ const MODES: ModeInfo[] = [
   },
 ];
 
-const modeLabel = (m: SyncMode) => MODES.find((x) => x.value === m)?.label ?? m;
+export const modeLabel = (m: SyncMode) => // automation:ui — exported
+  MODES.find((x) => x.value === m)?.label ?? m;
 
-const CONFLICT_POLICIES: { value: ConflictPolicy; label: string }[] = [
+export const CONFLICT_POLICIES: { value: ConflictPolicy; label: string }[] = [ // automation:ui — exported
   { value: "skip", label: "Skip (list them)" },
   { value: "newerWins", label: "Newer wins" },
   { value: "leftWins", label: "Left wins" },
@@ -256,7 +263,7 @@ interface RunningJob {
   paused?: boolean;
 }
 
-export function FolderSync({ left, right, onPathsChange, settings, onSettingsChange, onOpenFiles }: Props) {
+export function FolderSync({ left, right, onPathsChange, settings, onSettingsChange, onOpenFiles, onAutomate }: Props) {
   const [cfg, setCfg] = useState<FolderSyncSettings>(() => restoreSettings(settings));
   const [excludeText, setExcludeText] = useState(cfg.exclude);
   const update = (patch: Partial<FolderSyncSettings>) => setCfg((c) => ({ ...c, ...patch }));
@@ -638,6 +645,27 @@ export function FolderSync({ left, right, onPathsChange, settings, onSettingsCha
         <button onClick={() => setOptionsOpen(true)} disabled={running} title={`Sync options: ${safetySummary(cfg.exec)}`}>
           <Settings2 size={14} /> Options
         </button>
+        {/* automation:ui — save this pair and its settings as a scheduled / real-time task */}
+        {onAutomate && (
+          <button
+            onClick={() =>
+              onAutomate({
+                name: `${basename(left)} → ${basename(right)}`,
+                left,
+                right,
+                mode: cfg.mode,
+                conflicts: cfg.conflicts,
+                compare,
+                exec: cfg.exec,
+              })
+            }
+            disabled={!left || !right}
+            title="Run this sync automatically: on a schedule, when files change, or at startup"
+          >
+            <CalendarClock size={14} /> Automate…
+          </button>
+        )}
+        {/* automation:ui end */}
         <button onClick={replan} disabled={!left || !right || loading || running} title={`Re-scan both folders (${shortcutLabel("sync.refresh")})`}>
           <RefreshCw size={14} /> Preview
         </button>
@@ -1233,7 +1261,7 @@ function SyncReportPanel({
 }
 
 /** Confirms, runs and reports a rollback of one job. */
-function RollbackDialog({
+export function RollbackDialog({ // automation:ui — exported for Sync Automation's run history
   jobId,
   onDone,
   onClose,
