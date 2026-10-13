@@ -225,7 +225,7 @@ export function Home(props: Props) {
         {/* araxis:text-review end */}
       </header>
       <div className="cards">
-        {[...COMPARE_KINDS, "profiles" as const].map((kind) => {
+        {[...COMPARE_KINDS, "profiles" as const, "automation" as const /* automation:ui */].map((kind) => {
           const info = SESSIONS[kind];
           return (
             <button key={kind} className="card" onClick={() => onNew(kind)}>

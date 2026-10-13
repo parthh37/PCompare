@@ -106,7 +106,7 @@ fn root<'a>(path: &'a str, fs: &'a SideFs) -> Root<'a> {
 
 /// Connects whichever sides are remote and runs `f` on both sides. A
 /// failure drops the connections so the next attempt starts fresh.
-fn with_roots<T>(
+pub(crate) fn with_roots<T>( // automation:shell
     app: &AppHandle,
     left: &str,
     right: &str,
@@ -119,7 +119,7 @@ fn with_roots<T>(
     })
 }
 
-fn require_existing_root(label: &str, side: Root) -> pcompare_core::Result<()> {
+pub(crate) fn require_existing_root(label: &str, side: Root) -> pcompare_core::Result<()> { // automation:shell
     match side {
         Root::Local(p) => require_existing_dir(label, &p.to_string_lossy()),
         Root::Remote { fs, path, label: shown } => fs
@@ -131,11 +131,11 @@ fn require_existing_root(label: &str, side: Root) -> pcompare_core::Result<()> {
 
 // ---------- scan database helpers ----------
 
-fn db_err(e: pcompare_index::IndexError) -> CoreError {
+pub(crate) fn db_err(e: pcompare_index::IndexError) -> CoreError { // automation:shell
     CoreError::Other(format!("scan database: {e}"))
 }
 
-fn index(app: &AppHandle) -> Option<&Index> {
+pub(crate) fn index(app: &AppHandle) -> Option<&Index> { // automation:shell
     state(app).inner().index.as_ref()
 }
 
@@ -145,7 +145,7 @@ fn require_index(app: &AppHandle) -> pcompare_core::Result<&Index> {
 
 /// The key a folder is known by in the database: its canonical path, so
 /// `C:\Data\` and `c:/data` share history. Remote paths are used verbatim.
-fn pair_key(path: &str) -> String {
+pub(crate) fn pair_key(path: &str) -> String { // automation:shell
     if pcompare_remote::is_remote(path) {
         return path.to_owned();
     }
@@ -167,7 +167,7 @@ fn as_cache<'a>(c: &'a Option<CachedChecksums<'_>>) -> Option<&'a dyn ChecksumCa
 }
 
 /// Plans a sync, using the pair's baseline (two-way) and the checksum cache.
-fn plan(
+pub(crate) fn plan( // automation:shell
     app: &AppHandle,
     left: &str,
     right: &str,
@@ -198,7 +198,7 @@ fn plan(
 }
 
 /// Records what is in sync now as the pair's new baseline.
-fn update_baseline(app: &AppHandle, left: &str, right: &str, plan: &SyncPlan) {
+pub(crate) fn update_baseline(app: &AppHandle, left: &str, right: &str, plan: &SyncPlan) { // automation:shell
     let (Some(ix), Some(cmp)) = (index(app), plan.comparison.as_ref()) else {
         return;
     };
@@ -271,19 +271,21 @@ fn progress_sender(channel: Channel<ExecProgress>) -> impl FnMut(&ExecProgress) 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SyncRun {
-    job_id: Option<String>,
-    report: ExecReport,
+    pub(crate) job_id: Option<String>, // automation:shell
+    pub(crate) report: ExecReport, // automation:shell
     /// A fresh plan with the same settings; `None` if re-planning failed.
     plan: Option<SyncPlan>,
 }
 
-struct RunSpec<'a> {
-    left: &'a str,
-    right: &'a str,
-    mode: SyncMode,
-    compare: &'a FolderCompareOptions,
-    conflicts: ConflictPolicy,
+// automation:shell — shared with the automation runner (automation.rs).
+pub(crate) struct RunSpec<'a> {
+    pub(crate) left: &'a str,
+    pub(crate) right: &'a str,
+    pub(crate) mode: SyncMode,
+    pub(crate) compare: &'a FolderCompareOptions,
+    pub(crate) conflicts: ConflictPolicy,
 }
+// automation:shell end
 
 /// Executes `ops` under `job_id`'s journal, closes the job, re-plans and
 /// refreshes the baseline.
@@ -339,7 +341,7 @@ fn run_job(
 /// Puts half-finished operations of an interrupted job right: staged old
 /// versions go back (or are disposed of if the new file made it), temp
 /// files are removed — on remote sides too.
-fn recover_job(left: Root, right: Root, detail: &JobDetail) -> Vec<Recovery> {
+pub(crate) fn recover_job(left: Root, right: Root, detail: &JobDetail) -> Vec<Recovery> { // automation:shell
     let deleter = detail.options.disposal.deleter(&job_stamp(detail.summary.started_ms));
     detail
         .ops
@@ -373,23 +375,88 @@ pub async fn sync_preflight(
     ops: Vec<SyncOp>,
     exec: Option<ExecOptions>,
 ) -> CmdResult<Vec<PreflightIssue>> {
-    blocking(move || {
-        let mut issues = with_roots(&app, &left, &right, |l, r| Ok(remote_sync::preflight_on(l, r, &ops)))?;
-        if let Some(Disposal::Versioning { folder }) = exec.map(|e| e.disposal) {
-            let folder = Path::new(&folder);
-            if !folder.as_os_str().is_empty() {
-                if let Err(e) = std::fs::create_dir_all(folder) {
-                    issues.push(PreflightIssue {
-                        blocking: true,
-                        message: format!("The versioning folder {} can't be created: {e}.", folder.display()),
-                    });
-                }
+    blocking(move || preflight(&app, &left, &right, &ops, exec.as_ref())).await // automation:shell
+}
+
+// automation:shell — shared with the automation runner (automation.rs).
+pub(crate) fn preflight(
+    app: &AppHandle,
+    left: &str,
+    right: &str,
+    ops: &[SyncOp],
+    exec: Option<&ExecOptions>,
+) -> pcompare_core::Result<Vec<PreflightIssue>> {
+    let mut issues = with_roots(app, left, right, |l, r| Ok(remote_sync::preflight_on(l, r, ops)))?;
+    if let Some(Disposal::Versioning { folder }) = exec.map(|e| &e.disposal) {
+        let folder = Path::new(folder);
+        if !folder.as_os_str().is_empty() {
+            if let Err(e) = std::fs::create_dir_all(folder) {
+                issues.push(PreflightIssue {
+                    blocking: true,
+                    message: format!("The versioning folder {} can't be created: {e}.", folder.display()),
+                });
             }
         }
-        Ok(issues)
-    })
-    .await
+    }
+    Ok(issues)
 }
+
+/// An empty versioning folder means "the default one": it would otherwise
+/// resolve against the working directory.
+pub(crate) fn resolve_versioning_folder(app: &AppHandle, exec: &mut ExecOptions) -> CmdResult<()> {
+    if let Disposal::Versioning { folder } = &mut exec.disposal {
+        if folder.trim().is_empty() {
+            *folder = sync_default_versioning_folder(app.clone())?;
+        }
+    }
+    Ok(())
+}
+
+/// Creates a journaled job for `ops` and runs it (see [`run_job`]); both
+/// sides must exist.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn execute_new_job(
+    app: &AppHandle,
+    spec: &RunSpec,
+    ops: &[SyncOp],
+    exec: &ExecOptions,
+    cancel: &AtomicBool,
+    pause: &AtomicBool,
+    progress: &mut dyn FnMut(&ExecProgress),
+) -> pcompare_core::Result<SyncRun> {
+    with_roots(app, spec.left, spec.right, |l, r| {
+        require_existing_root("left", l)?;
+        require_existing_root("right", r)?;
+        let started = now_ms();
+        let job_id = match index(app) {
+            Some(ix) => {
+                let job = NewJob {
+                    left: &pair_key(spec.left),
+                    right: &pair_key(spec.right),
+                    mode: spec.mode,
+                    options: exec,
+                    ops,
+                };
+                // A journal is part of the safety net: refuse to run without
+                // one rather than silently losing crash recovery.
+                Some(ix.create_job(&job).map_err(db_err)?)
+            }
+            None => None,
+        };
+        Ok(run_job(
+            app,
+            spec,
+            (l, r),
+            job_id.as_deref().map(|id| (id, started)),
+            ops,
+            exec,
+            cancel,
+            pause,
+            progress,
+        ))
+    })
+}
+// automation:shell end
 
 /// Runs the given operations as a journaled job, streaming progress over
 /// `on_progress`. The run can be stopped with [`sync_cancel`] using `run_key`.
@@ -407,48 +474,17 @@ pub async fn sync_execute(
     run_key: String,
     on_progress: Channel<ExecProgress>,
 ) -> CmdResult<SyncRun> {
+    // automation:shell — the body moved to resolve_versioning_folder / execute_new_job.
     let mut exec = exec;
-    if let Disposal::Versioning { folder } = &mut exec.disposal {
-        // An empty folder would resolve against the working directory.
-        if folder.trim().is_empty() {
-            *folder = sync_default_versioning_folder(app.clone())?;
-        }
-    }
+    resolve_versioning_folder(&app, &mut exec)?;
     let guard = RunGuard::new(&app, run_key);
-    blocking(move || with_roots(&app, &left, &right, |l, r| {
-        require_existing_root("left", l)?;
-        require_existing_root("right", r)?;
-        let started = now_ms();
-        let job_id = match index(&app) {
-            Some(ix) => {
-                let job = NewJob {
-                    left: &pair_key(&left),
-                    right: &pair_key(&right),
-                    mode,
-                    options: &exec,
-                    ops: &ops,
-                };
-                // A journal is part of the safety net: refuse to run without
-                // one rather than silently losing crash recovery.
-                Some(ix.create_job(&job).map_err(db_err)?)
-            }
-            None => None,
-        };
+    blocking(move || {
         let spec = RunSpec { left: &left, right: &right, mode, compare: &compare, conflicts };
         let mut send = progress_sender(on_progress);
-        Ok(run_job(
-            &app,
-            &spec,
-            (l, r),
-            job_id.as_deref().map(|id| (id, started)),
-            &ops,
-            &exec,
-            &guard.flag,
-            &guard.pause,
-            &mut send,
-        ))
-    }))
+        execute_new_job(&app, &spec, &ops, &exec, &guard.flag, &guard.pause, &mut send)
+    })
     .await
+    // automation:shell end
 }
 
 /// Asks a running sync to stop at the next safe point.

@@ -31,9 +31,17 @@ pcompare-archive = { path = "../crates/pcompare-archive" }
 # araxis:text-review — comparison archives (.pcmpz) with review comments.
 pcompare-review = { path = "../crates/pcompare-review" }
 # araxis:text-review end
+# automation:shell — saved sync tasks on schedules / real-time, failure notifications.
+pcompare-automation = { path = "../crates/pcompare-automation" }
+pcompare-notify = { path = "../crates/pcompare-notify" }
+chrono = { version = "0.4", default-features = false, features = ["std", "clock"] }
+gethostname = "1"
+tauri-plugin-notification = "2"
+tauri-plugin-autostart = "2"
+# automation:shell end
 serde.workspace = true
 serde_json.workspace = true
-tauri = { version = "2", features = [] }
+tauri = { version = "2", features = ["tray-icon"] } # automation:shell — tray icon
 tauri-plugin-dialog = "2"
 tauri-plugin-opener = "2"
 tauri-plugin-updater = "2"
