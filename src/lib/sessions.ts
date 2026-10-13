@@ -20,6 +20,7 @@ import {
 } from "lucide-react";
 import { FileDiff, FilePen } from "lucide-react"; // bc5:editor-patch
 import { Package } from "lucide-react"; // araxis:text-review
+import { CalendarClock } from "lucide-react"; // automation:ui
 import { isArchivePath } from "./archiveApi"; // bc5:archives
 
 export type CompareKind =
@@ -40,7 +41,7 @@ export type CompareKind =
   | "patch"
   | "review"; // araxis:text-review — a comparison archive (.pcmpz), read-only
 
-export type SessionKind = "home" | "profiles" | CompareKind;
+export type SessionKind = "home" | "profiles" | "automation" | CompareKind; // automation:ui — automation
 
 export interface SessionInfo {
   label: string;
@@ -66,6 +67,14 @@ export const SESSIONS: Record<SessionKind, SessionInfo> = {
     color: "#38bdf8",
     description: "Connect S3, OneDrive, Dropbox, Google Drive, FTP, SFTP, WebDAV and more.",
   },
+  // automation:ui
+  automation: {
+    label: "Sync Automation",
+    icon: CalendarClock,
+    color: "#fb7185",
+    description: "Run folder syncs on a schedule or when files change, with failure alerts to Teams, email and more.",
+  },
+  // automation:ui end
   text: {
     label: "Text Compare",
     icon: FileText,
@@ -187,7 +196,8 @@ export const COMPARE_KINDS: CompareKind[] = [
   "patch",
 ];
 
-export const isCompareKind = (k: SessionKind): k is CompareKind => k !== "home" && k !== "profiles";
+export const isCompareKind = (k: SessionKind): k is CompareKind =>
+  k !== "home" && k !== "profiles" && k !== "automation"; // automation:ui — automation
 
 /** Lower-cased extension without the dot ("" when there is none). */
 export function extension(path: string): string {

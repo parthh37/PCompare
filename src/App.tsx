@@ -54,6 +54,11 @@ import { ReviewArchiveView } from "./components/ReviewArchiveView";
 import { isReviewArchivePath } from "./lib/reviewApi";
 // araxis:text-review end
 import { dropOnPathField, highlightPathField } from "./lib/pathDrop"; // araxis:folder
+// automation:ui — the Sync Automation tab (scheduled / real-time folder syncs)
+import { CalendarClock } from "lucide-react";
+import { AutomationPage, type AutomationPrefill } from "./components/AutomationPage";
+import { onOpenRequest, type SyncTask } from "./lib/automationApi";
+// automation:ui end
 
 export type { SessionKind } from "./lib/sessions";
 
@@ -174,6 +179,30 @@ export default function App() {
   };
 
   const openProfiles = () => focusOr((t) => t.kind === "profiles", () => openTab("profiles"));
+
+  // automation:ui — one Automation tab; `prefill` (from Folder Sync's "Automate…") opens its editor.
+  const [automationPrefill, setAutomationPrefill] = useState<AutomationPrefill | null>(null);
+  const prefillSeq = useRef(0);
+  const openAutomation = (prefill?: Partial<SyncTask>) => {
+    if (prefill) setAutomationPrefill({ seq: ++prefillSeq.current, task: prefill });
+    focusOr((t) => t.kind === "automation", () => openTab("automation"));
+  };
+  const openAutomationRef = useRef(openAutomation);
+  openAutomationRef.current = openAutomation;
+  // The tray menu's "Sync Automation…".
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    let cancelled = false;
+    onOpenRequest(() => openAutomationRef.current())
+      .then((u) => (cancelled ? u() : (unlisten = u)))
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+      unlisten?.();
+    };
+  }, []);
+  const clearAutomationPrefill = useCallback(() => setAutomationPrefill(null), []);
+  // automation:ui end
 
   const openSaved = (s: SavedSession) =>
     focusOr(
@@ -507,7 +536,13 @@ export default function App() {
       case "home":
         return (
           <Home
-            onNew={(kind) => (kind === "profiles" ? openProfiles() : updateTab(t.id, { kind }))}
+            onNew={(kind) =>
+              kind === "profiles"
+                ? openProfiles()
+                : kind === "automation" // automation:ui
+                  ? openAutomation()
+                  : updateTab(t.id, { kind })
+            }
             saved={saved}
             onOpenSaved={openSaved}
             onRenameSaved={(s, name) =>
@@ -576,6 +611,17 @@ export default function App() {
         );
       case "profiles":
         return <Profiles />;
+      // automation:ui
+      case "automation":
+        return (
+          <AutomationPage
+            prefill={automationPrefill}
+            onPrefillUsed={clearAutomationPrefill}
+            onToast={setToast}
+            onHelp={() => setHelpTopic("automation")}
+          />
+        );
+      // automation:ui end
       case "text":
         return (
           <TextCompare
@@ -607,7 +653,7 @@ export default function App() {
           />
         );
       case "sync":
-        return <FolderSync {...two} onOpenFiles={openFiles} />;
+        return <FolderSync {...two} onOpenFiles={openFiles} onAutomate={openAutomation /* automation:ui */} />;
       case "folderMerge":
         return (
           <FolderMerge
@@ -704,6 +750,14 @@ export default function App() {
           </button>
           <button className="tab-action" title="Connection profiles" onClick={openProfiles}>
             <Globe size={14} /> Profiles
+          </button>
+          {/* automation:ui */}
+          <button
+            className="tab-action"
+            title="Sync Automation: scheduled and real-time folder syncs"
+            onClick={() => openAutomation()}
+          >
+            <CalendarClock size={14} /> Automation
           </button>
           <button
             className="tab-action"
