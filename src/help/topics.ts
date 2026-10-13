@@ -298,6 +298,50 @@ Profiles connect remote storage: Amazon S3 and compatibles, Azure Blob, Google C
 Use \`remote://<profile>/path\` (or the globe button next to a path) on either side of any comparison. **Test** checks a profile before saving; OAuth providers need an app registration you control — follow the link in the form.
 `,
   },
+  // automation:ui
+  {
+    id: "automation",
+    title: "Sync Automation",
+    kinds: ["automation"],
+    body: `
+Saved folder syncs that run by themselves: on a schedule, when files change, or when PCompare starts — with safety checks, retries, a run history and alerts when something goes wrong. Open it from **Automation** in the tab bar, the Home card, or the tray icon's menu. In a Folder Sync tab, **Automate…** turns the folders and settings you're using into a new task.
+
+## Tasks
+- Each task is a folder pair, a sync mode and its options — the same engine as Folder Sync, without the preview step. **Mirror** and **Two-way** delete files; the editor says so before you save.
+- **Run now** always works, even for a disabled task or while automation is paused. A task never runs twice at once: triggers that arrive during a run collapse into one follow-up run.
+- The switch at the start of a row enables or disables a task. **Pause all** stops every automatic run until you resume.
+
+## Triggers
+- **Interval**: every N minutes, counted from the end of the previous run.
+- **Daily / weekly**: fixed times on chosen weekdays (local time).
+- **Cron**: five fields (\`minute hour day month weekday\`) or six with seconds first, e.g. \`0 */2 * * *\` every two hours, \`30 8 * * 1-5\` weekdays at 08:30; \`@hourly\`, \`@daily\`, \`@weekly\`, \`@monthly\` too.
+- **Real-time**: watches the source folder(s) — left for left→right modes, right for right→left, both for two-way and update-both — and syncs once changes have been quiet for a few seconds (or after the maximum delay under constant change). Remote folders and some network shares can't be watched; a periodic **rescan** covers them, and catches anything the system didn't report. The eye icon shows watching is active; a crossed-out eye explains why it isn't.
+- **At startup**: once, a little after PCompare starts.
+- **Catch up missed runs**: if PCompare was closed or the computer slept through a scheduled time, run once as soon as possible.
+The editor's **Next runs** list shows exactly when the schedule fires.
+
+## Safety
+- **Abort when one folder is empty** — almost always an unplugged drive or an unmounted share. **Abort on mass deletion** and the deletion limits (a count, or a percentage of the files on that side) stop a run before it deletes. Aborted runs change nothing and are reported as failures.
+- **Timeout** cancels a run that takes too long.
+- **Retry the whole run** for run-wide failures such as an unreachable NAS: the wait doubles each time (up to an hour) and only the last attempt notifies. Files in use are retried per file, as in Folder Sync (Options tab).
+- Deleted and replaced files go to the Recycle Bin / Trash, a versioning folder (exact rollback), or are deleted permanently — set on the Options tab.
+
+## Notifications
+Add channels with **Notification channels**, then tick them on a task's Notifications tab. By default you hear about failures, runs with errors or conflicts, and the first success after a failure; the same failure isn't repeated more than every 6 hours. **Send test** checks a channel. Webhook URLs and passwords are kept in the system keychain and are never exported.
+- **Microsoft Teams**: in the channel open **⋯ › Workflows**, choose **Post to a channel when a webhook request is received**, pick the team and channel, and paste the URL it shows. Legacy Incoming Webhook URLs also work.
+- **Slack**: an app with **Incoming Webhooks**; paste the webhook URL.
+- **Email (SMTP)**: Microsoft 365 uses \`smtp.office365.com\`, port 587, STARTTLS (SMTP AUTH must be allowed for the mailbox). Gmail uses \`smtp.gmail.com\`, 587, STARTTLS with an **app password** (Google Account › Security › App passwords), not your normal password. Leave the port blank for the default of the security mode.
+- **Webhook**: PCompare POSTs a JSON summary; an optional signing secret adds an HMAC-SHA256 signature header.
+- **Desktop**: an OS notification on this computer.
+
+## Running in the background
+With *Automation settings → Keep running in the background*, closing the window leaves PCompare in the notification area (tray) so tasks keep running; quit from the tray icon. *Start PCompare when I sign in* starts it in the background at login. Tasks only run while PCompare is running.
+
+## History and rollback
+The bottom panel lists runs for all tasks or the selected one: what started it, the attempt, the result, operations, failures, conflicts, bytes copied, duration and which notifications were sent. Click a run for details. **Open in Sync History** (the arrow at the end of a row) shows the run's individual operations and can **roll back** what it changed. A run interrupted by a crash is repaired automatically before that task's next run. History older than the number of days in Automation settings is removed.
+`,
+  },
+  // automation:ui end
   // bc5:editor-patch
   {
     id: "edit",
