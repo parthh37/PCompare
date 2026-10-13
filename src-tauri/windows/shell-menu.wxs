@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The Explorer context menu for MSI installs (the NSIS installer does the
+     same in hooks.nsh). The app writes the verbs itself, per user, from
+     crates/pcompare-shell/src/menu.rs; it also re-adds them at startup. -->
+<Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
+  <Fragment>
+    <DirectoryRef Id="INSTALLDIR">
+      <!-- Pulls this fragment into the package (bundle.windows.wix.componentRefs). -->
+      <Component Id="PCompareShellMenu" Guid="{3D883B69-4B1A-4C42-ACDF-9CB9AFEE9167}">
+        <RegistryValue Root="HKCU" Key="Software\PCompare\ShellMenu" Name="Msi" Type="integer" Value="1" KeyPath="yes" />
+      </Component>
+    </DirectoryRef>
+    <!-- Impersonated: HKCU must be the user's, not the elevated installer's. -->
+    <CustomAction Id="PCompareInstallShellMenu" FileKey="Path" ExeCommand="--install-shell-menu" Execute="deferred" Impersonate="yes" Return="ignore" />
+    <CustomAction Id="PCompareUninstallShellMenu" FileKey="Path" ExeCommand="--uninstall-shell-menu" Execute="deferred" Impersonate="yes" Return="ignore" />
+    <InstallExecuteSequence>
+      <Custom Action="PCompareInstallShellMenu" Before="InstallFinalize">NOT REMOVE</Custom>
+      <Custom Action="PCompareUninstallShellMenu" Before="RemoveFiles">REMOVE="ALL" AND NOT UPGRADINGPRODUCTCODE</Custom>
+    </InstallExecuteSequence>
+  </Fragment>
+</Wix>

@@ -545,6 +545,10 @@ export default function App() {
             }
             saved={saved}
             onOpenSaved={openSaved}
+            onImported={(count) => {
+              setToast(`Imported ${count} session${count === 1 ? "" : "s"}.`);
+              refreshSaved();
+            }}
             onRenameSaved={(s, name) =>
               api
                 .renameSession(s.id, name)

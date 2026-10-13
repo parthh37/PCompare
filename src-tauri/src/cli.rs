@@ -93,6 +93,11 @@ Options (Beyond Compare spellings in brackets):
   --silent               [/silent] scripts: print only errors
   --select-left <path>   remember <path> for a later --compare-to
   --compare-to <path>    compare <path> with the remembered left side
+  --compare-selection <path>
+                         Explorer's 'Compare with PCompare': items started within
+                         a moment of each other open as one comparison
+  --install-shell-menu   add the Explorer right-click menu (unless turned off)
+  --uninstall-shell-menu remove the Explorer right-click menu
   -h, --help             [/?, /h, /help] show this help
 
 Exit codes:
