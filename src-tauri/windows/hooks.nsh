@@ -1,32 +1,29 @@
 ; Explorer context menu, like Beyond Compare's shell extension:
-;   1. right-click a file/folder -> "Select Left Side for Compare"
-;   2. right-click another one   -> "Compare to Left Side"
-; The app records the first path (`--select-left`) and pairs it with the
-; second (`--compare-to`). Per-user keys, matching the currentUser install.
-
-!macro PCOMPARE_MENU ROOT
-  WriteRegStr HKCU "Software\Classes\${ROOT}\shell\PCompare.SelectLeft" "" "Select Left Side for Compare"
-  WriteRegStr HKCU "Software\Classes\${ROOT}\shell\PCompare.SelectLeft" "Icon" "$INSTDIR\${MAINBINARYNAME}.exe"
-  WriteRegStr HKCU "Software\Classes\${ROOT}\shell\PCompare.SelectLeft\command" "" '"$INSTDIR\${MAINBINARYNAME}.exe" --select-left "%1"'
-  WriteRegStr HKCU "Software\Classes\${ROOT}\shell\PCompare.CompareTo" "" "Compare to Left Side"
-  WriteRegStr HKCU "Software\Classes\${ROOT}\shell\PCompare.CompareTo" "Icon" "$INSTDIR\${MAINBINARYNAME}.exe"
-  WriteRegStr HKCU "Software\Classes\${ROOT}\shell\PCompare.CompareTo\command" "" '"$INSTDIR\${MAINBINARYNAME}.exe" --compare-to "%1"'
-!macroend
-
-!macro PCOMPARE_UNMENU ROOT
-  DeleteRegKey HKCU "Software\Classes\${ROOT}\shell\PCompare.SelectLeft"
-  DeleteRegKey HKCU "Software\Classes\${ROOT}\shell\PCompare.CompareTo"
-!macroend
+;   "Select Left Side for Compare", then "Compare to '<name>'" on another item,
+;   or select 2-3 items -> "Compare with PCompare".
+; The app writes the verbs itself (per user, HKCU) from the list in
+; crates/pcompare-shell/src/menu.rs, the same code it runs at startup and from
+; Settings, so the installer, MSI and portable copies all get the same menu.
 
 !macro NSIS_HOOK_POSTINSTALL
-  !insertmacro PCOMPARE_MENU "*"
-  !insertmacro PCOMPARE_MENU "Directory"
-  ; Tell Explorer the verbs changed so the menu shows without a restart.
-  System::Call 'shell32::SHChangeNotify(i 0x08000000, i 0, p 0, p 0)'
+  ; Respects "off" in Settings.
+  ExecWait '"$INSTDIR\${MAINBINARYNAME}.exe" --install-shell-menu'
+!macroend
+
+!macro NSIS_HOOK_PREUNINSTALL
+  ; An update reinstalls straight after; only a real uninstall removes the menu.
+  ${If} $UpdateMode <> 1
+    ExecWait '"$INSTDIR\${MAINBINARYNAME}.exe" --uninstall-shell-menu'
+  ${EndIf}
 !macroend
 
 !macro NSIS_HOOK_POSTUNINSTALL
-  !insertmacro PCOMPARE_UNMENU "*"
-  !insertmacro PCOMPARE_UNMENU "Directory"
-  System::Call 'shell32::SHChangeNotify(i 0x08000000, i 0, p 0, p 0)'
+  ; Verbs written by 0.2.0's installer, in case the exe above couldn't run.
+  ${If} $UpdateMode <> 1
+    DeleteRegKey HKCU "Software\Classes\*\shell\PCompare.SelectLeft"
+    DeleteRegKey HKCU "Software\Classes\*\shell\PCompare.CompareTo"
+    DeleteRegKey HKCU "Software\Classes\Directory\shell\PCompare.SelectLeft"
+    DeleteRegKey HKCU "Software\Classes\Directory\shell\PCompare.CompareTo"
+    System::Call 'shell32::SHChangeNotify(i 0x08000000, i 0, p 0, p 0)'
+  ${EndIf}
 !macroend

@@ -33,8 +33,9 @@ jobs:
       - run: npm run build
       - run: cargo clippy --workspace --all-targets -- -D warnings
 
-  # Installable builds of every PR: the Windows NSIS installer (which also
-  # exercises the Explorer context-menu hooks) and an Apple Silicon DMG.
+  # Installable builds of every PR: the Windows NSIS installer and MSI (which
+  # also compile the Explorer context-menu hooks.nsh / shell-menu.wxs) and an
+  # Apple Silicon DMG.
   # Updater signing is switched off so PRs don't need the release key.
   bundles:
     strategy:
@@ -43,7 +44,7 @@ jobs:
         include:
           - name: windows-x64
             platform: windows-latest
-            args: --bundles nsis
+            args: --bundles nsis,msi
             target: ""
           - name: macos-apple-silicon
             platform: macos-latest
@@ -70,5 +71,6 @@ jobs:
           name: PCompare-${{ matrix.name }}
           path: |
             target/release/bundle/nsis/*.exe
+            target/release/bundle/msi/*.msi
             target/aarch64-apple-darwin/release/bundle/dmg/*.dmg
           if-no-files-found: error

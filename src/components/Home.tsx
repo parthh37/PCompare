@@ -1,4 +1,4 @@
-import { Globe, Layers, Pencil, Trash, X } from "lucide-react";
+import { FileInput, Globe, Layers, Pencil, Trash, X } from "lucide-react";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { isRemote, type SavedSession } from "../lib/api";
 import { formatTime } from "../lib/format";
@@ -12,6 +12,7 @@ import { FileFormatsDialog } from "./FileFormatsDialog"; // bc5:converters
 import { SnapshotDialog } from "./SnapshotDialog"; // bc5:archives
 import { GettingStarted } from "./GettingStarted"; // araxis:vcs
 import { setPrefs } from "../lib/prefs"; // araxis:vcs
+import { ImportSessionsDialog } from "./ImportSessionsDialog";
 
 interface Props {
   onNew: (kind: Exclude<SessionKind, "home">) => void;
@@ -19,6 +20,8 @@ interface Props {
   onOpenSaved: (s: SavedSession) => void;
   onRenameSaved: (s: SavedSession, name: string) => void;
   onDeleteSaved: (s: SavedSession) => void;
+  /** After "Import sessions…" saved `count` sessions from another tool. */
+  onImported: (count: number) => void;
   workspaces: Workspace[];
   onOpenWorkspace: (w: Workspace) => void;
   onRenameWorkspace: (w: Workspace, name: string) => void;
@@ -160,6 +163,7 @@ export function Home(props: Props) {
   const [query, setQuery] = useState("");
   const [fileFormats, setFileFormats] = useState(false); // bc5:converters
   const [snapshotting, setSnapshotting] = useState(false); // bc5:archives
+  const [importing, setImporting] = useState(false);
   // araxis:vcs — the Getting started overview, once at first run and on request.
   const overviewDismissed = usePref("gettingStartedDismissed");
   const [overview, setOverview] = useState(false);
@@ -275,11 +279,21 @@ export function Home(props: Props) {
 
       <div className="saved-head">
         <h2>Saved sessions</h2>
+        <button className="link muted" onClick={() => setImporting(true)} title="Import sessions from Beyond Compare, WinMerge, FreeFileSync or Meld">
+          <FileInput size={12} /> Import…
+        </button>
       </div>
+      {importing && (
+        <ImportSessionsDialog saved={saved} onImported={props.onImported} onClose={() => setImporting(false)} />
+      )}
       {saved.length === 0 ? (
         <p className="muted">
           No saved sessions yet. Open a comparison and press <kbd>{shortcutLabel("app.saveSession") || "Save session"}</kbd>{" "}
-          to save it with a name.
+          to save it with a name, or{" "}
+          <button className="link" onClick={() => setImporting(true)}>
+            import sessions from Beyond Compare and other tools
+          </button>
+          .
         </p>
       ) : (
         <div className="saved-list">

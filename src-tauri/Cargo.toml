@@ -19,6 +19,8 @@ pcompare-sync = { path = "../crates/pcompare-sync" }
 pcompare-meta = { path = "../crates/pcompare-meta" }
 pcompare-index = { path = "../crates/pcompare-index" }
 pcompare-db = { path = "../crates/pcompare-db" }
+pcompare-shell = { path = "../crates/pcompare-shell" }
+pcompare-import = { path = "../crates/pcompare-import" }
 # bc5:converters — document → text converters, file format rules, external tools.
 pcompare-convert = { path = "../crates/pcompare-convert" }
 # bc5:reports-script — HTML/text/CSV reports and the script processor (`pcompare @script.txt`).

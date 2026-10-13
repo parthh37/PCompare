@@ -25,6 +25,8 @@ import "./AppShell.css";
 import { Modal } from "./Modal";
 import { GitBranch } from "lucide-react"; // araxis:vcs
 import { VcsSetupPage } from "./VcsSetup"; // araxis:vcs
+import { explorerApi, type MenuStatus } from "../lib/explorerApi";
+import { errorMessage } from "../lib/api";
 
 interface Props {
   updater: Updater;
@@ -91,6 +93,7 @@ function GeneralPage({ updater, prefs, set }: { updater: Updater; prefs: Prefs; 
           Closing a tab updates its saved session; unsaved comparisons go to Recent sessions on Home.
         </small>
       </fieldset>
+      <ExplorerMenuSettings />
       <fieldset>
         <legend>Updates</legend>
         <div className="update-status">
@@ -120,6 +123,58 @@ function GeneralPage({ updater, prefs, set }: { updater: Updater; prefs: Prefs; 
         </label>
       </fieldset>
     </div>
+  );
+}
+
+/** Windows only: the "Select Left Side" / "Compare with PCompare" right-click menu. */
+function ExplorerMenuSettings() {
+  const [status, setStatus] = useState<MenuStatus | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  useEffect(() => {
+    explorerApi
+      .status()
+      .then(setStatus)
+      .catch(() => setStatus({ state: "unsupported" }));
+  }, []);
+  if (!status || status.state === "unsupported") return null;
+
+  const apply = (enabled: boolean) => {
+    setBusy(true);
+    setError(null);
+    explorerApi
+      .set(enabled)
+      .then(setStatus)
+      .catch((e) => setError(errorMessage(e)))
+      .finally(() => setBusy(false));
+  };
+  const on = status.state !== "disabled";
+  return (
+    <fieldset>
+      <legend>Windows Explorer</legend>
+      <label className="field check">
+        <input type="checkbox" checked={on} disabled={busy} onChange={(e) => apply(e.target.checked)} />
+        Add PCompare to the right-click menu
+      </label>
+      <small className="muted settings-hint">
+        Right-click a file or folder → <b>Select Left Side for Compare</b>, then another → <b>Compare to</b>; or select
+        two folders or files (three for a merge) → <b>Compare with PCompare</b>. On Windows 11 these are under{" "}
+        <b>Show more options</b> (or Shift+right-click).
+      </small>
+      {status.state === "stale" && (
+        <small className="muted settings-hint">
+          The menu currently opens another copy of PCompare ({status.exe}).
+        </small>
+      )}
+      {(status.state === "stale" || status.state === "missing") && (
+        <div className="settings-actions">
+          <button disabled={busy} onClick={() => apply(true)}>
+            Repair menu
+          </button>
+        </div>
+      )}
+      {error && <small className="settings-hint" style={{ color: "var(--danger-text)" }}>{error}</small>}
+    </fieldset>
   );
 }
 
