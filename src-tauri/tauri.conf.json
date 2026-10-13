@@ -40,6 +40,10 @@
       "nsis": {
         "installMode": "currentUser",
         "installerHooks": "windows/hooks.nsh"
+      },
+      "wix": {
+        "fragmentPaths": ["windows/shell-menu.wxs"],
+        "componentRefs": ["PCompareShellMenu"]
       }
     },
     "createUpdaterArtifacts": true,

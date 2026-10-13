@@ -5149,6 +5149,7 @@ dependencies = [
  "pcompare-convert",
  "pcompare-core",
  "pcompare-db",
+ "pcompare-import",
  "pcompare-index",
  "pcompare-merge",
  "pcompare-meta",
@@ -5158,6 +5159,7 @@ dependencies = [
  "pcompare-report",
  "pcompare-review",
  "pcompare-script",
+ "pcompare-shell",
  "pcompare-sync",
  "pcompare-table",
  "serde",
@@ -5195,7 +5197,7 @@ dependencies = [
 
 [[package]]
 name = "pcompare-automation"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "chrono",
  "chrono-tz",
@@ -5267,6 +5269,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "pcompare-import"
+version = "0.3.0"
+dependencies = [
+ "roxmltree",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.21",
+ "zip 8.6.0",
+]
+
+[[package]]
 name = "pcompare-index"
 version = "0.3.0"
 dependencies = [
@@ -5307,7 +5321,7 @@ dependencies = [
 
 [[package]]
 name = "pcompare-notify"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "chrono",
  "hmac 0.12.1",
@@ -5389,6 +5403,15 @@ dependencies = [
  "pcompare-report",
  "pcompare-sync",
  "tempfile",
+]
+
+[[package]]
+name = "pcompare-shell"
+version = "0.3.0"
+dependencies = [
+ "serde",
+ "tempfile",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -6606,6 +6629,15 @@ dependencies = [
  "libc",
  "untrusted 0.9.0",
  "windows-sys 0.52.0",
+]
+
+[[package]]
+name = "roxmltree"
+version = "0.21.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f1964b10c76125c36f8afe190065a4bf9a87bf324842c05701330bba9f1cacbb"
+dependencies = [
+ "memchr",
 ]
 
 [[package]]
