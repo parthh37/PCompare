@@ -21,6 +21,8 @@ mod cli; // bc5:reports-script
 mod report; // bc5:reports-script
 mod review; // araxis:text-review
 mod vcs; // araxis:vcs
+mod explorer;
+mod import;
 
 use pcompare_core::session::{SavedSession, SessionInput, SessionStore};
 use pcompare_core::text::{self, TextDiffOptions, TextDiffResult};
@@ -139,6 +141,7 @@ fn resolve_launch_paths(args: &[String]) -> cli::LaunchOptions {
     }
     let launch = resolve_launch_args(args, read_left_selection());
     let _ = std::fs::remove_file(left_selection_file());
+    pcompare_shell::menu::set_left(None);
     launch
 }
 
@@ -159,6 +162,7 @@ fn get_left_selection() -> Option<String> {
 #[tauri::command]
 fn set_left_selection(path: Option<String>) -> CmdResult<()> {
     let file = left_selection_file();
+    pcompare_shell::menu::set_left(path.as_deref());
     match path {
         Some(p) => std::fs::write(file, p).map_err(|e| e.to_string()),
         None => match std::fs::remove_file(file) {
@@ -346,14 +350,11 @@ async fn remote_list(app: AppHandle, path: String) -> CmdResult<Vec<RemoteEntry>
 }
 
 fn main() {
-    // Explorer's "Select Left Side for Compare" just records the path and
-    // exits without opening a window, like Beyond Compare's shell extension.
+    // Explorer menu verbs ("Select Left Side", multi-select "Compare with
+    // PCompare") and installer hooks run without a window.
     let args: Vec<String> = std::env::args().collect();
-    if let Some(i) = args.iter().position(|a| a == "--select-left") {
-        if let Some(path) = args.get(i + 1) {
-            let _ = std::fs::write(left_selection_file(), path);
-        }
-        return;
+    if let Some(code) = explorer::run_early(args.get(1..).unwrap_or_default()) {
+        std::process::exit(code);
     }
     // bc5:reports-script — `@script`, `/qc` and `--help` run without a window.
     if let Some(code) = cli::run_headless(args.get(1..).unwrap_or_default()) {
@@ -402,6 +403,7 @@ fn main() {
             });
             app.manage(workspace::ShellState::new(&config_dir)); // bc5:app-shell
             remote::install_prompter(app.handle()); // bc5:remote-write
+            explorer::ensure_on_startup();
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -409,6 +411,11 @@ fn main() {
             launch_args,
             get_left_selection,
             set_left_selection,
+            explorer::shell_menu_status,
+            explorer::shell_menu_set,
+            import::import_discover,
+            import::import_read,
+            import::import_commit,
             compare_text_files,
             folder::compare_folders, // bc5:folder-engine (moved to folder.rs)
             folder::compare_file_contents,

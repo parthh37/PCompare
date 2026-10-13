@@ -510,6 +510,10 @@ export default function App() {
             onNew={(kind) => (kind === "profiles" ? openProfiles() : updateTab(t.id, { kind }))}
             saved={saved}
             onOpenSaved={openSaved}
+            onImported={(count) => {
+              setToast(`Imported ${count} session${count === 1 ? "" : "s"}.`);
+              refreshSaved();
+            }}
             onRenameSaved={(s, name) =>
               api
                 .renameSession(s.id, name)

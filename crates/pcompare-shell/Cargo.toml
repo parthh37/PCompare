@@ -1,0 +1,18 @@
+[package]
+name = "pcompare-shell"
+description = "Windows Explorer integration for PCompare: right-click menu verbs and multi-select grouping"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+# No C dependencies on purpose: `cargo clippy --target x86_64-pc-windows-msvc
+# -p pcompare-shell` checks the registry code from any OS.
+[dependencies]
+serde.workspace = true
+
+[dev-dependencies]
+tempfile = "3"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security", "Win32_System_Registry", "Win32_UI_Shell"] }
