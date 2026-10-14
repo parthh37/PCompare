@@ -133,6 +133,8 @@ const RECOMPARE_DELAY_MS = 120;
 const MAX_SYNTAX_LINE = 4000;
 const PROBE_CHARS = 100;
 const CLIPBOARD_LABEL = "Clipboard";
+/** Stands in for a side with no file while the other side has one (an orphan from a folder compare). */
+const NO_FILE_LABEL = "no file";
 
 type ViewMode = "all" | "context" | "diffs";
 type Side = "left" | "right";
@@ -209,15 +211,20 @@ const memoryDoc = (m: MemoryText): TextDocument => {
   return doc;
 };
 
-/** Loads both sides; in-memory sides skip the backend. */
+/** Loads both sides; in-memory sides skip the backend, and a side with no file loads empty. */
 async function loadSides(
   left: string,
   right: string,
   memory: Record<Side, MemoryText | null>,
   encodings: Encodings = NO_ENCODINGS, // bc5:text-engine
 ): Promise<{ left: TextDocument; right: TextDocument }> {
-  if (!memory.left && !memory.right) return textApi.loadTextPair(left, right, encodings.left, encodings.right);
-  const file = async (path: string) => textApi.loadText(path, path === left ? encodings.left : encodings.right);
+  if (!memory.left && !memory.right && left && right)
+    return textApi.loadTextPair(left, right, encodings.left, encodings.right);
+  const file = async (path: string) =>
+    path
+      ? textApi.loadText(path, path === left ? encodings.left : encodings.right)
+      : // No lines at all, like an empty file (splitting "" would give one blank line).
+        memoryDoc({ lines: [], trailingNewline: false, size: 0, lineEnding: "none", label: NO_FILE_LABEL, eols: [] });
   const [l, r] = await Promise.all([
     memory.left ? memoryDoc(memory.left) : file(left),
     memory.right ? memoryDoc(memory.right) : file(right),
@@ -512,8 +519,8 @@ export function TextCompare({
    */
   const load = useCallback(
     async (quiet = false) => {
-      if ((!left && !memory.left) || (!right && !memory.right)) {
-        // A side lost its clipboard text and has no file: nothing to compare any more.
+      if (!left && !memory.left && !right && !memory.right) {
+        // Neither side has a file or text: nothing to show.
         if (!quiet) {
           requestSeq.current++;
           setDocs(null);
@@ -541,7 +548,8 @@ export function TextCompare({
           setDocs({ left: l ?? cur.left, right: r ?? cur.right });
           return;
         }
-        setDocs({ left: toSide(pair.left, !!memory.left), right: toSide(pair.right, !!memory.right) });
+        // A side with no file is in-memory text: editable, never saved back or reported dirty.
+        setDocs({ left: toSide(pair.left, !!memory.left || !left), right: toSide(pair.right, !!memory.right || !right) });
         setHistory({ undo: [], redo: [] });
         setDiffed(null);
         setHunkIdx(-1);
