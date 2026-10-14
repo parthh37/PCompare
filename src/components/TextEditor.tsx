@@ -104,7 +104,7 @@ interface Props {
   onPathsChange: (left: string, right: string) => void;
   settings?: Partial<EditSettings>;
   onSettingsChange?: (s: EditSettings) => void;
-  onDirtyChange?: (dirty: boolean) => void;
+  onDirtyChange?: (dirty: boolean, save?: () => unknown) => void;
 }
 
 /** The file as edited in memory. */
@@ -232,7 +232,9 @@ export function TextEditor({ left: path, onPathsChange, settings, onSettingsChan
   const dirty = !!doc && isDirty(doc);
   const reportDirty = useRef(onDirtyChange);
   reportDirty.current = onDirtyChange;
-  useEffect(() => void reportDirty.current?.(dirty), [dirty]);
+  // Save all (closing the window or quitting) calls the latest save.
+  const saveForClose = useRef<() => unknown>(() => {});
+  useEffect(() => void reportDirty.current?.(dirty, () => saveForClose.current()), [dirty]);
 
   useEffect(() => {
     if (!notice) return;
@@ -351,9 +353,10 @@ export function TextEditor({ left: path, onPathsChange, settings, onSettingsChan
 
   const save = () => {
     if (!docRef.current || docRef.current.binary) return;
-    if (!path || remote) saveAs();
-    else if (dirty) writeTo(path);
+    if (!path || remote) return saveAs();
+    if (dirty) return writeTo(path);
   };
+  saveForClose.current = save;
 
   /**
    * Picks the encoding: an unedited file is re-read in it; with unsaved edits

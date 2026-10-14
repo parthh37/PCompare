@@ -3,6 +3,7 @@
 
 mod archive; // bc5:archives
 mod automation; // automation:shell
+mod close_guard;
 mod convert; // bc5:converters
 mod db;
 mod fileops; // bc5:file-ops
@@ -437,6 +438,11 @@ fn main() {
                 index: open_index(&data_dir),
             });
             app.manage(workspace::ShellState::new(&config_dir)); // bc5:app-shell
+            close_guard::manage(app.handle());
+            #[cfg(target_os = "macos")]
+            if let Err(e) = close_guard::install_app_menu(app.handle()) {
+                eprintln!("app menu: {e}");
+            }
             remote::install_prompter(app.handle()); // bc5:remote-write
             explorer::ensure_on_startup();
             // automation:shell — after AppState: the scheduler uses its scan database.
@@ -639,11 +645,16 @@ fn main() {
             automation::notify_delete_channel,
             automation::notify_test_channel,
             // automation:shell end
+            close_guard::close_guard_set_unsaved,
+            close_guard::close_guard_proceed,
         ])
         // automation:shell — with an event handler, so quitting stops running syncs at a safe point.
         .build(tauri::generate_context!())
         .expect("error while running PCompare")
-        .run(automation::on_run_event);
+        .run(|app, event| {
+            close_guard::on_run_event(app, &event);
+            automation::on_run_event(app, event);
+        });
         // automation:shell end
 }
 

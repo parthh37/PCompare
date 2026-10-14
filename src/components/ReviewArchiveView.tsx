@@ -53,7 +53,7 @@ interface Props {
   left: string;
   right: string;
   onPathsChange: (left: string, right: string) => void;
-  onDirtyChange?: (dirty: boolean) => void;
+  onDirtyChange?: (dirty: boolean, save?: () => unknown) => void;
 }
 
 const READ_ONLY = { left: true, right: true };
@@ -96,7 +96,9 @@ export function ReviewArchiveView({ left: path, onPathsChange, onDirtyChange }: 
       : !sameBookmarks(savedMarks as FolderBookmark[], marks as FolderBookmark[], folderKey));
   const reportDirty = useRef(onDirtyChange);
   reportDirty.current = onDirtyChange;
-  useEffect(() => void reportDirty.current?.(dirty), [dirty]);
+  // Save all (closing the window or quitting) calls the latest save.
+  const saveForClose = useRef<() => unknown>(() => {});
+  useEffect(() => void reportDirty.current?.(dirty, () => saveForClose.current()), [dirty]);
 
   useEffect(() => {
     if (!notice) return;
@@ -130,6 +132,8 @@ export function ReviewArchiveView({ left: path, onPathsChange, onDirtyChange }: 
       setSaving(false);
     }
   };
+
+  saveForClose.current = () => saveComments();
 
   if (!path) {
     return (

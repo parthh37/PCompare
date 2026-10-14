@@ -208,7 +208,9 @@ export function HexCompare({
   const dirty = !!state && (state.dirty[0] || state.dirty[1]);
   const reportDirty = useRef(onDirtyChange);
   reportDirty.current = onDirtyChange;
-  useEffect(() => void reportDirty.current?.(dirty), [dirty]);
+  // Save all (closing the window or quitting) calls the latest save.
+  const saveForClose = useRef<() => unknown>(() => {});
+  useEffect(() => void reportDirty.current?.(dirty, () => saveForClose.current()), [dirty]);
 
   // ---------- row cache ----------
   const cache = useRef(new Map<number, { key: string; rows: HexRow[] }>());
@@ -565,6 +567,10 @@ export function HexCompare({
       for (const s of sides) accept(await hexApi.save(sid(), s, prefs.backup, viewRef.current), ep);
       if (sides.length) setMessage(`Saved ${sides.map((s) => (s === 0 ? "left" : "right")).join(" and ")}`);
     });
+  saveForClose.current = () => {
+    save();
+    return queue.current;
+  };
 
   const copySelection = () =>
     run(async () => {
