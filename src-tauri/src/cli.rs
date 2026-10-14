@@ -93,6 +93,11 @@ Options (Beyond Compare spellings in brackets):
   --silent               [/silent] scripts: print only errors
   --select-left <path>   remember <path> for a later --compare-to
   --compare-to <path>    compare <path> with the remembered left side
+  --compare-selection <path>
+                         Explorer's 'Compare with PCompare': items started within
+                         a moment of each other open as one comparison
+  --install-shell-menu   add the Explorer right-click menu (unless turned off)
+  --uninstall-shell-menu remove the Explorer right-click menu
   -h, --help             [/?, /h, /help] show this help
 
 Exit codes:
@@ -253,6 +258,9 @@ pub fn parse(args: &[String]) -> Result<Invocation, String> {
             "select-left" => {
                 take(&mut i, &sw, "a path")?;
             }
+            // automation:shell — start-at-login launches hidden in the tray (main.rs).
+            "background" => {}
+            // automation:shell end
             // Unknown dash options (macOS adds `-psn_…`) are ignored, as before.
             _ => {}
         }
@@ -391,6 +399,14 @@ mod tests {
             args(&["/Users/me/a", "/tmp/b"])
         );
     }
+
+    // automation:shell
+    #[test]
+    fn background_is_a_switch_not_a_path() {
+        assert!(gui(&["--background"]).paths.is_empty());
+        assert_eq!(gui(&["--background", "a"]).paths, args(&["a"]));
+    }
+    // automation:shell end
 
     #[test]
     fn bc_and_gnu_style_switches() {
