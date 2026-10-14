@@ -1,7 +1,14 @@
 name: Release
 
-# Publishing = pushing a version tag:
-#   npm run version:bump 0.2.0 && git commit -am "Release v0.2.0" && git tag v0.2.0 && git push --follow-tags
+# Two ways to publish:
+#
+#   1. GitHub → Actions → Release → "Run workflow", pick a bump, Run.
+#      The workflow bumps the version files, commits "Release vX.Y.Z" to main,
+#      tags it, and builds that tag. Nothing to do locally.
+#      (CLI equivalent: gh workflow run release.yml -f bump=minor)
+#
+#   2. Push a version tag yourself (any git GUI's "create tag" + push works):
+#      npm run version:bump 0.2.0 && git commit -am "Release v0.2.0" && git tag v0.2.0 && git push --follow-tags
 #
 # Builds Windows (NSIS + MSI) and macOS (Apple Silicon + Intel DMG) installers,
 # signs the updater artifacts, and publishes a GitHub release with latest.json —
@@ -14,23 +21,81 @@ name: Release
 on:
   push:
     tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: "Version bump (as-is = release the version already on main)"
+        type: choice
+        options: [patch, minor, major, as-is]
+        default: patch
+      version:
+        description: "Exact version instead, e.g. 1.0.0-beta.1 (overrides bump)"
+        type: string
+        required: false
 
 permissions:
   contents: write
 
+# One release at a time: a manual run and a tag push must never race for main.
 concurrency:
-  group: release-${{ github.ref }}
+  group: release
   cancel-in-progress: false
 
 jobs:
+  # Settles which tag this run releases. A pushed tag is used as-is; a manual
+  # run bumps, commits and tags main first. Pushes made with GITHUB_TOKEN don't
+  # start other workflows, so the new tag doesn't kick off a second release.
+  prepare:
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.tag.outputs.tag }}
+    steps:
+      - name: Manual releases run from main
+        if: github.event_name == 'workflow_dispatch' && github.ref != 'refs/heads/main'
+        run: |
+          echo "::error::Run the Release workflow from the main branch (got ${GITHUB_REF})."
+          exit 1
+      - uses: actions/checkout@v4
+      - id: tag
+        env:
+          KIND: ${{ inputs.version || inputs.bump }}
+        run: |
+          if [ "$GITHUB_EVENT_NAME" = push ]; then
+            echo "tag=$GITHUB_REF_NAME" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          version=$(node scripts/version.mjs next "$KIND")
+          tag="v$version"
+          if git ls-remote --exit-code --tags origin "refs/tags/$tag" >/dev/null; then
+            echo "::error::$tag already exists — pick a higher version."
+            exit 1
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if ! node scripts/version.mjs check "$tag" >/dev/null 2>&1; then
+            node scripts/version.mjs bump "$version"
+            cargo update --workspace   # rewrites the workspace crates' versions in Cargo.lock
+            git commit -am "Release $tag"
+          fi
+          git tag "$tag"
+          # Atomic: main and the tag land together or not at all.
+          git push --atomic origin HEAD:main "$tag"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "Releasing $tag from $(git rev-parse --short HEAD)" >> "$GITHUB_STEP_SUMMARY"
+
   create-release:
+    needs: prepare
     runs-on: ubuntu-latest
     outputs:
       release_id: ${{ steps.create.outputs.result }}
+    env:
+      TAG: ${{ needs.prepare.outputs.tag }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.prepare.outputs.tag }}
       - name: Tag must match app version
-        run: node scripts/version.mjs check "$GITHUB_REF_NAME"
+        run: node scripts/version.mjs check "$TAG"
       - name: Updater signing key must be configured
         env:
           KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
@@ -43,7 +108,7 @@ jobs:
         uses: actions/github-script@v7
         with:
           script: |
-            const tag = process.env.GITHUB_REF_NAME;
+            const tag = process.env.TAG;
             const { data } = await github.rest.repos.createRelease({
               owner: context.repo.owner,
               repo: context.repo.repo,
@@ -56,7 +121,7 @@ jobs:
             return data.id;
 
   build:
-    needs: create-release
+    needs: [prepare, create-release]
     strategy:
       fail-fast: false
       matrix:
@@ -73,6 +138,8 @@ jobs:
     runs-on: ${{ matrix.platform }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.prepare.outputs.tag }}
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -124,12 +191,13 @@ jobs:
           updaterJsonPreferNsis: true
 
   publish-release:
-    needs: [create-release, build]
+    needs: [prepare, create-release, build]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/github-script@v7
         env:
           RELEASE_ID: ${{ needs.create-release.outputs.release_id }}
+          TAG: ${{ needs.prepare.outputs.tag }}
         with:
           script: |
             await github.rest.repos.updateRelease({
@@ -137,5 +205,5 @@ jobs:
               repo: context.repo.repo,
               release_id: Number(process.env.RELEASE_ID),
               draft: false,
-              make_latest: process.env.GITHUB_REF_NAME.includes("-") ? "false" : "true",
+              make_latest: process.env.TAG.includes("-") ? "false" : "true",
             });
