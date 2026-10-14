@@ -413,7 +413,8 @@ export type ProviderKind =
   | "onedrive"
   | "dropbox"
   | "gdrive"
-  | "sharepoint";
+  | "sharepoint"
+  | "github";
 
 export type FieldKind = "text" | "secret" | "number" | "checkbox" | "select" | "file";
 

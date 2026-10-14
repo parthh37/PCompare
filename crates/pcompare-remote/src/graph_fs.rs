@@ -224,7 +224,7 @@ fn status_err(status: StatusCode, body: &str) -> io::Error {
     io::Error::new(kind, format!("{status}: {message}"))
 }
 
-fn body_err(e: reqwest::Error) -> io::Error {
+pub(crate) fn body_err(e: reqwest::Error) -> io::Error {
     let kind = if e.is_decode() {
         io::ErrorKind::InvalidData
     } else {
@@ -258,10 +258,16 @@ async fn send(make: impl Fn() -> RequestBuilder) -> io::Result<reqwest::Response
 }
 
 /// A download, read synchronously chunk by chunk.
-struct Body {
+pub(crate) struct Body {
     resp: reqwest::Response,
     buf: Vec<u8>,
     pos: usize,
+}
+
+impl Body {
+    pub(crate) fn new(resp: reqwest::Response) -> Self {
+        Self { resp, buf: Vec::new(), pos: 0 }
+    }
 }
 
 impl Read for Body {
