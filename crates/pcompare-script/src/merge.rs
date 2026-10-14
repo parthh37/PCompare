@@ -139,7 +139,7 @@ pub fn auto_merge(a: &AutoMerge) -> Result<Merged, String> {
     let (bl, trailing, result) = match &b {
         Some(b) => {
             let (bl, bt) = pcompare_merge::split_lines(&b.text);
-            let m = pcompare_merge::merge3(&bl, &ll, &rl, &opts).map_err(|e| e.to_string())?;
+            let m = pcompare_merge::merge3(&bl, &ll, &rl, &opts, &pcompare_merge::MergeRules::default()).map_err(|e| e.to_string())?;
             (bl, pcompare_merge::merge_trailing_newline(bt, lt, rt), m)
         }
         None => (
@@ -207,10 +207,11 @@ mod tests {
 
     #[test]
     fn clean_merges_are_written_and_exit_0() {
-        let f = Files::new("a\nb\nc\n", "A\nb\nc\n", "a\nb\nC\n");
+        // Two unchanged lines apart: past the default conflict scan lines.
+        let f = Files::new("a\nb\nc\nd\n", "A\nb\nc\nd\n", "a\nb\nc\nD\n");
         let (m, out) = f.merge(|_| {});
         assert_eq!((m.conflicts, m.exit_code()), (0, 0));
-        assert_eq!(out.as_deref(), Some("A\nb\nC\n"));
+        assert_eq!(out.as_deref(), Some("A\nb\nc\nD\n"));
     }
 
     #[test]

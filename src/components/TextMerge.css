@@ -329,3 +329,8 @@
   height: 11px;
   border-radius: 1px;
 }
+
+.tm-scan-lines {
+  width: 3.5em;
+  margin-left: 6px;
+}

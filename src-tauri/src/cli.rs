@@ -975,17 +975,18 @@ mod tests {
     fn automerge_runs_headless_with_bc_exit_codes() {
         let d = temp_dir();
         let p = |n: &str| d.path().join(n).to_string_lossy().into_owned();
-        std::fs::write(p("b"), "a\nb\n").unwrap();
-        std::fs::write(p("l"), "A\nb\n").unwrap();
-        std::fs::write(p("r"), "a\nB\n").unwrap();
+        // Edits two unchanged lines apart: past the default conflict scan lines.
+        std::fs::write(p("b"), "a\nb\nc\nd\n").unwrap();
+        std::fs::write(p("l"), "A\nb\nc\nd\n").unwrap();
+        std::fs::write(p("r"), "a\nb\nc\nD\n").unwrap();
         let run = |extra: &[&str]| {
             let mut a = args(&[&p("l"), &p("r"), &p("b"), &p("o")]);
             a.extend(args(extra));
             run_headless(&a)
         };
         assert_eq!(run(&["/automerge"]), Some(0));
-        assert_eq!(std::fs::read_to_string(p("o")).unwrap(), "A\nB\n");
-        std::fs::write(p("r"), "Z\nb\n").unwrap();
+        assert_eq!(std::fs::read_to_string(p("o")).unwrap(), "A\nb\nc\nD\n");
+        std::fs::write(p("r"), "Z\nb\nc\nd\n").unwrap();
         std::fs::remove_file(p("o")).unwrap();
         assert_eq!(run(&["/automerge"]), Some(101));
         assert!(!d.path().join("o").exists());

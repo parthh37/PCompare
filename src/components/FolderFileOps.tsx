@@ -9,11 +9,12 @@
 // and rescan the comparison when they finish.
 import { ArrowLeftToLine, ArrowRightToLine, ListTodo, Trash } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type MouseEvent, type ReactNode, type RefObject } from "react";
-import type { FolderCompareResult, FolderEntry, Side } from "../lib/api";
+import type { FolderCompareOptions, FolderCompareResult, FolderEntry, Side } from "../lib/api";
 import {
   countSide,
   fileOps,
   isRemotePath,
+  itemFilterFor,
   leftRelPaths,
   pathsOverlap,
   useFileOps,
@@ -66,6 +67,8 @@ interface Args {
   /** Rescans after an operation touched these folders. */
   onRefresh: () => void;
   onError: (message: string) => void;
+  /** The comparison's options: copies and moves leave out what its filters hide. */
+  compareOptions?: FolderCompareOptions;
 }
 
 const ROW_HEIGHT = 24;
@@ -74,7 +77,18 @@ const parentOf = (rel: string) => (rel.includes("/") ? rel.slice(0, rel.lastInde
 const lastName = (rel: string) => rel.slice(rel.lastIndexOf("/") + 1);
 const sidesOf = (s: SelSide): Side[] => (s === "both" ? ["left", "right"] : [s]);
 
-export function useFolderFileOps({ root, result, entries, flat, left, right, onOpen, onRefresh, onError }: Args) {
+export function useFolderFileOps({
+  root,
+  result,
+  entries,
+  flat,
+  left,
+  right,
+  onOpen,
+  onRefresh,
+  onError,
+  compareOptions,
+}: Args) {
   const [sel, setSel] = useState<Selection>({ side: "both", rows: new Set(), anchor: null, focus: null });
   const [dialog, setDialog] = useState<Dialog | null>(null);
   const [panelOpen, setPanelOpen] = useState(false);
@@ -442,6 +456,7 @@ export function useFolderFileOps({ root, result, entries, flat, left, right, onO
         action={dialog.action}
         parts={dialog.parts}
         toFolder={dialog.toFolder}
+        filter={compareOptions ? itemFilterFor(compareOptions) : null}
         onCancel={close}
         onConfirm={(ready, options) => start(ready, dialog.action, options)}
       />

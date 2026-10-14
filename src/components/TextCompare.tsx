@@ -90,7 +90,6 @@ import {
 import { composeRuns, segmentRanges, visualLines, wrapRuns, type Run, type StyledRange } from "../lib/textRuns";
 import { FindBar, type FindScope } from "./FindBar";
 import { LineDetails } from "./LineDetails";
-import { Modal } from "./Modal";
 import { PathBar } from "./PathBar";
 import { VarList, type VarListHandle } from "./VarList";
 // bc5:converters — converted documents, file format rules, formatted HTML view.
@@ -287,7 +286,7 @@ interface Props {
   onOpenHex: () => void;
   settings?: Partial<TextSettings>;
   onSettingsChange?: (s: TextSettings) => void;
-  onDirtyChange?: (dirty: boolean) => void;
+  onDirtyChange?: (dirty: boolean, save?: () => unknown) => void;
   /** bc5:editor-patch — "Open in Text Edit" when only one file is chosen. */
   onOpenEditor?: (path: string) => void;
   /** bc5:reports-script — sides opened read-only from the command line (`/readonly`). */
@@ -618,7 +617,9 @@ export function TextCompare({
   const dirty = !!docs && SIDES.some((s) => isDirty(docs[s]) && !docs[s].memory);
   const reportDirty = useRef(onDirtyChange);
   reportDirty.current = onDirtyChange;
-  useEffect(() => void reportDirty.current?.(dirty), [dirty]);
+  // Save all (closing the window or quitting) calls the latest save.
+  const saveForClose = useRef<() => unknown>(() => {});
+  useEffect(() => void reportDirty.current?.(dirty, () => saveForClose.current()), [dirty]);
 
   const requestSeq = useRef(0);
   /**
@@ -1419,6 +1420,8 @@ export function TextCompare({
       setSaving(false);
     }
   };
+
+  saveForClose.current = () => save();
 
   const confirmDiscard = (action: string) =>
     !dirty || window.confirm(`You have unsaved changes. Discard them and ${action}?`);
@@ -2717,54 +2720,6 @@ export function TextCompare({
         {/* araxis:text-view end */}
       </div>
     </div>
-  );
-}
-
-/** Edits the regexes whose matches are ignored when comparing lines. */
-export function IgnoreRulesDialog({
-  patterns,
-  onApply,
-  onClose,
-}: {
-  patterns: string[];
-  onApply: (p: string[]) => void;
-  onClose: () => void;
-}) {
-  const [text, setText] = useState(patterns.join("\n"));
-  return (
-    <Modal
-      title="Ignore rules"
-      onClose={onClose}
-      footer={
-        <>
-          <button onClick={onClose}>Cancel</button>
-          <button
-            className="primary"
-            onClick={() => {
-              onApply(text.split("\n").map((p) => p.trim()).filter(Boolean));
-              onClose();
-            }}
-          >
-            Apply
-          </button>
-        </>
-      }
-    >
-      <label className="field">
-        <span>Ignore text matching (one regex per line)</span>
-        <textarea
-          rows={6}
-          spellCheck={false}
-          autoFocus
-          value={text}
-          placeholder={"\\$Id:[^$]*\\$\n^\\s*//.*$"}
-          onChange={(e) => setText(e.target.value)}
-        />
-        <small className="muted">
-          Matching text is removed before lines are compared — lines that differ only there are shown as unimportant.
-        </small>
-      </label>
-    </Modal>
   );
 }
 
