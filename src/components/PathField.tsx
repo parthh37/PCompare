@@ -1,12 +1,13 @@
 import { open, save, type DialogFilter } from "@tauri-apps/plugin-dialog";
-import { FileArchive, FolderOpen, Globe } from "lucide-react";
+import { FileArchive, FolderOpen, Globe, X } from "lucide-react";
 import { CONTAINER_FILTERS } from "../lib/archiveApi"; // bc5:archives
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type KeyboardEvent } from "react";
 import { PATH_DROP_EVENT } from "../lib/pathDrop"; // araxis:folder
 import { useShell } from "../lib/shell";
 import { RemoteBrowser } from "./RemoteBrowser";
 import { GitBranch } from "lucide-react"; // araxis:vcs
 import { VcsRevisionDialog } from "./VcsRevisionDialog"; // araxis:vcs
+import { forgetPath, matchRecent, rememberPath, useRecentPaths, type PathKind } from "../lib/recentPaths";
 
 interface Props {
   value: string;
@@ -25,7 +26,12 @@ interface Props {
   saveDialog?: boolean;
   /** Hide the remote-profile browser (e.g. for local-only outputs). */
   localOnly?: boolean;
+  /** Recent-path history to offer while focused; defaults by `directory`, off for save dialogs. */
+  history?: PathKind | false;
 }
+
+/** Last path segment, for the bold part of a suggestion. */
+const baseName = (p: string) => p.replace(/[\\/]+$/, "").split(/[\\/]/).pop() || p;
 
 /** One path input with local-browse and remote-browse buttons. */
 export function PathField({
@@ -39,6 +45,7 @@ export function PathField({
   filters,
   saveDialog,
   localOnly,
+  history = saveDialog ? false : directory ? "folder" : "file",
 }: Props) {
   const shell = useShell();
   const [remote, setRemote] = useState(false);
@@ -47,7 +54,10 @@ export function PathField({
   // araxis:folder — a file or folder dropped onto this field fills it (see pathDrop.ts).
   const box = useRef<HTMLDivElement>(null);
   const pick = useRef(onPick);
-  pick.current = onPick;
+  pick.current = (p: string) => {
+    if (history) rememberPath(history, p);
+    onPick(p);
+  };
   useEffect(() => {
     const el = box.current;
     if (!el) return;
@@ -57,11 +67,40 @@ export function PathField({
   }, []);
   // araxis:folder end
 
+  // Recent paths: a dropdown under the field while it has focus.
+  const recent = useRecentPaths(history || "folder");
+  const [suggesting, setSuggesting] = useState(false);
+  const [active, setActive] = useState(-1);
+  const matches = history && suggesting ? matchRecent(recent, value) : [];
+  const showRecent = matches.length > 0;
+  const choose = (p: string) => {
+    setSuggesting(false);
+    pick.current(p);
+  };
+  const onKeyDown = (e: KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+      e.preventDefault();
+      if (!suggesting) return setSuggesting(true);
+      const n = matches.length;
+      if (n) setActive((i) => (e.key === "ArrowDown" ? (i + 1) % n : (i <= 0 ? n : i) - 1));
+    } else if (e.key === "Escape" && showRecent) {
+      e.stopPropagation();
+      setSuggesting(false);
+    } else if (e.key === "Enter") {
+      if (showRecent && active >= 0 && matches[active]) choose(matches[active]);
+      else {
+        setSuggesting(false);
+        onSubmit?.();
+      }
+    }
+  };
+  useEffect(() => setActive(-1), [value, suggesting]);
+
   const browse = async () => {
     const picked = saveDialog && !directory
       ? await save({ title: "Save as", defaultPath: value || undefined, filters })
       : await open({ directory, multiple: false, filters, title: directory ? "Choose folder" : "Choose file" });
-    if (typeof picked === "string") onPick(picked);
+    if (typeof picked === "string") pick.current(picked);
   };
 
   return (
@@ -70,10 +109,48 @@ export function PathField({
       <input
         value={value}
         placeholder={placeholder}
-        onChange={(e) => onChange(e.target.value)}
-        onKeyDown={(e) => e.key === "Enter" && onSubmit?.()}
+        onChange={(e) => {
+          onChange(e.target.value);
+          setSuggesting(true);
+        }}
+        onFocus={() => setSuggesting(true)}
+        onMouseDown={() => setSuggesting(true) /* reopen after Escape or a pick */}
+        onBlur={() => setSuggesting(false)}
+        onKeyDown={onKeyDown}
+        role="combobox"
+        aria-expanded={showRecent}
+        aria-autocomplete="list"
         spellCheck={false}
       />
+      {showRecent && history && (
+        <div className="path-recent" role="listbox" onMouseDown={(e) => e.preventDefault() /* keep focus */}>
+          <div className="ctx-label">Recent {history === "folder" ? "folders" : "files"}</div>
+          {matches.map((p, i) => (
+            <div
+              key={p}
+              role="option"
+              aria-selected={i === active}
+              className={i === active ? "active" : undefined}
+              title={p}
+              onMouseEnter={() => setActive(i)}
+              onClick={() => choose(p)}
+            >
+              <span className="path-recent-name">{baseName(p)}</span>
+              <span className="path-recent-dir">{p}</span>
+              <button
+                className="path-recent-forget"
+                title="Remove from recent paths"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  forgetPath(history, p);
+                }}
+              >
+                <X size={12} />
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
       <button className="icon-btn" title="Browse…" onClick={browse}>
         <FolderOpen size={15} />
       </button>
@@ -84,7 +161,7 @@ export function PathField({
           title="Open an archive (zip, tar, 7z…) or a snapshot (.pcsnap) as a folder"
           onClick={async () => {
             const picked = await open({ multiple: false, filters: CONTAINER_FILTERS, title: "Choose archive or snapshot" });
-            if (typeof picked === "string") onPick(picked);
+            if (typeof picked === "string") pick.current(picked);
           }}
         >
           <FileArchive size={15} />
@@ -102,7 +179,7 @@ export function PathField({
           directory={directory}
           onClose={() => setRevision(false)}
           onPick={(p) => {
-            onPick(p);
+            pick.current(p);
             setRevision(false);
           }}
         />
@@ -123,7 +200,7 @@ export function PathField({
             shell.openProfiles();
           }}
           onPick={(p) => {
-            onPick(p);
+            pick.current(p);
             setRemote(false);
           }}
         />
