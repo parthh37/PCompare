@@ -131,15 +131,21 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # `cache` names the Rust cache. The first two share ci.yml's bundle
+          # caches, which every push to main keeps warm, so a release only
+          # recompiles the workspace crates instead of every dependency.
           - platform: windows-latest
             args: ""
             rust-targets: ""
+            cache: bundle-windows-x64
           - platform: macos-latest
             args: --target aarch64-apple-darwin
             rust-targets: aarch64-apple-darwin
+            cache: bundle-macos-apple-silicon
           - platform: macos-latest
             args: --target x86_64-apple-darwin
             rust-targets: x86_64-apple-darwin
+            cache: release-macos-intel
     runs-on: ${{ matrix.platform }}
     steps:
       - uses: actions/checkout@v4
@@ -154,7 +160,11 @@ jobs:
           targets: ${{ matrix.rust-targets }}
       - uses: Swatinem/rust-cache@v2
         with:
-          key: ${{ matrix.rust-targets }}
+          shared-key: ${{ matrix.cache }}
+          # CI owns the shared caches; saving here would only add minutes to the
+          # release and push other caches out of the repo's 10 GB budget. Intel
+          # has no CI counterpart, so it keeps its own.
+          save-if: ${{ matrix.cache == 'release-macos-intel' }}
       - run: npm ci
 
       # Only export Apple credentials when they exist; an empty APPLE_CERTIFICATE
