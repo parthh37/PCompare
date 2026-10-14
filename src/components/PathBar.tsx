@@ -1,6 +1,7 @@
 import type { DialogFilter } from "@tauri-apps/plugin-dialog";
 import { ArrowLeftRight } from "lucide-react";
 import { useEffect, useState } from "react";
+import { rememberPath } from "../lib/recentPaths";
 import { PathField } from "./PathField";
 
 interface Props {
@@ -19,6 +20,11 @@ export function PathBar({ left, right, directory, onCompare, filters, oneSided }
   const [r, setR] = useState(right);
   useEffect(() => setL(left), [left]);
   useEffect(() => setR(right), [right]);
+  // The props are what the session actually compares (typed, picked, or opened from
+  // Home/CLI), so they're what goes into the recent-path history.
+  const kind = directory ? "folder" : "file";
+  useEffect(() => void rememberPath(kind, left), [kind, left]);
+  useEffect(() => void rememberPath(kind, right), [kind, right]);
 
   const apply = (picked: string, isLeft: boolean) => {
     const other = isLeft ? r : l;
