@@ -5,7 +5,7 @@
 // Operations panel) and tells sessions when one finishes so they can rescan.
 import { Channel, invoke } from "@tauri-apps/api/core";
 import { useSyncExternalStore } from "react";
-import { errorMessage, type EntryMeta, type FolderEntry, type Side } from "./api";
+import { errorMessage, type EntryMeta, type FolderCompareOptions, type FolderEntry, type Side } from "./api";
 import type { FailureKind } from "./syncApi";
 
 export type FileAction = "copy" | "move" | "delete" | "rename" | "newFolder" | "attributes" | "touch";
@@ -41,6 +41,53 @@ export interface FileOpOptions {
   attributes: AttrChange;
   recursive: boolean;
   touch: TouchTime;
+  /** Copy/move leave out what these filters hide inside selected folders; `null` copies everything. */
+  filter: ItemFilter | null;
+}
+
+/** The folder compare's filters as file operations apply them (`ItemFilter` in fileops.rs). */
+export interface ItemFilter {
+  exclude: string[];
+  includeFiles: string[];
+  excludeFiles: string[];
+  excludeFolders: string[];
+  includeHidden: boolean;
+  ignoreNameCase: boolean;
+  minSize: number | null;
+  maxSize: number | null;
+  modifiedAfterMs: number | null;
+  modifiedBeforeMs: number | null;
+  excludeAttributes: number;
+  excludeExecutable: boolean;
+}
+
+/** The comparison's filters for a copy or move; `null` when nothing is filtered. */
+export function itemFilterFor(o: FolderCompareOptions): ItemFilter | null {
+  const f = o.filters;
+  const filter: ItemFilter = {
+    exclude: o.exclude.filter((p) => p.trim()),
+    includeFiles: f.includeFiles.filter((p) => p.trim()),
+    excludeFiles: f.excludeFiles.filter((p) => p.trim()),
+    excludeFolders: f.excludeFolders.filter((p) => p.trim()),
+    includeHidden: o.includeHidden,
+    ignoreNameCase: o.ignoreNameCase,
+    minSize: f.minSize,
+    maxSize: f.maxSize,
+    modifiedAfterMs: f.modifiedAfterMs,
+    modifiedBeforeMs: f.modifiedBeforeMs,
+    excludeAttributes: f.excludeAttributes,
+    excludeExecutable: f.excludeExecutable,
+  };
+  const any =
+    filter.exclude.length + filter.includeFiles.length + filter.excludeFiles.length + filter.excludeFolders.length > 0 ||
+    !filter.includeHidden ||
+    filter.minSize != null ||
+    filter.maxSize != null ||
+    filter.modifiedAfterMs != null ||
+    filter.modifiedBeforeMs != null ||
+    filter.excludeAttributes !== 0 ||
+    filter.excludeExecutable;
+  return any ? filter : null;
 }
 
 export interface FileOpRequest {
@@ -81,6 +128,8 @@ export interface FileOpReport {
   skipped: number;
   bytes: number;
   cancelled: boolean;
+  /** Items inside selected folders left out by the comparison's filters. */
+  filtered: number;
   failures: FileOpFailure[];
   notes: string[];
   elapsedMs: number;

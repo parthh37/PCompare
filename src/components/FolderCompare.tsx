@@ -504,6 +504,7 @@ export function FolderCompare({
     onOpen: (list) => (list.length === 1 ? open(list[0]) : list.filter((e) => !e.isDir).slice(0, 10).forEach(open)),
     onRefresh: () => run(true),
     onError: setError,
+    compareOptions: engineOptions,
   });
 
   // Split view: the focused row's file pair (orphans show their one file; folders nothing).
