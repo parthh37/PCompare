@@ -17,6 +17,7 @@
   --add-mark: rgba(34, 197, 94, 0.4);
   --unimportant: #7fa6d9;
   --orphan: #c38cf5;
+  --filtered: #3cc6c0;
   --different: #f2777a;
   --warn: #f5a35c;
   --ok: #6fcf97;
@@ -75,6 +76,7 @@
   --add-mark: rgba(34, 197, 94, 0.36);
   --unimportant: #4a6fa5;
   --orphan: #8b3fd0;
+  --filtered: #0b8580;
   --different: #d0383b;
   --warn: #b35f0c;
   --ok: #1d8049;
@@ -1404,6 +1406,15 @@ button,
 .s-different .fcell.name.older,
 .s-different .fcell.older {
   color: var(--muted);
+}
+/* Suppress filters: what the filters leave out, in teal as in Beyond Compare
+   (a pair filtered on one side only on that side). After the rules above so
+   it beats the status colours at equal specificity. */
+.frow .fcell.filtered,
+.frow .fcell.name.filtered,
+.s-different .fcell.name.older.filtered,
+.s-filtered-fg {
+  color: var(--filtered);
 }
 /* Only one folder chosen: a plain listing, not orphan-purple on hatching. */
 .one-sided .fcell.absent {

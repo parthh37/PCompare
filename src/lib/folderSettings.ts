@@ -65,6 +65,8 @@ export interface FolderSettings extends CompareSettings {
   autoRefresh: boolean;
   /** Show the Attributes column. */
   showAttributes: boolean;
+  /** Beyond Compare's "Suppress filters": show what the filters leave out, in teal. */
+  suppressFilters: boolean;
   /** Relative paths marked "ignore" (shown as same). */
   ignored: string[];
   /** araxis:text-review — bookmarked rows (by relative path) with review comments. */
@@ -110,6 +112,7 @@ export const DEFAULT_FOLDER_SETTINGS: FolderSettings = {
   flatten: false,
   autoRefresh: false,
   showAttributes: false,
+  suppressFilters: false,
   ignored: [],
 };
 

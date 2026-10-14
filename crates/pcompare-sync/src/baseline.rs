@@ -130,6 +130,7 @@ mod tests {
             content_checked: None::<ContentMethod>,
             crc: None,
             left_rel_path: None, // bc5:folder-engine
+            filtered: None,
         }
     }
 
