@@ -7,6 +7,7 @@
 //! text and hex engines.
 
 mod containers; // bc5:archives
+mod graph_fs;
 mod opendal_fs;
 pub mod oauth;
 pub mod profile;
@@ -19,7 +20,7 @@ use pcompare_core::vfs_write::VfsWrite;
 use pcompare_core::{CoreError, Result};
 use profile::{Profile, ProfileInput, ProfileStore, ResolvedProfile, SecretStore};
 use prompt::Prompter;
-use provider::{spec, ProviderKind, REFRESH_TOKEN};
+use provider::{spec, OAuthSpec, ProviderKind, REFRESH_TOKEN};
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::io::{self, Read, Write};
@@ -86,6 +87,20 @@ fn is_network(e: &io::Error) -> bool {
     )
 }
 
+/// The OAuth app a profile signs in through: its own registration when it
+/// has a Client ID, otherwise the one built into this release. A refresh
+/// token only works with the app that issued it, so switching apps means
+/// signing in again.
+fn oauth_client<'a>(p: &'a ResolvedProfile, oauth: &OAuthSpec) -> Result<(&'a str, Option<&'a str>)> {
+    if let Some(id) = p.get("client_id") {
+        return Ok((id, p.get("client_secret")));
+    }
+    match oauth.builtin {
+        Some(app) => Ok((app.id, app.secret)),
+        None => Err(CoreError::Other("enter a Client ID first".into())),
+    }
+}
+
 /// Attempts at a download before giving up; each resumes where the last
 /// one stopped when the server supports ranged reads.
 const DOWNLOAD_ATTEMPTS: u32 = 4;
@@ -116,7 +131,9 @@ pub struct RemoteManager {
 /// minutes.
 fn ttl(kind: ProviderKind) -> Duration {
     match kind {
-        ProviderKind::Onedrive | ProviderKind::Dropbox | ProviderKind::Gdrive => Duration::from_secs(45 * 60),
+        ProviderKind::Onedrive | ProviderKind::Dropbox | ProviderKind::Gdrive | ProviderKind::Sharepoint => {
+            Duration::from_secs(45 * 60)
+        }
         ProviderKind::Ftp => Duration::from_secs(5 * 60),
         ProviderKind::Sftp => Duration::from_secs(60 * 60),
         _ => Duration::from_secs(30 * 60),
@@ -170,8 +187,8 @@ impl RemoteManager {
                 let refresh_token = p.get(REFRESH_TOKEN).ok_or_else(|| {
                     CoreError::Other(format!("`{}` is not signed in — open Profiles and click Sign in", p.profile.name))
                 })?;
-                let client_id = p.get("client_id").unwrap_or_default();
-                let tokens = rt().block_on(oauth::refresh(&oauth, client_id, p.get("client_secret"), refresh_token))?;
+                let (client_id, client_secret) = oauth_client(p, &oauth)?;
+                let tokens = rt().block_on(oauth::refresh(&oauth, client_id, client_secret, refresh_token))?;
                 // Providers may rotate refresh tokens; keep the newest.
                 if let Some(new) = tokens.refresh_token.as_deref().filter(|t| *t != refresh_token) {
                     self.profiles.set_secret(&p.profile.id, REFRESH_TOKEN, new)?;
@@ -180,6 +197,9 @@ impl RemoteManager {
             }
             None => None,
         };
+        if kind == ProviderKind::Sharepoint {
+            return Ok(Arc::new(graph_fs::GraphFs::connect(p, token.as_deref().unwrap_or_default())?));
+        }
         Ok(Arc::new(opendal_fs::OpendalFs::connect(p, token.as_deref())?))
     }
 
@@ -296,8 +316,8 @@ impl RemoteManager {
         let oauth = spec(p.profile.kind)
             .oauth
             .ok_or_else(|| CoreError::Other(format!("{:?} does not use sign-in", p.profile.kind)))?;
-        let client_id = p.get("client_id").ok_or_else(|| CoreError::Other("enter a Client ID first".into()))?;
-        let tokens = rt().block_on(oauth::authorize(&oauth, client_id, p.get("client_secret"), open_browser))?;
+        let (client_id, client_secret) = oauth_client(&p, &oauth)?;
+        let tokens = rt().block_on(oauth::authorize(&oauth, client_id, client_secret, open_browser))?;
         let refresh = tokens.refresh_token.ok_or_else(|| {
             CoreError::Other("the provider did not return a refresh token; check the app's offline-access permission".into())
         })?;

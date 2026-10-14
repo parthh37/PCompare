@@ -66,6 +66,12 @@ jobs:
       - run: npm ci
       - run: npx tauri build ${{ matrix.args }} --config '{"bundle":{"createUpdaterArtifacts":false}}'
         shell: bash
+        env:
+          # Built-in cloud sign-in apps, as in release.yml (empty on forks).
+          PCOMPARE_MICROSOFT_CLIENT_ID: ${{ vars.PCOMPARE_MICROSOFT_CLIENT_ID }}
+          PCOMPARE_GOOGLE_CLIENT_ID: ${{ vars.PCOMPARE_GOOGLE_CLIENT_ID }}
+          PCOMPARE_GOOGLE_CLIENT_SECRET: ${{ secrets.PCOMPARE_GOOGLE_CLIENT_SECRET }}
+          PCOMPARE_DROPBOX_CLIENT_ID: ${{ vars.PCOMPARE_DROPBOX_CLIENT_ID }}
       - uses: actions/upload-artifact@v4
         with:
           name: PCompare-${{ matrix.name }}

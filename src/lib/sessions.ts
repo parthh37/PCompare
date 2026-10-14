@@ -65,7 +65,7 @@ export const SESSIONS: Record<SessionKind, SessionInfo> = {
     label: "Connection Profiles",
     icon: Globe,
     color: "#38bdf8",
-    description: "Connect S3, OneDrive, Dropbox, Google Drive, FTP, SFTP, WebDAV and more.",
+    description: "Connect S3, OneDrive, SharePoint, Dropbox, Google Drive, FTP, SFTP, WebDAV and more.",
   },
   // automation:ui
   automation: {

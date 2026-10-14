@@ -296,9 +296,13 @@ Rows are matched by primary key (or a unique index, or key columns you choose) w
     title: "Connection profiles",
     kinds: ["profiles"],
     body: `
-Profiles connect remote storage: Amazon S3 and compatibles, Azure Blob, Google Cloud Storage, Backblaze B2, FTP/FTPS, SFTP, WebDAV, OneDrive, Dropbox and Google Drive. Secrets are stored in the OS keychain.
+Profiles connect remote storage: Amazon S3 and compatibles, Azure Blob, Google Cloud Storage, Backblaze B2, FTP/FTPS, SFTP, WebDAV, OneDrive, SharePoint, Dropbox and Google Drive. Secrets are stored in the OS keychain.
 
-Use \`remote://<profile>/path\` (or the globe button next to a path) on either side of any comparison. **Test** checks a profile before saving; OAuth providers need an app registration you control — follow the link in the form.
+Use \`remote://<profile>/path\` (or the globe button next to a path) on either side of any comparison. **Test** checks a profile before saving.
+
+**OneDrive, SharePoint, Dropbox, Google Drive**: click **Sign in** and approve PCompare in your browser. To go through an app registration of your own instead (some organisations require it), open **Advanced** and enter its Client ID. Builds without a built-in app always need one — follow the link in the form.
+
+**SharePoint**: paste the site's address from the browser (e.g. \`https://contoso.sharepoint.com/sites/Marketing\`); a link into a library also picks that library. Leave **Library** empty for the site's default *Documents* library. Deletes go to the site's recycle bin. SharePoint adds metadata to Office files it stores, so a .docx synced there can differ in size from the original even though nothing was edited.
 `,
   },
   // automation:ui

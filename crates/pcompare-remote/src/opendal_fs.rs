@@ -28,6 +28,7 @@ fn scheme(kind: ProviderKind) -> &'static str {
         ProviderKind::Dropbox => "dropbox",
         ProviderKind::Gdrive => "gdrive",
         ProviderKind::Sftp => unreachable!("SFTP uses the russh backend"),
+        ProviderKind::Sharepoint => unreachable!("SharePoint uses the Graph backend"),
     }
 }
 

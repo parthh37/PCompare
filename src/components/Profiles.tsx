@@ -10,6 +10,7 @@ import {
   FolderOpen,
   Globe,
   Hexagon,
+  Library,
   Plus,
   Server,
   ShieldCheck,
@@ -50,6 +51,15 @@ const PROVIDER_ICON: Record<ProviderKind, [LucideIcon, string]> = {
   onedrive: [CloudUpload, "#0364b8"],
   dropbox: [Box, "#0061ff"],
   gdrive: [Triangle, "#34a853"],
+  sharepoint: [Library, "#038387"],
+};
+
+/** Whose account the sign-in button asks for. */
+const SIGN_IN_WITH: Partial<Record<ProviderKind, string>> = {
+  onedrive: "Microsoft",
+  sharepoint: "Microsoft",
+  dropbox: "Dropbox",
+  gdrive: "Google",
 };
 
 function ProviderIcon({ kind, size = 16 }: { kind: ProviderKind; size?: number }) {
@@ -287,6 +297,19 @@ export function Profiles() {
   };
 
   const signedIn = draft?.stored.includes(REFRESH_TOKEN);
+  const builtinApp = !!spec?.oauth?.hasBuiltinClient;
+  const ownApp = !!draft?.settings.client_id?.trim();
+  const basicFields = spec?.fields.filter((f) => !f.advanced) ?? [];
+  const advancedFields = spec?.fields.filter((f) => f.advanced) ?? [];
+  const appSetup = (
+    <>
+      Register an app in the{" "}
+      <button className="link" onClick={() => draft && api.openProviderConsole(draft.kind)}>
+        developer console
+      </button>{" "}
+      with redirect URI <code>{redirectUri}</code>, paste its Client ID {builtinApp ? "here" : "above"}, then sign in.
+    </>
+  );
 
   return (
     <div className="profiles">
@@ -317,7 +340,7 @@ export function Profiles() {
             </span>
           </button>
         ))}
-        {!profiles.length && <p className="muted pad">No profiles yet. Click “New” to connect S3, SFTP, OneDrive and more.</p>}
+        {!profiles.length && <p className="muted pad">No profiles yet. Click “New” to connect S3, SFTP, OneDrive, SharePoint and more.</p>}
       </aside>
 
       <section className="profile-edit">
@@ -356,7 +379,14 @@ export function Profiles() {
                 </select>
                 <small className="muted">{spec.description}</small>
               </label>
-              {spec.fields.map(renderField)}
+              {basicFields.map(renderField)}
+              {advancedFields.length > 0 && (
+                <details className="advanced-fields" open={ownApp || undefined}>
+                  <summary className="muted">Advanced: use your own app registration</summary>
+                  <p className="muted">{appSetup}</p>
+                  {advancedFields.map(renderField)}
+                </details>
+              )}
             </div>
 
             {spec.oauth && (
@@ -366,15 +396,19 @@ export function Profiles() {
                     {signedIn && <CircleCheck size={14} />} {signedIn ? "Signed in" : "Not signed in"}
                   </strong>
                   <p className="muted">
-                    Register an app in the{" "}
-                    <button className="link" onClick={() => api.openProviderConsole(draft.kind)}>
-                      developer console
-                    </button>{" "}
-                    with redirect URI <code>{redirectUri}</code>, paste its Client ID above, then sign in.
+                    {builtinApp && !ownApp
+                      ? `Click Sign in and approve PCompare with your ${SIGN_IN_WITH[draft.kind] ?? "provider"} account — no setup needed.`
+                      : builtinApp
+                        ? "Signs in through your own app registration (see Advanced). Sign in again after changing it."
+                        : appSetup}
                   </p>
                 </div>
-                <button onClick={signIn} disabled={!!busy || !draft.name.trim() || !draft.settings.client_id}>
-                  {busy === "signin" ? "Waiting for browser…" : signedIn ? "Sign in again" : "Sign in…"}
+                <button onClick={signIn} disabled={!!busy || !draft.name.trim() || (!builtinApp && !ownApp)}>
+                  {busy === "signin"
+                    ? "Waiting for browser…"
+                    : signedIn
+                      ? "Sign in again"
+                      : `Sign in with ${SIGN_IN_WITH[draft.kind] ?? "provider"}…`}
                 </button>
               </div>
             )}
