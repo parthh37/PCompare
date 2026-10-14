@@ -201,6 +201,9 @@ In *Rules → Comparison*, **Quick** compares sizes and timestamps, **Thorough**
 
 ## Dropping files
 Drop a folder (or file) onto the left or right path field to fill just that side. Dropping anywhere else fills the empty side or opens a new tab.
+
+## Recent paths
+Click a path field (or press ↓ in it) to list the folders or files you compared recently; type to filter, then pick one with the mouse or ↑/↓ and Enter. The **×** on a row forgets that path.
 `, // araxis:folder end
   },
   {

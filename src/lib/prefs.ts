@@ -54,6 +54,9 @@ export interface Prefs {
   printFooter: string;
   printPaper: "a4" | "letter";
   // araxis:reports end
+  /** Paths recently compared, newest first (offered under every path field). */
+  recentFolders: string[];
+  recentFiles: string[];
 }
 
 export const DEFAULT_PREFS: Prefs = {
@@ -76,6 +79,8 @@ export const DEFAULT_PREFS: Prefs = {
   printFooter: "{left} ↔ {right}|Page {page} of {pages}",
   printPaper: "a4",
   // araxis:reports end
+  recentFolders: [],
+  recentFiles: [],
 };
 
 /** Size limits keep fixed-height diff rows (20px) readable. */
@@ -93,6 +98,14 @@ const stringRecord = (v: unknown): Record<string, string> =>
   v && typeof v === "object" && !Array.isArray(v)
     ? Object.fromEntries(Object.entries(v).filter((e): e is [string, string] => typeof e[1] === "string"))
     : {};
+
+/** Most recent-path lists keep; older entries fall off the end. */
+export const RECENT_PATHS_MAX = 20;
+
+const stringList = (v: unknown): string[] =>
+  Array.isArray(v)
+    ? v.filter((x): x is string => typeof x === "string" && x.trim() !== "").slice(0, RECENT_PATHS_MAX)
+    : [];
 
 /** Fills gaps and drops invalid values, so a hand-edited or older file can't break the UI. */
 export function sanitizePrefs(raw: unknown): Prefs {
@@ -125,6 +138,8 @@ export function sanitizePrefs(raw: unknown): Prefs {
     printFooter: typeof r.printFooter === "string" ? r.printFooter : d.printFooter,
     printPaper: r.printPaper === "letter" ? "letter" : "a4",
     // araxis:reports end
+    recentFolders: stringList(r.recentFolders),
+    recentFiles: stringList(r.recentFiles),
   };
 }
 
