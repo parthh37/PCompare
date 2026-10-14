@@ -248,6 +248,12 @@ export interface FolderEntry {
   crc: [number, number] | null;
   /** The left side's own relative path when alignment paired differently named entries. */
   leftRelPath?: string;
+  /**
+   * Sides the filters leave out (`Filtered` in pcompare-core). "both" rows
+   * are out of the comparison and shown only with Suppress filters; "left" /
+   * "right" pairs are compared, the filtered side drawn teal.
+   */
+  filtered?: Side | "both";
   /** UI only: the user marked it "ignore", so it counts as same. */
   ignored?: boolean;
   /** UI only: a streamed pair whose contents aren't compared yet. */
@@ -286,6 +292,29 @@ export interface FolderStats {
   errors: number;
   /** UI only: files marked "ignore" (included in `same`). */
   ignored?: number;
+  /** Reported files the filters leave out on every side; counted nowhere else. */
+  filtered?: number;
+  /** Folders this run read from disk (a restaged scan reads none). */
+  dirsRead?: number;
+}
+
+/** What a restaged scan had to redo (`CompareNeeds` in pcompare-core). */
+export interface CompareNeeds {
+  list: boolean;
+  align: boolean;
+  filter: boolean;
+  contentFilter: boolean;
+  compare: boolean;
+  content: boolean;
+}
+
+/** A kept scan for `compareFolders`: listings reused when only options change. */
+export interface FolderScanRef {
+  id: string;
+  /** Re-run the stages the options changed on the kept listings instead of listing afresh. */
+  restage?: boolean;
+  /** Walk folders the filters leave out, so their contents show ("Suppress filters"). */
+  showFiltered?: boolean;
 }
 
 export interface FolderCompareResult {
@@ -294,6 +323,8 @@ export interface FolderCompareResult {
   entries: FolderEntry[];
   stats: FolderStats;
   elapsedMs: number;
+  /** Set for runs on a kept scan. */
+  needs?: CompareNeeds;
 }
 
 export interface ContentVerdict {
@@ -490,6 +521,9 @@ export const api = {
    * `runKey` makes the run cancellable with `cancelCompareFolders`. With
    * `onLevels`, rows stream in folder by folder and the result has no
    * `entries`; it resolves once every streamed level has been delivered.
+   * With `scan`, the listed tree is kept under its id (forget it with
+   * `forgetFolderScan`) and rows the filters leave out come along, marked;
+   * `scan.restage` re-runs only what changed options need on it.
    */
   compareFolders: async (
     left: string,
@@ -499,6 +533,7 @@ export const api = {
     onProgress?: (p: ScanProgress) => void,
     expandArchives?: boolean, // bc5:archives — list archives in the trees as folders
     onLevels?: (levels: FolderLevel[]) => void,
+    scan?: FolderScanRef,
   ) => {
     const channel = new Channel<ScanUpdate>();
     let ended = () => {};
@@ -508,7 +543,7 @@ export const api = {
       if (m.levels.length) onLevels?.(m.levels);
       if (m.end) ended();
     };
-    const res = await invoke<FolderCompareResult>("compare_folders", {
+    const res = await invoke<FolderCompareResult>(scan?.restage ? "restage_folders" : "compare_folders", {
       left,
       right,
       options,
@@ -516,12 +551,15 @@ export const api = {
       onProgress: channel,
       expandArchives,
       stream: !!onLevels,
+      scanId: scan?.id,
+      showFiltered: scan?.showFiltered,
     });
     // The reply can overtake the channel's last messages.
     if (onLevels) await end;
     return res;
   },
   cancelCompareFolders: (runKey: string) => invoke<void>("compare_folders_cancel", { runKey }),
+  forgetFolderScan: (scanId: string) => invoke<void>("forget_folder_scan", { scanId }),
   compareFileContents: (
     left: string,
     leftSize: number,

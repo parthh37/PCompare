@@ -15,6 +15,13 @@
 //! default, optionally folding case, Unicode normalization, extensions and
 //! wildcard rules, so a pair's two names may differ — the left one is then
 //! reported in [`FolderEntry::left_rel_path`].
+//!
+//! Like Beyond Compare's folder tree, the work is staged: folders are *listed*
+//! once into a [`FolderScan`], and *alignment*, *filters* and *comparison*
+//! re-run over those listings. Changing a filter or a criterion therefore
+//! never reads a folder again ([`CompareNeeds`] says what has to be redone),
+//! and filters mark entries ([`FolderEntry::filtered`]) instead of dropping
+//! them, so a view can show what they hide.
 
 mod align;
 mod pe_version;
@@ -24,21 +31,23 @@ pub use pe_version::VERSION_MAX_BYTES;
 
 use crate::text::{self, TextDiffOptions};
 use crate::textfile;
-use crate::vfs::{ListOptions, LocalFs, Vfs};
+use crate::vfs::{ListOptions, LocalFs, Vfs, VfsEntry};
 use crate::{CoreError, Result};
 use align::Aligner;
 use globset::{GlobBuilder, GlobSet, GlobSetBuilder};
 use rayon::prelude::*;
 use regex::{Regex, RegexBuilder};
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
+use std::hash::{DefaultHasher, Hash, Hasher};
 use std::io::Read;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Instant;
 
 /// How file contents are compared after the quick tests.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum ContentMethod {
     /// Metadata only — the quick tests decide.
@@ -203,6 +212,19 @@ pub enum Side {
     Right,
 }
 
+/// Which sides of a row the filters leave out of the comparison.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum Filtered {
+    /// The left entry is filtered, the right one isn't: the pair is still
+    /// shown and compared, so it doesn't pose as a right orphan.
+    Left,
+    Right,
+    /// Every side present is filtered (or a folder above is): the row is out
+    /// of the comparison and its totals.
+    Both,
+}
+
 #[derive(Debug, Clone, Default, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct EntryMeta {
@@ -250,6 +272,18 @@ pub struct FolderEntry {
     /// `rel_path` and `name` describe the right side.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub left_rel_path: Option<String>,
+    /// Set when filters leave out one side or the whole row. Rows filtered
+    /// on [`Filtered::Both`] sides are only reported with
+    /// [`ScanControl::keep_filtered`]; their files get quick tests only.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub filtered: Option<Filtered>,
+}
+
+impl FolderEntry {
+    /// Whether the filters leave the whole row out.
+    pub fn filtered_out(&self) -> bool {
+        self.filtered == Some(Filtered::Both)
+    }
 }
 
 #[derive(Debug, Clone, Default, Serialize)]
@@ -263,6 +297,12 @@ pub struct FolderStats {
     pub errors: usize,
     /// Checksums answered by the [`ChecksumCache`] instead of reading files.
     pub checksums_reused: usize,
+    /// Reported files the filters leave out on every side (see
+    /// [`ScanControl::keep_filtered`]); they count nowhere else.
+    pub filtered: usize,
+    /// Folders read from disk by this run; the rest came from the
+    /// [`FolderScan`]'s listings.
+    pub dirs_read: usize,
 }
 
 /// Remembers file checksums between scans so unchanged files need not be
@@ -284,6 +324,10 @@ pub struct FolderCompareResult {
     pub entries: Vec<FolderEntry>,
     pub stats: FolderStats,
     pub elapsed_ms: u128,
+    /// The stages this run had to redo on its [`FolderScan`] (`None`
+    /// without one).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub needs: Option<CompareNeeds>,
 }
 
 /// Progress of a running comparison, reported after each listed folder.
@@ -333,6 +377,210 @@ pub struct ScanControl<'a> {
     /// Called from worker threads with every folder's rows (see
     /// [`FolderLevel`]); batch in the callback if forwarding is expensive.
     pub levels: Option<&'a (dyn Fn(FolderLevel) + Sync)>,
+    /// Listings and verdicts kept from earlier runs over the same folders,
+    /// reused and filled by this one. Without it nothing outlives the run.
+    pub scan: Option<&'a FolderScan>,
+    /// Report rows the filters leave out (marked [`Filtered::Both`])
+    /// instead of dropping them. This also turns a pair excluded by name,
+    /// hidden or attribute filters on one side only into a pair marked on
+    /// that side; without it, that side is dropped and the other is an
+    /// orphan. Size, date and "containing" filters keep such pairs either way.
+    pub keep_filtered: bool,
+    /// Walk filtered-out folders too, so their contents can be shown. Off,
+    /// they're reported (with `keep_filtered`) but never listed.
+    pub expand_filtered: bool,
+}
+
+/// What changed options make a [`FolderScan`] redo — Beyond Compare's
+/// `TDirCompareNeeds`. Alignment, filters and quick tests run over the
+/// listings in memory and are cheap; only `list` reads folders again, and
+/// `content` / `content_filter` read files again.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CompareNeeds {
+    /// Folders must be listed again (links are listed differently).
+    pub list: bool,
+    /// Entries pair up differently.
+    pub align: bool,
+    /// Name, hidden, attribute, size or date filters changed.
+    pub filter: bool,
+    /// The "containing" filters changed: the files they read are read again.
+    pub content_filter: bool,
+    /// Quick tests, or how content results combine with them, changed.
+    pub compare: bool,
+    /// Content verdicts are stale: the content method or its rules changed.
+    pub content: bool,
+}
+
+impl CompareNeeds {
+    /// Everything: a scan with nothing listed yet.
+    pub const ALL: Self = Self {
+        list: true,
+        align: true,
+        filter: true,
+        content_filter: true,
+        compare: true,
+        content: true,
+    };
+
+    /// Whether anything at all has to be redone.
+    pub fn any(&self) -> bool {
+        *self != Self::default()
+    }
+}
+
+/// The options a [`FolderScan`] has to redo work for, going from `old` to `new`.
+pub fn compare_needs(old: &FolderCompareOptions, new: &FolderCompareOptions) -> CompareNeeds {
+    let (of, nf) = (&old.filters, &new.filters);
+    let containing = |f: &FolderFilters| {
+        (
+            f.include_containing.clone(),
+            f.exclude_containing.clone(),
+            f.containing_regex,
+            f.containing_match_case,
+        )
+    };
+    let other_filters = |f: &FolderFilters| FolderFilters {
+        include_containing: String::new(),
+        exclude_containing: String::new(),
+        containing_regex: false,
+        containing_match_case: false,
+        ..f.clone()
+    };
+    CompareNeeds {
+        list: old.follow_links != new.follow_links,
+        align: old.ignore_name_case != new.ignore_name_case || old.align != new.align,
+        filter: old.recursive != new.recursive
+            || old.include_hidden != new.include_hidden
+            || old.exclude != new.exclude
+            // Name masks fold case along with alignment.
+            || old.ignore_name_case != new.ignore_name_case
+            || !same_json(&other_filters(of), &other_filters(nf)),
+        content_filter: containing(of) != containing(nf),
+        compare: old.compare_size != new.compare_size
+            || old.compare_timestamp != new.compare_timestamp
+            || old.time_tolerance_secs != new.time_tolerance_secs
+            || old.ignore_dst_shift != new.ignore_dst_shift
+            || old.override_quick_tests != new.override_quick_tests
+            || old.compare_attributes != new.compare_attributes
+            || old.large_file_threshold != new.large_file_threshold
+            || old.large_file_method != new.large_file_method
+            || old.content != new.content,
+        content: old.content != new.content
+            || (new.content == ContentMethod::Rules && !same_json(&old.rules, &new.rules)),
+    }
+}
+
+/// Equality through serde, for the option structs that don't derive it
+/// (the text rules, the filters).
+fn same_json<T: Serialize>(a: &T, b: &T) -> bool {
+    serde_json::to_string(a).ok() == serde_json::to_string(b).ok()
+}
+
+fn fingerprint(value: &impl Hash) -> u64 {
+    let mut h = DefaultHasher::new();
+    value.hash(&mut h);
+    h.finish()
+}
+
+fn locked<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
+    // A panic while holding the lock leaves the maps themselves intact.
+    m.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+/// Two files' sizes and timestamps, which a remembered verdict must match.
+type Stamp = [(u64, Option<i64>); 2];
+/// One side's sorted listings, by `follow_links` and the folder's path.
+type Listings = Mutex<HashMap<(bool, String), Arc<[VfsEntry]>>>;
+/// Both paths, the content method and a fingerprint of what else decides
+/// the verdict (the text rules, for rules-based).
+type VerdictKey = (String, String, ContentMethod, u64);
+
+/// The listed tree of two folders, kept between comparisons of them —
+/// Beyond Compare's `TDirTree`. A run lists each folder through it at most
+/// once; later runs with other filters, alignment or criteria re-run those
+/// stages on the listings in memory, reusing content verdicts that still
+/// hold. Every remembered result is keyed by what it depends on, so a
+/// stale one is never handed out; [`FolderScan::restage`] frees them.
+///
+/// Folders changed on disk need a new scan: listings are never re-checked.
+pub struct FolderScan {
+    listings: [Listings; 2],
+    canonical: [Mutex<HashMap<String, Option<String>>>; 2],
+    verdicts: Mutex<HashMap<VerdictKey, (Stamp, ContentVerdict)>>,
+    /// "Containing" filter results by side, path and filter fingerprint.
+    contains: Mutex<HashMap<(usize, String, u64), bool>>,
+    /// The options of the latest run.
+    last: Mutex<Option<FolderCompareOptions>>,
+    /// Off for the throwaway scan of a run without one: nothing is kept.
+    retain: bool,
+}
+
+impl Default for FolderScan {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl FolderScan {
+    pub fn new() -> Self {
+        Self {
+            listings: Default::default(),
+            canonical: Default::default(),
+            verdicts: Default::default(),
+            contains: Default::default(),
+            last: Default::default(),
+            retain: true,
+        }
+    }
+
+    fn transient() -> Self {
+        Self {
+            retain: false,
+            ..Self::new()
+        }
+    }
+
+    /// Records `opts` as the options of the next run and says what they
+    /// make it redo, freeing what they leave stale.
+    pub fn restage(&self, opts: &FolderCompareOptions) -> CompareNeeds {
+        let mut last = locked(&self.last);
+        let needs = last.as_ref().map_or(CompareNeeds::ALL, |old| compare_needs(old, opts));
+        if let Some(old) = last.as_ref() {
+            if needs.list {
+                for side in &self.listings {
+                    locked(side).retain(|(follow, _), _| *follow == opts.follow_links);
+                }
+                // Followed and unfollowed links pair different files.
+                locked(&self.verdicts).clear();
+            }
+            if needs.content_filter {
+                locked(&self.contains).clear();
+            }
+            if !same_json(&old.rules, &opts.rules) {
+                locked(&self.verdicts).retain(|(.., method, _), _| *method != ContentMethod::Rules);
+            }
+        }
+        *last = Some(opts.clone());
+        needs
+    }
+
+    fn canonical_of(&self, fs: &dyn Vfs, side: Side, path: &str) -> Option<String> {
+        let cache = &self.canonical[Chain::index(side)];
+        if let Some(hit) = locked(cache).get(path) {
+            return hit.clone();
+        }
+        let canonical = fs.canonical(path);
+        if self.retain {
+            locked(cache).insert(path.to_owned(), canonical.clone());
+        }
+        canonical
+    }
+
+    /// Folders listed so far, both sides together.
+    pub fn listed_dirs(&self) -> usize {
+        self.listings.iter().map(|side| locked(side).len()).sum()
+    }
 }
 
 struct Ctx<'a> {
@@ -343,16 +591,22 @@ struct Ctx<'a> {
     exclude_folders: GlobSet,
     include_containing: Option<Regex>,
     exclude_containing: Option<Regex>,
+    /// Identifies the "containing" filters in [`FolderScan::contains`].
+    containing_key: u64,
+    /// Identifies the text rules in [`FolderScan::verdicts`].
+    rules_key: u64,
     aligner: Aligner,
     left: &'a dyn Vfs,
     right: &'a dyn Vfs,
     control: ScanControl<'a>,
+    scan: &'a FolderScan,
     /// Canonical paths of the compared folders, when links are followed.
     roots: [Option<String>; 2],
     reused: AtomicUsize,
     scanned: AtomicUsize,
     folders: AtomicUsize,
     compared: AtomicUsize,
+    dirs_read: AtomicUsize,
 }
 
 impl Ctx<'_> {
@@ -370,11 +624,47 @@ impl Ctx<'_> {
         }
     }
 
+    /// Lists a folder through the scan: from memory when an earlier run (or
+    /// pass) listed it already, else from disk. Entries come sorted by name.
+    fn read_dir(&self, side: Side, dir: &str) -> Result<Arc<[VfsEntry]>> {
+        let key = (self.opts.follow_links, dir.to_owned());
+        let cache = &self.scan.listings[Chain::index(side)];
+        if let Some(hit) = locked(cache).get(&key) {
+            return Ok(hit.clone());
+        }
+        let mut items = self.fs(side).read_dir_with(
+            dir,
+            ListOptions {
+                follow_links: self.opts.follow_links,
+            },
+        )?;
+        self.dirs_read.fetch_add(1, Ordering::Relaxed);
+        // Sorted, so which of two colliding names keeps the folded key is stable.
+        items.sort_unstable_by(|a, b| a.name.cmp(&b.name));
+        let items: Arc<[VfsEntry]> = items.into();
+        // Errors aren't kept: a later run may well read the folder.
+        if self.scan.retain {
+            locked(cache).insert(key, items.clone());
+        }
+        Ok(items)
+    }
+
+    /// [`Vfs::canonical`], remembered by the scan.
+    fn canonical(&self, side: Side, path: &str) -> Option<String> {
+        self.scan.canonical_of(self.fs(side), side, path)
+    }
+
+    /// Whether rows the filters leave out are reported.
+    fn shows(&self, e: &FolderEntry) -> bool {
+        self.control.keep_filtered || !e.filtered_out()
+    }
+
     /// Reports a folder's rows to [`ScanControl::levels`], without children.
     fn level<'e>(&self, rel: &str, entries: impl IntoIterator<Item = &'e FolderEntry>, complete: bool) {
         if let Some(report) = self.control.levels {
             let entries = entries
                 .into_iter()
+                .filter(|e| self.shows(e))
                 .map(|e| FolderEntry {
                     children: Vec::new(),
                     ..e.clone()
@@ -458,6 +748,8 @@ fn containing_regex(text: &str, filters: &FolderFilters) -> Result<Option<Regex>
 struct Listed {
     name: String,
     meta: EntryMeta,
+    /// The filters leave this side out.
+    filtered: bool,
 }
 
 /// Whether an entry's attributes put it out of the comparison.
@@ -471,55 +763,91 @@ fn attributes_excluded(m: &EntryMeta, filters: &FolderFilters) -> bool {
         || (!m.is_dir && filters.exclude_executable && m.mode.is_some_and(|mode| mode & 0o111 != 0))
 }
 
-/// Lists one directory, applying hidden/exclude/attribute filters. Keys are
-/// the alignment keys of [`Aligner::key`].
-fn list_dir(
-    fs: &dyn Vfs,
-    side: Side,
-    dir: &str,
-    rel: &str,
-    ctx: &Ctx,
-) -> Result<BTreeMap<String, Listed>> {
-    ctx.check_cancel()?;
-    let mut items = fs.read_dir_with(
-        dir,
-        ListOptions {
-            follow_links: ctx.opts.follow_links,
-        },
-    )?;
-    ctx.listed(rel, items.len());
-    // Sorted, so which of two colliding names keeps the folded key is stable.
-    items.sort_unstable_by(|a, b| a.name.cmp(&b.name));
-    let mut out = BTreeMap::new();
-    for entry in items {
-        if !ctx.opts.include_hidden && entry.hidden {
-            continue;
+impl Ctx<'_> {
+    /// Whether the hidden, name or attribute filters exclude an entry. `rel`
+    /// is its folder's path on its own side.
+    fn excludes(&self, rel: &str, entry: &VfsEntry) -> bool {
+        if !self.opts.include_hidden && entry.hidden {
+            return true;
         }
         let rel_path = join_rel(rel, &entry.name);
         let hit = |set: &GlobSet| set.is_match(&entry.name) || set.is_match(&rel_path);
-        let excluded = hit(&ctx.exclude)
+        let excluded = hit(&self.exclude)
             || if entry.meta.is_dir {
-                hit(&ctx.exclude_folders)
+                hit(&self.exclude_folders)
             } else {
-                hit(&ctx.exclude_files)
-                    || (!ctx.include_files.is_empty() && !hit(&ctx.include_files))
+                hit(&self.exclude_files)
+                    || (!self.include_files.is_empty() && !hit(&self.include_files))
             };
-        if excluded || attributes_excluded(&entry.meta, &ctx.opts.filters) {
-            continue;
+        excluded || attributes_excluded(&entry.meta, &self.opts.filters)
+    }
+
+    /// Whether the "containing" filters leave a file out, remembered by the
+    /// scan. Unreadable files stay, so the comparison can report the error.
+    fn contents_filter_out(&self, side: Side, path: &str) -> bool {
+        if self.include_containing.is_none() && self.exclude_containing.is_none() {
+            return false;
         }
-        let mut key = ctx.aligner.key(side, &entry.name, entry.meta.is_dir);
-        if out.contains_key(&key) {
-            // Two names fold alike on one side (`a.htm` and `a.html` in one
-            // group): the later one pairs only by its exact name.
-            key = Aligner::exact_key(&entry.name);
+        let key = (Chain::index(side), path.to_owned(), self.containing_key);
+        if let Some(&hit) = locked(&self.scan.contains).get(&key) {
+            return hit;
         }
-        out.insert(
-            key,
-            Listed {
-                name: entry.name,
-                meta: entry.meta,
-            },
-        );
+        let fs = self.fs(side);
+        let out = self
+            .include_containing
+            .as_ref()
+            .is_some_and(|re| matches!(file_contains(fs, path, re), Ok(false)))
+            || self
+                .exclude_containing
+                .as_ref()
+                .is_some_and(|re| matches!(file_contains(fs, path, re), Ok(true)));
+        if self.scan.retain {
+            locked(&self.scan.contains).insert(key, out);
+        }
+        out
+    }
+}
+
+/// Lists one directory (through the scan) and marks what the filters leave
+/// out. Keys are the alignment keys of [`Aligner::key`].
+fn list_dir(side: Side, dir: &str, rel: &str, ctx: &Ctx) -> Result<BTreeMap<String, Listed>> {
+    ctx.check_cancel()?;
+    let items = ctx.read_dir(side, dir)?;
+    ctx.listed(rel, items.len());
+    let filters = &ctx.opts.filters;
+    let marked: Vec<(bool, &VfsEntry)> = items
+        .iter()
+        .filter_map(|e| {
+            let excluded = ctx.excludes(rel, e);
+            // Without filtered rows reported, an excluded side isn't there at
+            // all (its counterpart is an orphan), as before filters marked
+            // rather than dropped: Folder Sync's plans depend on it.
+            if excluded && !ctx.control.keep_filtered {
+                return None;
+            }
+            Some((excluded || (!e.meta.is_dir && !meta_passes(&e.meta, filters)), e))
+        })
+        .collect();
+    let mut out = BTreeMap::new();
+    // Entries the filters keep claim their keys first, so a filtered name
+    // never takes a pairing away from one that's compared.
+    for pass in [false, true] {
+        for &(filtered, entry) in marked.iter().filter(|(f, _)| *f == pass) {
+            let mut key = ctx.aligner.key(side, &entry.name, entry.meta.is_dir);
+            if out.contains_key(&key) {
+                // Two names fold alike on one side (`a.htm` and `a.html` in one
+                // group): the later one pairs only by its exact name.
+                key = Aligner::exact_key(&entry.name);
+            }
+            out.insert(
+                key,
+                Listed {
+                    name: entry.name.clone(),
+                    meta: entry.meta.clone(),
+                    filtered,
+                },
+            );
+        }
     }
     Ok(out)
 }
@@ -535,23 +863,6 @@ fn file_contains(fs: &dyn Vfs, path: &str, re: &Regex) -> Result<bool> {
         return Ok(false);
     }
     Ok(re.is_match(&textfile::decode(&buf).0))
-}
-
-/// The "files containing" filters for one side of a pair. Unreadable files
-/// stay, so the comparison can report the error.
-fn content_passes(ctx: &Ctx, side: Side, path: &str) -> bool {
-    let fs = ctx.fs(side);
-    if let Some(re) = &ctx.include_containing {
-        if matches!(file_contains(fs, path, re), Ok(false)) {
-            return false;
-        }
-    }
-    if let Some(re) = &ctx.exclude_containing {
-        if matches!(file_contains(fs, path, re), Ok(true)) {
-            return false;
-        }
-    }
-    true
 }
 
 fn join_rel(rel: &str, name: &str) -> String {
@@ -802,12 +1113,15 @@ fn cached_pair(ctx: &Ctx, lp: &str, rp: &str, l: &EntryMeta, r: &EntryMeta) -> O
     Some(pair)
 }
 
+/// Classifies a file pair. `quick_only` (rows the filters leave out) stops
+/// at the quick tests: their contents are never read.
 fn compare_file_pair(
     lp: &str,
     rp: &str,
     l: &EntryMeta,
     r: &EntryMeta,
     ctx: &Ctx,
+    quick_only: bool,
 ) -> Result<ContentVerdict> {
     let opts = ctx.opts;
     ctx.check_cancel()?;
@@ -842,13 +1156,12 @@ fn compare_file_pair(
         crc: None,
     };
     // Without override, a failed quick test is final — no need to read anything.
-    if opts.content == ContentMethod::Off || (!quick_same && !opts.override_quick_tests) {
+    if quick_only
+        || opts.content == ContentMethod::Off
+        || (!quick_same && !opts.override_quick_tests)
+    {
         return Ok(quick);
     }
-    let diff = |crc| ContentVerdict {
-        status: EntryStatus::Different,
-        crc,
-    };
     let Some(content) = content_method_for(l, r, opts) else {
         // Too large to read: the configured metadata fallback decides.
         let same = l.size == r.size
@@ -862,6 +1175,40 @@ fn compare_file_pair(
             },
             crc: None,
         });
+    };
+    // An earlier run over the same scan may have read this pair already.
+    let key: VerdictKey = (
+        lp.to_owned(),
+        rp.to_owned(),
+        content,
+        if content == ContentMethod::Rules { ctx.rules_key } else { 0 },
+    );
+    let stamp: Stamp = [(l.size, l.modified_ms), (r.size, r.modified_ms)];
+    if let Some((was, verdict)) = locked(&ctx.scan.verdicts).get(&key) {
+        if *was == stamp {
+            return Ok(*verdict);
+        }
+    }
+    let verdict = read_contents(lp, rp, l, r, content, ctx)?;
+    if ctx.scan.retain {
+        locked(&ctx.scan.verdicts).insert(key, (stamp, verdict));
+    }
+    Ok(verdict)
+}
+
+/// Reads a file pair's contents with `content`, using the checksum cache.
+fn read_contents(
+    lp: &str,
+    rp: &str,
+    l: &EntryMeta,
+    r: &EntryMeta,
+    content: ContentMethod,
+    ctx: &Ctx,
+) -> Result<ContentVerdict> {
+    let opts = ctx.opts;
+    let diff = |crc| ContentVerdict {
+        status: EntryStatus::Different,
+        crc,
     };
     match content {
         ContentMethod::Crc if ctx.control.cache.is_some() => {
@@ -907,6 +1254,19 @@ fn compare_file_pair(
     }
 }
 
+/// Whether one file survives the size/date filters.
+fn meta_passes(m: &EntryMeta, filters: &FolderFilters) -> bool {
+    // An unknown timestamp (some remote stores) can't be shown to be out
+    // of range, so date filters keep it rather than hide it.
+    let time_ok = |bound: Option<i64>, ok: fn(i64, i64) -> bool| {
+        bound.is_none_or(|b| m.modified_ms.is_none_or(|t| ok(t, b)))
+    };
+    filters.min_size.is_none_or(|min| m.size >= min)
+        && filters.max_size.is_none_or(|max| m.size <= max)
+        && time_ok(filters.modified_after_ms, |t, b| t >= b)
+        && time_ok(filters.modified_before_ms, |t, b| t <= b)
+}
+
 /// Whether a file pair survives the size/date filters. `None` is the side
 /// where the file doesn't exist (an orphan).
 pub fn pair_passes(
@@ -914,20 +1274,24 @@ pub fn pair_passes(
     right: Option<&EntryMeta>,
     filters: &FolderFilters,
 ) -> bool {
-    let passes = |m: &EntryMeta| {
-        // An unknown timestamp (some remote stores) can't be shown to be out
-        // of range, so date filters keep it rather than hide it.
-        let time_ok = |bound: Option<i64>, ok: fn(i64, i64) -> bool| {
-            bound.is_none_or(|b| m.modified_ms.is_none_or(|t| ok(t, b)))
-        };
-        filters.min_size.is_none_or(|min| m.size >= min)
-            && filters.max_size.is_none_or(|max| m.size <= max)
-            && time_ok(filters.modified_after_ms, |t, b| t >= b)
-            && time_ok(filters.modified_before_ms, |t, b| t <= b)
-    };
     // Either side matching keeps the pair, so a file that just crossed a
     // threshold (e.g. grew past max_size) is listed instead of vanishing.
+    let passes = |m: &EntryMeta| meta_passes(m, filters);
     left.is_some_and(passes) || right.is_some_and(passes)
+}
+
+/// What the filters leave out of a pair: the sides they marked, or
+/// everything below a filtered-out folder (`inherited`).
+fn pair_filtered(inherited: bool, l: Option<&Listed>, r: Option<&Listed>) -> Option<Filtered> {
+    if inherited {
+        return Some(Filtered::Both);
+    }
+    match (l.map(|x| x.filtered), r.map(|x| x.filtered)) {
+        (Some(true), Some(false)) => Some(Filtered::Left),
+        (Some(false), Some(true)) => Some(Filtered::Right),
+        (Some(true), Some(true) | None) | (None, Some(true)) => Some(Filtered::Both),
+        _ => None,
+    }
 }
 
 fn error_entry(name: String, rel_path: String, is_dir: bool, err: CoreError) -> FolderEntry {
@@ -944,6 +1308,7 @@ fn error_entry(name: String, rel_path: String, is_dir: bool, err: CoreError) -> 
         content_checked: None,
         crc: None,
         left_rel_path: None,
+        filtered: None,
     }
 }
 
@@ -979,7 +1344,7 @@ impl Chain<'_> {
             return None;
         }
         if item.meta.link_target.is_some() {
-            ctx.fs(side).canonical(path)
+            ctx.canonical(side, path)
         } else {
             let parent = self.canonical[Self::index(side)].as_deref()?;
             Some(ctx.fs(side).join(parent, &item.name))
@@ -1018,27 +1383,26 @@ struct Descend {
 }
 
 /// Lists an orphaned folder so its contents are visible in the tree. `rel`
-/// is the tree's relative path, `side_rel` the side's own.
+/// is the tree's relative path, `side_rel` the side's own; `filtered` is set
+/// below a folder the filters leave out.
+#[allow(clippy::too_many_arguments)]
 fn orphan_tree(
     dir: &str,
     rel: &str,
     side_rel: &str,
     side: Side,
     chain: &Chain,
+    filtered: bool,
     ctx: &Ctx,
 ) -> Vec<FolderEntry> {
     let fs = ctx.fs(side);
-    let listed = match list_dir(fs, side, dir, side_rel, ctx) {
+    let listed = match list_dir(side, dir, side_rel, ctx) {
         Ok(l) => l,
         Err(e) => {
             let entries = vec![error_entry("<unreadable>".into(), rel.into(), false, e)];
             ctx.level(rel, &entries, true);
             return entries;
         }
-    };
-    let passes = |m: &EntryMeta| match side {
-        Side::Left => pair_passes(Some(m), None, &ctx.opts.filters),
-        Side::Right => pair_passes(None, Some(m), &ctx.opts.filters),
     };
     let orphan = |item: &Listed| {
         let rel_path = join_rel(rel, &item.name);
@@ -1060,20 +1424,21 @@ fn orphan_tree(
             error: None,
             content_checked: None,
             crc: None,
+            filtered: (filtered || item.filtered).then_some(Filtered::Both),
         }
     };
     // One-sided rows are final as soon as they're listed, so the folder
     // reports complete before its subfolders are walked.
     let rows: Vec<(FolderEntry, Option<Descend>)> = listed
         .into_par_iter()
-        .filter(|(_, item)| {
-            item.meta.is_dir
-                || (passes(&item.meta) && content_passes(ctx, side, &fs.join(dir, &item.name)))
-        })
-        .map(|(_, item)| {
+        .map(|(_, mut item)| {
+            if !filtered && !item.filtered && !item.meta.is_dir {
+                item.filtered = ctx.contents_filter_out(side, &fs.join(dir, &item.name));
+            }
             let mut entry = orphan(&item);
             let mut descend = None;
-            if item.meta.is_dir && ctx.opts.recursive {
+            let walk = ctx.control.expand_filtered || !entry.filtered_out();
+            if item.meta.is_dir && ctx.opts.recursive && walk {
                 let path = fs.join(dir, &item.name);
                 let canonical = chain.child(ctx, side, &path, &item);
                 if chain.loops(side, &item, &canonical) {
@@ -1089,6 +1454,7 @@ fn orphan_tree(
         .collect();
     ctx.level(rel, rows.iter().map(|(e, _)| e), true);
     rows.into_par_iter()
+        .filter(|(e, _)| ctx.shows(e))
         .map(|(mut entry, descend)| {
             if let Some(Descend { path, canonical }) = descend {
                 let mut sub = Chain {
@@ -1097,7 +1463,9 @@ fn orphan_tree(
                 };
                 sub.canonical[Chain::index(side)] = canonical;
                 let own_rel = entry.left_rel_path.clone().unwrap_or_else(|| entry.rel_path.clone());
-                entry.children = orphan_tree(&path, &entry.rel_path, &own_rel, side, &sub, ctx);
+                let inherited = entry.filtered_out();
+                entry.children =
+                    orphan_tree(&path, &entry.rel_path, &own_rel, side, &sub, inherited, ctx);
             }
             entry
         })
@@ -1111,26 +1479,19 @@ struct DirPair<'a> {
     rdir: &'a str,
     rel: &'a str,
     lrel: &'a str,
+    /// The folders sit below one the filters leave out.
+    filtered: bool,
 }
 
 fn compare_dirs(at: &DirPair, chain: &Chain, ctx: &Ctx) -> Result<Vec<FolderEntry>> {
-    let mut left = list_dir(ctx.left, Side::Left, at.ldir, at.lrel, ctx)?;
-    let right = list_dir(ctx.right, Side::Right, at.rdir, at.rel, ctx)?;
+    let mut left = list_dir(Side::Left, at.ldir, at.lrel, ctx)?;
+    let right = list_dir(Side::Right, at.rdir, at.rel, ctx)?;
 
     let mut pairs: Vec<(Option<Listed>, Option<Listed>)> = Vec::new();
     for (key, r) in right {
         pairs.push((left.remove(&key), Some(r)));
     }
     pairs.extend(left.into_values().map(|l| (Some(l), None)));
-    pairs.retain(|(l, r)| {
-        let any_dir = l.iter().chain(r.iter()).any(|x| x.meta.is_dir);
-        any_dir
-            || pair_passes(
-                l.as_ref().map(|x| &x.meta),
-                r.as_ref().map(|x| &x.meta),
-                &ctx.opts.filters,
-            )
-    });
 
     if ctx.control.levels.is_some() {
         let shallow: Vec<_> = pairs
@@ -1139,21 +1500,8 @@ fn compare_dirs(at: &DirPair, chain: &Chain, ctx: &Ctx) -> Result<Vec<FolderEntr
             .collect();
         ctx.level(at.rel, &shallow, false);
     }
-    let filter_contents = ctx.include_containing.is_some() || ctx.exclude_containing.is_some();
     let mut entries: Vec<FolderEntry> = pairs
         .into_par_iter()
-        .filter(|(l, r)| {
-            // Either side containing the text keeps the pair, like size/date filters.
-            let any_dir = l.iter().chain(r.iter()).any(|x| x.meta.is_dir);
-            any_dir
-                || !filter_contents
-                || l.as_ref().is_some_and(|x| {
-                    content_passes(ctx, Side::Left, &ctx.left.join(at.ldir, &x.name))
-                })
-                || r.as_ref().is_some_and(|x| {
-                    content_passes(ctx, Side::Right, &ctx.right.join(at.rdir, &x.name))
-                })
-        })
         .map(|pair| compare_pair(at, chain, pair, ctx))
         .collect();
     // Folders first, then case-insensitive name order, like Explorer.
@@ -1163,6 +1511,7 @@ fn compare_dirs(at: &DirPair, chain: &Chain, ctx: &Ctx) -> Result<Vec<FolderEntr
             .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
     });
     ctx.level(at.rel, &entries, true);
+    entries.retain(|e| ctx.shows(e));
     Ok(entries)
 }
 
@@ -1193,6 +1542,7 @@ fn pair_entry(at: &DirPair, l: Option<&Listed>, r: Option<&Listed>) -> FolderEnt
         error: None,
         content_checked: None,
         crc: None,
+        filtered: pair_filtered(at.filtered, l, r),
     }
 }
 
@@ -1202,17 +1552,33 @@ fn compare_pair(
     pair: (Option<Listed>, Option<Listed>),
     ctx: &Ctx,
 ) -> FolderEntry {
-    let (l, r) = pair;
+    let (mut l, mut r) = pair;
+    // The "containing" filters read files, so they run here, in parallel,
+    // and only on sides no cheaper filter has left out already.
+    if !at.filtered {
+        for (side, item, dir) in [
+            (Side::Left, l.as_mut(), at.ldir),
+            (Side::Right, r.as_mut(), at.rdir),
+        ] {
+            if let Some(x) = item.filter(|x| !x.filtered && !x.meta.is_dir) {
+                x.filtered = ctx.contents_filter_out(side, &ctx.fs(side).join(dir, &x.name));
+            }
+        }
+    }
     let mut entry = pair_entry(at, l.as_ref(), r.as_ref());
     let rel_path = entry.rel_path.clone();
     let left_rel = l
         .as_ref()
         .map(|x| join_rel(at.lrel, &x.name))
         .unwrap_or_default();
+    // Rows the filters leave out are compared on metadata only, and their
+    // folders walked only when asked to show what's in them.
+    let inherited = entry.filtered_out();
+    let descend = ctx.opts.recursive && (ctx.control.expand_filtered || !inherited);
 
     match (&l, &r) {
         (Some(l), None) => {
-            if l.meta.is_dir && ctx.opts.recursive {
+            if l.meta.is_dir && descend {
                 let path = ctx.left.join(at.ldir, &l.name);
                 let canonical = chain.child(ctx, Side::Left, &path, l);
                 if chain.loops(Side::Left, l, &canonical) {
@@ -1225,12 +1591,12 @@ fn compare_pair(
                         parent: Some(chain),
                     };
                     entry.children =
-                        orphan_tree(&path, &rel_path, &left_rel, Side::Left, &sub, ctx);
+                        orphan_tree(&path, &rel_path, &left_rel, Side::Left, &sub, inherited, ctx);
                 }
             }
         }
         (None, Some(r)) => {
-            if r.meta.is_dir && ctx.opts.recursive {
+            if r.meta.is_dir && descend {
                 let path = ctx.right.join(at.rdir, &r.name);
                 let canonical = chain.child(ctx, Side::Right, &path, r);
                 if chain.loops(Side::Right, r, &canonical) {
@@ -1243,13 +1609,13 @@ fn compare_pair(
                         parent: Some(chain),
                     };
                     entry.children =
-                        orphan_tree(&path, &rel_path, &rel_path, Side::Right, &sub, ctx);
+                        orphan_tree(&path, &rel_path, &rel_path, Side::Right, &sub, inherited, ctx);
                 }
             }
         }
         (Some(l), Some(r)) if l.meta.is_dir != r.meta.is_dir => {}
         (Some(l), Some(r)) if l.meta.is_dir => {
-            if ctx.opts.recursive {
+            if descend {
                 let (ld, rd) = (
                     ctx.left.join(at.ldir, &l.name),
                     ctx.right.join(at.rdir, &r.name),
@@ -1293,6 +1659,7 @@ fn compare_pair(
                     rdir: &rd,
                     rel: &rel_path,
                     lrel: &left_rel,
+                    filtered: inherited,
                 };
                 match compare_dirs(&at, &sub, ctx) {
                     Ok(children) => {
@@ -1311,13 +1678,13 @@ fn compare_pair(
                 ctx.left.join(at.ldir, &l.name),
                 ctx.right.join(at.rdir, &r.name),
             );
-            match compare_file_pair(&lp, &rp, &l.meta, &r.meta, ctx) {
+            match compare_file_pair(&lp, &rp, &l.meta, &r.meta, ctx, inherited) {
                 Ok(verdict) => {
                     entry.status = verdict.status;
                     entry.crc = verdict.crc;
                     let as_links = !ctx.opts.follow_links
                         && (l.meta.link_target.is_some() || r.meta.link_target.is_some());
-                    if ctx.opts.content != ContentMethod::Off && !as_links {
+                    if ctx.opts.content != ContentMethod::Off && !as_links && !inherited {
                         // What actually ran: large files may have used the fallback.
                         entry.content_checked = Some(
                             content_method_for(&l.meta, &r.meta, ctx.opts)
@@ -1346,14 +1713,13 @@ fn compare_pair(
 }
 
 /// A folder is the same when everything inside is, similar when the only
-/// deviations are similar files, and different otherwise.
+/// deviations are similar files, and different otherwise. Rows the filters
+/// leave out don't count.
 pub fn folder_status(children: &[FolderEntry]) -> EntryStatus {
-    if children.iter().all(|c| c.status == EntryStatus::Same) {
+    let counted = || children.iter().filter(|c| !c.filtered_out());
+    if counted().all(|c| c.status == EntryStatus::Same) {
         EntryStatus::Same
-    } else if children
-        .iter()
-        .all(|c| matches!(c.status, EntryStatus::Same | EntryStatus::Similar))
-    {
+    } else if counted().all(|c| matches!(c.status, EntryStatus::Same | EntryStatus::Similar)) {
         EntryStatus::Similar
     } else {
         EntryStatus::Different
@@ -1362,7 +1728,12 @@ pub fn folder_status(children: &[FolderEntry]) -> EntryStatus {
 
 fn tally(entries: &[FolderEntry], stats: &mut FolderStats) {
     for e in entries {
-        if !e.is_dir {
+        if e.filtered_out() {
+            // Everything below is filtered too.
+            if !e.is_dir {
+                stats.filtered += 1;
+            }
+        } else if !e.is_dir {
             match e.status {
                 EntryStatus::Same => stats.same += 1,
                 EntryStatus::Similar => stats.similar += 1,
@@ -1418,7 +1789,10 @@ pub fn compare_folders_cached(
     compare_folders_controlled(left_fs, left, right_fs, right, opts, control)
 }
 
-/// [`compare_folders_cached`] with progress reports and cancellation.
+/// [`compare_folders_cached`] with progress reports and cancellation. With
+/// [`ScanControl::scan`], only the stages `opts` change since the scan's
+/// last run read anything (see [`FolderScan`]); the scan must belong to
+/// these two folders.
 pub fn compare_folders_controlled(
     left_fs: &dyn Vfs,
     left: &str,
@@ -1434,6 +1808,14 @@ pub fn compare_folders_controlled(
     }
     let ci = opts.ignore_name_case;
     let f = &opts.filters;
+    let transient;
+    let scan = match control.scan {
+        Some(scan) => scan,
+        None => {
+            transient = FolderScan::transient();
+            &transient
+        }
+    };
     let ctx = Ctx {
         opts,
         exclude: build_globset(&opts.exclude, ci)?,
@@ -1442,12 +1824,23 @@ pub fn compare_folders_controlled(
         exclude_folders: build_globset(&f.exclude_folders, ci)?,
         include_containing: containing_regex(&f.include_containing, f)?,
         exclude_containing: containing_regex(&f.exclude_containing, f)?,
+        containing_key: fingerprint(&(
+            &f.include_containing,
+            &f.exclude_containing,
+            f.containing_regex,
+            f.containing_match_case,
+        )),
+        rules_key: fingerprint(&serde_json::to_string(&opts.rules).unwrap_or_default()),
         aligner: Aligner::new(&opts.align, ci)?,
         left: left_fs,
         right: right_fs,
         control,
+        scan,
         roots: if opts.follow_links {
-            [left_fs.canonical(left), right_fs.canonical(right)]
+            [
+                scan.canonical_of(left_fs, Side::Left, left),
+                scan.canonical_of(right_fs, Side::Right, right),
+            ]
         } else {
             [None, None]
         },
@@ -1455,7 +1848,10 @@ pub fn compare_folders_controlled(
         scanned: AtomicUsize::new(0),
         folders: AtomicUsize::new(0),
         compared: AtomicUsize::new(0),
+        dirs_read: AtomicUsize::new(0),
     };
+    // Only once the options are known to be valid.
+    let needs = control.scan.map(|scan| scan.restage(opts));
     let root = Chain {
         canonical: ctx.roots.clone(),
         parent: None,
@@ -1465,6 +1861,7 @@ pub fn compare_folders_controlled(
         rdir: right,
         rel: "",
         lrel: "",
+        filtered: false,
     };
     let entries = compare_dirs(&at, &root, &ctx)?;
     // Folders below the top level record a cancellation as their own error.
@@ -1472,12 +1869,14 @@ pub fn compare_folders_controlled(
     let mut stats = FolderStats::default();
     tally(&entries, &mut stats);
     stats.checksums_reused = ctx.reused.load(Ordering::Relaxed);
+    stats.dirs_read = ctx.dirs_read.load(Ordering::Relaxed);
     Ok(FolderCompareResult {
         left_root: left.to_owned(),
         right_root: right.to_owned(),
         entries,
         stats,
         elapsed_ms: started.elapsed().as_millis(),
+        needs,
     })
 }
 
@@ -2288,5 +2687,268 @@ mod content_id_tests {
             assert_eq!(status("same.txt"), EntryStatus::Same, "{content:?}");
             assert_eq!(status("changed.txt"), EntryStatus::Different, "{content:?}");
         }
+    }
+}
+
+#[cfg(test)]
+mod staged_tests {
+    use super::*;
+    use std::fs;
+    use std::path::PathBuf;
+    use std::time::{Duration, SystemTime};
+
+    /// The local file system, counting folder listings and file opens.
+    #[derive(Default)]
+    struct CountingFs {
+        listed: AtomicUsize,
+        opened: AtomicUsize,
+    }
+
+    impl CountingFs {
+        /// Listings and opens since the last call.
+        fn take(&self) -> (usize, usize) {
+            (self.listed.swap(0, Ordering::Relaxed), self.opened.swap(0, Ordering::Relaxed))
+        }
+    }
+
+    impl Vfs for CountingFs {
+        fn read_dir(&self, dir: &str) -> Result<Vec<VfsEntry>> {
+            self.read_dir_with(dir, ListOptions::default())
+        }
+        fn read_dir_with(&self, dir: &str, opts: ListOptions) -> Result<Vec<VfsEntry>> {
+            self.listed.fetch_add(1, Ordering::Relaxed);
+            LocalFs.read_dir_with(dir, opts)
+        }
+        fn open(&self, path: &str) -> Result<Box<dyn Read + Send>> {
+            self.opened.fetch_add(1, Ordering::Relaxed);
+            LocalFs.open(path)
+        }
+        fn join(&self, dir: &str, name: &str) -> String {
+            LocalFs.join(dir, name)
+        }
+        fn canonical(&self, path: &str) -> Option<String> {
+            LocalFs.canonical(path)
+        }
+    }
+
+    struct Tree {
+        _dir: tempfile::TempDir,
+        l: String,
+        r: String,
+        /// Folders per side, the root included.
+        folders: usize,
+    }
+
+    fn write(root: &str, rel: &str, contents: &[u8], modified_s: u64) {
+        let p = PathBuf::from(root).join(rel);
+        fs::create_dir_all(p.parent().unwrap()).unwrap();
+        fs::write(&p, contents).unwrap();
+        let t = SystemTime::UNIX_EPOCH + Duration::from_secs(modified_s);
+        fs::File::options().write(true).open(&p).unwrap().set_modified(t).unwrap();
+    }
+
+    /// Twenty folders of a source file, a log and a file whose right copy
+    /// is 5 s newer; `skip/` holds more of the same.
+    fn tree() -> Tree {
+        let dir = tempfile::tempdir().unwrap();
+        let (l, r) = (dir.path().join("l"), dir.path().join("r"));
+        let (l, r) = (l.to_string_lossy().into_owned(), r.to_string_lossy().into_owned());
+        for d in (0..20).map(|i| format!("d{i}")).chain(["skip".into()]) {
+            for root in [&l, &r] {
+                write(root, &format!("{d}/main.rs"), b"fn main() {}", 1_000);
+                write(root, &format!("{d}/run.log"), b"log", 1_000);
+            }
+            write(&l, &format!("{d}/late.txt"), b"same", 1_000);
+            write(&r, &format!("{d}/late.txt"), b"same", 1_005);
+        }
+        Tree { _dir: dir, l, r, folders: 22 }
+    }
+
+    fn opts() -> FolderCompareOptions {
+        FolderCompareOptions {
+            ignore_name_case: false,
+            exclude: vec!["skip".into()],
+            ..Default::default()
+        }
+    }
+
+    fn run(t: &Tree, fs: &CountingFs, scan: &FolderScan, opts: &FolderCompareOptions) -> FolderCompareResult {
+        let control = ScanControl {
+            scan: Some(scan),
+            ..Default::default()
+        };
+        compare_folders_controlled(fs, &t.l, fs, &t.r, opts, control).unwrap()
+    }
+
+    #[test]
+    fn filters_and_tolerance_restage_without_listing() {
+        let t = tree();
+        let (fs, scan) = (CountingFs::default(), FolderScan::new());
+        let first = run(&t, &fs, &scan, &opts());
+        // `skip` is excluded, so never listed.
+        let listed = 2 * (t.folders - 1);
+        assert_eq!(fs.take().0, listed);
+        assert_eq!(first.stats.dirs_read, listed);
+        assert_eq!(first.needs, Some(CompareNeeds::ALL));
+        assert_eq!((first.stats.same, first.stats.different), (40, 20));
+
+        // A name filter: re-filtered in memory.
+        let no_logs = FolderCompareOptions {
+            filters: FolderFilters {
+                exclude_files: vec!["*.log".into()],
+                ..Default::default()
+            },
+            ..opts()
+        };
+        let res = run(&t, &fs, &scan, &no_logs);
+        assert_eq!(fs.take(), (0, 0), "a name filter must not read the disk");
+        assert_eq!(res.stats.dirs_read, 0);
+        let needs = res.needs.unwrap();
+        assert!(needs.filter && !needs.list && !needs.compare);
+        // Dropped rows aren't tallied at all.
+        assert_eq!((res.stats.same, res.stats.different, res.stats.filtered), (20, 20, 0));
+
+        // The timestamp tolerance: re-compared in memory.
+        let lenient = FolderCompareOptions {
+            time_tolerance_secs: 10,
+            ..no_logs.clone()
+        };
+        let res = run(&t, &fs, &scan, &lenient);
+        assert_eq!(fs.take(), (0, 0), "a quick-test change must not read the disk");
+        let needs = res.needs.unwrap();
+        assert!(needs.compare && !needs.list && !needs.filter && !needs.content);
+        assert_eq!((res.stats.same, res.stats.different), (40, 0));
+
+        // Unchanged options redo nothing.
+        let res = run(&t, &fs, &scan, &lenient);
+        assert!(!res.needs.unwrap().any());
+
+        // Following links differently is the one change that lists again.
+        let res = run(&t, &fs, &scan, &FolderCompareOptions { follow_links: false, ..lenient });
+        assert!(res.needs.unwrap().list);
+        assert_eq!(fs.take().0, listed);
+    }
+
+    #[test]
+    fn content_pass_reuses_the_quick_listing() {
+        let t = tree();
+        let (fs, scan) = (CountingFs::default(), FolderScan::new());
+        let quick = run(&t, &fs, &scan, &opts());
+        assert_eq!(fs.take(), (2 * (t.folders - 1), 0));
+        assert!(quick.entries.iter().all(|e| e.content_checked.is_none()));
+
+        let crc = FolderCompareOptions {
+            content: ContentMethod::Crc,
+            ..opts()
+        };
+        let full = run(&t, &fs, &scan, &crc);
+        let (listed, opened) = fs.take();
+        assert_eq!(listed, 0, "the content pass lists nothing again");
+        assert_eq!(opened, 2 * 3 * 20, "every pair read once");
+        assert!(full.needs.unwrap().content);
+        // Same bytes, so the newer copy no longer counts as different.
+        assert_eq!((full.stats.same, full.stats.different), (60, 0));
+
+        // A filter change keeps the verdicts: nothing is read again.
+        let no_logs = FolderCompareOptions {
+            filters: FolderFilters {
+                exclude_files: vec!["*.log".into()],
+                ..Default::default()
+            },
+            ..crc
+        };
+        let res = run(&t, &fs, &scan, &no_logs);
+        assert_eq!(fs.take(), (0, 0));
+        assert_eq!(res.stats.same, 40);
+    }
+
+    #[test]
+    fn suppressed_filters_show_what_they_hide() {
+        let t = tree();
+        write(&t.l, "page.htm", b"<p>", 1_000);
+        write(&t.r, "page.html", b"<p>", 1_000);
+        let (fs, scan) = (CountingFs::default(), FolderScan::new());
+        let opts = FolderCompareOptions {
+            align: AlignOptions {
+                extension_groups: vec!["htm,html".into()],
+                ..Default::default()
+            },
+            filters: FolderFilters {
+                exclude_files: vec!["*.htm".into()],
+                ..Default::default()
+            },
+            ..opts()
+        };
+        let suppress = |expand_filtered| {
+            let control = ScanControl {
+                scan: Some(&scan),
+                keep_filtered: true,
+                expand_filtered,
+                ..Default::default()
+            };
+            compare_folders_controlled(&fs, &t.l, &fs, &t.r, &opts, control).unwrap()
+        };
+
+        let res = suppress(false);
+        let skip = res.entries.iter().find(|e| e.name == "skip").unwrap();
+        assert_eq!(skip.filtered, Some(Filtered::Both));
+        assert!(skip.children.is_empty(), "not walked unless asked");
+        // One side filtered: the pair stays a pair, marked on that side.
+        let page = res.entries.iter().find(|e| e.name == "page.html").unwrap();
+        assert_eq!(page.filtered, Some(Filtered::Left));
+        assert_eq!(page.status, EntryStatus::Same);
+        assert!(page.left.is_some() && page.right.is_some());
+        assert_eq!(res.stats.same, 41, "a half-filtered pair still counts");
+        fs.take();
+
+        // Walking filtered folders lists only the ones never listed.
+        let res = suppress(true);
+        assert_eq!(fs.take(), (2, 0), "just skip/, once per side");
+        let skip = res.entries.iter().find(|e| e.name == "skip").unwrap();
+        assert_eq!(skip.children.len(), 3);
+        assert!(skip.children.iter().all(|c| c.filtered == Some(Filtered::Both)));
+        assert_eq!(skip.children.iter().find(|c| c.name == "late.txt").unwrap().status, EntryStatus::Different);
+        // Filtered rows count apart, and not in their folder's status.
+        assert_eq!(res.stats.filtered, 3);
+        assert_eq!(skip.status, EntryStatus::Same);
+
+        // Without keep_filtered they're dropped, as before staging, and a
+        // side excluded by name leaves its counterpart an orphan (what
+        // Folder Sync plans by).
+        let plain = run(&t, &fs, &scan, &opts);
+        assert!(plain.entries.iter().all(|e| e.name != "skip"));
+        assert_eq!(plain.stats.filtered, 0);
+        let page = plain.entries.iter().find(|e| e.name == "page.html").unwrap();
+        assert_eq!((page.status, page.filtered), (EntryStatus::RightOnly, None));
+        assert!(plain.entries.iter().all(|e| e.name != "page.htm"));
+    }
+
+    #[test]
+    fn needs_follow_the_option_that_changed() {
+        let base = FolderCompareOptions::default();
+        let with = |f: fn(&mut FolderCompareOptions)| {
+            let mut o = base.clone();
+            f(&mut o);
+            compare_needs(&base, &o)
+        };
+        assert!(!compare_needs(&base, &base.clone()).any());
+        assert_eq!(with(|o| o.follow_links = !o.follow_links), CompareNeeds { list: true, ..Default::default() });
+        assert_eq!(with(|o| o.align.ignore_extensions = true), CompareNeeds { align: true, ..Default::default() });
+        assert_eq!(with(|o| o.filters.min_size = Some(1)), CompareNeeds { filter: true, ..Default::default() });
+        assert_eq!(
+            with(|o| o.filters.include_containing = "x".into()),
+            CompareNeeds { content_filter: true, ..Default::default() }
+        );
+        assert_eq!(with(|o| o.ignore_dst_shift = true), CompareNeeds { compare: true, ..Default::default() });
+        assert_eq!(
+            with(|o| o.content = ContentMethod::Binary),
+            CompareNeeds { compare: true, content: true, ..Default::default() }
+        );
+        // Text rules only matter to rules-based content comparison.
+        assert!(!with(|o| o.rules.ignore_case = true).any());
+        let rules = FolderCompareOptions { content: ContentMethod::Rules, ..base.clone() };
+        let mut ignoring = rules.clone();
+        ignoring.rules.ignore_case = true;
+        assert!(compare_needs(&rules, &ignoring).content);
     }
 }
