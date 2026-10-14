@@ -37,6 +37,11 @@ pub struct DropboxConfig {
     pub client_id: Option<String>,
     /// client_secret for dropbox.
     pub client_secret: Option<String>,
+    /// PCompare patch: namespace that paths are relative to, sent as the
+    /// `Dropbox-API-Path-Root` header. Dropbox team-space accounts need
+    /// their root namespace here to reach team folders; unset = the
+    /// member's own folder.
+    pub root_namespace_id: Option<String>,
 }
 
 impl Debug for DropboxConfig {

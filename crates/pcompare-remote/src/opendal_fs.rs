@@ -83,14 +83,26 @@ fn config(p: &ResolvedProfile, access_token: Option<&str>) -> Vec<(String, Strin
     cfg
 }
 
+/// Dropbox errors arrive as raw API bodies; say what to do about the
+/// common ones instead.
 fn remote_err(path: &str, e: opendal::Error) -> CoreError {
-    CoreError::remote(path, e)
+    match crate::dropbox::explain(&e.to_string()) {
+        Some(advice) => CoreError::remote(path, advice),
+        None => CoreError::remote(path, e),
+    }
 }
 
 impl OpendalFs {
     pub fn connect(p: &ResolvedProfile, access_token: Option<&str>) -> Result<Self> {
         opendal::install_default();
-        let op = opendal::Operator::via_iter(scheme(p.profile.kind), config(p, access_token))
+        let mut cfg = config(p, access_token);
+        if p.profile.kind == ProviderKind::Dropbox {
+            let token = access_token.unwrap_or_default();
+            if let Some(namespace) = crate::dropbox::prepare(token, p.get("root").unwrap_or_default())? {
+                cfg.push(("root_namespace_id".into(), namespace));
+            }
+        }
+        let op = opendal::Operator::via_iter(scheme(p.profile.kind), cfg)
             .map_err(|e| CoreError::remote(&p.profile.name, e))?
             .layer(opendal::layers::RetryLayer::new().with_max_times(3))
             .layer(opendal::layers::TimeoutLayer::new());
@@ -156,7 +168,8 @@ fn io_err(e: opendal::Error) -> io::Error {
         _ if e.is_temporary() => io::ErrorKind::ConnectionReset,
         _ => io::ErrorKind::Other,
     };
-    io::Error::new(kind, e.to_string())
+    let message = e.to_string();
+    io::Error::new(kind, crate::dropbox::explain(&message).unwrap_or(message))
 }
 
 /// Object-store multipart uploads need parts of at least 5 MiB.

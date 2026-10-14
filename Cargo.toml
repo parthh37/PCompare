@@ -37,6 +37,9 @@ thiserror = "2"
 # Google Drive shortcuts and Docs/Sheets/Slides have no size; upstream's stat
 # errors on them, which breaks listing any folder that contains one.
 opendal-service-gdrive = { path = "vendor/opendal-service-gdrive" }
+# Dropbox team spaces need the `Dropbox-API-Path-Root` header to reach team
+# folders, and upstream drops the error details (e.g. `required_scope`).
+opendal-service-dropbox = { path = "vendor/opendal-service-dropbox" }
 
 [profile.release]
 lto = true

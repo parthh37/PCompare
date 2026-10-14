@@ -405,7 +405,7 @@ pub fn catalog() -> Vec<ProviderSpec> {
                 v.push(
                     field(ACCESS_TOKEN, "Access token", Secret)
                         .placeholder("sl.… — instead of signing in")
-                        .help("Paste a token generated on your app's page in the Dropbox App Console (Settings → Generated access token). Used instead of the sign-in while set. Generated tokens expire after about 4 hours; signing in doesn't."),
+                        .help("Paste a token generated on your app's page in the Dropbox App Console (Settings → Generated access token). Tick files.metadata.read, files.content.read and files.content.write on the Permissions tab first: a token keeps the permissions it was created with. Used instead of the sign-in while set. Generated tokens expire after about 4 hours; signing in doesn't."),
                 );
                 v.push(root());
                 v
@@ -413,7 +413,7 @@ pub fn catalog() -> Vec<ProviderSpec> {
             oauth: oauth(
                 "https://www.dropbox.com/oauth2/authorize",
                 "https://api.dropboxapi.com/oauth2/token",
-                "files.metadata.read files.content.read files.content.write",
+                crate::dropbox::SCOPES,
                 &[("token_access_type", "offline")],
                 "https://www.dropbox.com/developers/apps",
                 DROPBOX_APP,
