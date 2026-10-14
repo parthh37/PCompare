@@ -122,6 +122,7 @@ mod tests {
             rel_path: rel.into(),
             is_dir: false,
             status,
+            detail: status.into(),
             newer: None,
             left: l,
             right: r,
@@ -131,6 +132,7 @@ mod tests {
             crc: None,
             left_rel_path: None, // bc5:folder-engine
             filtered: None,
+            counts: None,
         }
     }
 
