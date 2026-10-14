@@ -57,6 +57,12 @@ pub enum Newer {
 pub struct ReportMeta {
     pub size: u64,
     pub modified_ms: Option<i64>,
+    /// DOS attribute bits (`folder::attr`), where the file system has them.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub attributes: Option<u32>,
+    /// CRC-32, when the comparison computed one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub crc: Option<u32>,
 }
 
 impl From<&EntryMeta> for ReportMeta {
@@ -64,6 +70,8 @@ impl From<&EntryMeta> for ReportMeta {
         Self {
             size: m.size,
             modified_ms: m.modified_ms,
+            attributes: m.attributes,
+            crc: None,
         }
     }
 }
@@ -108,8 +116,14 @@ impl From<&FolderEntry> for ReportEntry {
                 Side::Left => Newer::Left,
                 Side::Right => Newer::Right,
             }),
-            left: e.left.as_ref().map(ReportMeta::from),
-            right: e.right.as_ref().map(ReportMeta::from),
+            left: e.left.as_ref().map(|m| ReportMeta {
+                crc: e.crc.map(|c| c[0]),
+                ..ReportMeta::from(m)
+            }),
+            right: e.right.as_ref().map(|m| ReportMeta {
+                crc: e.crc.map(|c| c[1]),
+                ..ReportMeta::from(m)
+            }),
             children: e.children.iter().map(ReportEntry::from).collect(),
             error: e.error.clone(),
             left_rel_path: e.left_rel_path.clone(),
@@ -279,6 +293,10 @@ pub struct FolderReportOptions {
     /// Detailed layout columns.
     pub show_size: bool,
     pub show_modified: bool,
+    /// CRC-32 column (filled where the comparison computed CRCs).
+    pub show_crc: bool,
+    /// DOS attributes column (`RHSA`).
+    pub show_attributes: bool,
     pub mono: bool,
     /// Report heading; empty for "Folder Compare".
     pub title: String,
@@ -297,6 +315,8 @@ impl Default for FolderReportOptions {
             name_filter: String::new(),
             show_size: true,
             show_modified: true,
+            show_crc: false,
+            show_attributes: false,
             mono: false,
             title: String::new(),
             expanded: None,
@@ -549,6 +569,38 @@ fn size_of(m: &Option<ReportMeta>, is_dir: bool) -> String {
     }
 }
 
+fn crc_of(m: &Option<ReportMeta>) -> String {
+    m.as_ref()
+        .and_then(|m| m.crc)
+        .map(|c| format!("{c:08X}"))
+        .unwrap_or_default()
+}
+
+/// `RHSA`-style attribute letters, `-` for a cleared bit.
+fn attributes_of(m: &Option<ReportMeta>) -> String {
+    let Some(bits) = m.as_ref().and_then(|m| m.attributes) else {
+        return String::new();
+    };
+    use pcompare_core::folder::attr;
+    [(attr::READONLY, 'R'), (attr::HIDDEN, 'H'), (attr::SYSTEM, 'S'), (attr::ARCHIVE, 'A')]
+        .iter()
+        .map(|&(b, c)| if bits & b != 0 { c } else { '-' })
+        .collect()
+}
+
+/// The optional detailed-layout columns after size and modified:
+/// (heading, value) for one side.
+fn extra_columns(opts: &FolderReportOptions, m: &Option<ReportMeta>) -> Vec<(&'static str, String)> {
+    let mut out = Vec::new();
+    if opts.show_crc {
+        out.push(("CRC", crc_of(m)));
+    }
+    if opts.show_attributes {
+        out.push(("Attributes", attributes_of(m)));
+    }
+    out
+}
+
 fn date_of(m: &Option<ReportMeta>) -> String {
     m.as_ref()
         .and_then(|m| m.modified_ms)
@@ -679,7 +731,8 @@ fn render_html(
         }
         body.push_str("</table>\n");
     } else {
-        let side_cols = 1 + opts.show_size as usize + opts.show_modified as usize;
+        let extra = extra_columns(opts, &None).len();
+        let side_cols = 1 + opts.show_size as usize + opts.show_modified as usize + extra;
         let head = |label: &str| {
             let mut h = format!("<th>{label}</th>");
             if opts.show_size {
@@ -687,6 +740,9 @@ fn render_html(
             }
             if opts.show_modified {
                 h.push_str("<th>Modified</th>");
+            }
+            for (name, _) in extra_columns(opts, &None) {
+                let _ = write!(h, "<th>{name}</th>");
             }
             h
         };
@@ -718,6 +774,9 @@ fn render_html(
                 }
                 if opts.show_modified {
                     let _ = write!(s, "<td class=\"date\">{}</td>", escape(&date_of(meta)));
+                }
+                for (_, value) in extra_columns(opts, meta) {
+                    let _ = write!(s, "<td class=\"num\">{}</td>", escape(&value));
                 }
                 s
             };
@@ -845,6 +904,9 @@ fn render_text(
         if opts.show_modified {
             let _ = write!(s, "  {:<19}", date_of(meta));
         }
+        for (name, value) in extra_columns(opts, meta) {
+            let _ = write!(s, "  {value:<w$}", w = name.len().max(8));
+        }
         s
     };
     let mut head = pad("Name", name_w);
@@ -853,6 +915,9 @@ fn render_text(
     }
     if opts.show_modified {
         let _ = write!(head, "  {:<19}", "Modified");
+    }
+    for (name, _) in extra_columns(opts, &None) {
+        let _ = write!(head, "  {name:<w$}", w = name.len().max(8));
     }
     line(&mut out, format!("{head}     {head}"));
     for Row { entry: e, depth } in rows {
@@ -893,6 +958,14 @@ fn render_csv(opts: &FolderReportOptions, rows: &[Row]) -> String {
                 "Right Modified"
             });
         }
+        for (name, _) in extra_columns(opts, &None) {
+            head.push(match (side, name) {
+                ("Left", "CRC") => "Left CRC",
+                ("Left", _) => "Left Attributes",
+                (_, "CRC") => "Right CRC",
+                _ => "Right Attributes",
+            });
+        }
     }
     let mut out = csv_row(&head);
     for Row { entry: e, .. } in rows {
@@ -914,6 +987,7 @@ fn render_csv(opts: &FolderReportOptions, rows: &[Row]) -> String {
             if opts.show_modified {
                 fields.push(date_of(meta));
             }
+            fields.extend(extra_columns(opts, meta).into_iter().map(|(_, v)| v));
         }
         out.push_str(&csv_row(&fields));
     }
@@ -1003,6 +1077,12 @@ fn render_xml(
             }
             if let Some(ms) = m.modified_ms {
                 let _ = write!(inner, " modified=\"{}\"", xml::attr(&format_time(ms)));
+            }
+            if let Some(c) = m.crc {
+                let _ = write!(inner, " crc=\"{c:08X}\"");
+            }
+            if m.attributes.is_some() {
+                let _ = write!(inner, " attributes=\"{}\"", attributes_of(meta));
             }
             inner.push_str("/>\n");
         }
@@ -1252,6 +1332,7 @@ mod tests {
         Some(ReportMeta {
             size,
             modified_ms: None,
+            ..Default::default()
         })
     }
 

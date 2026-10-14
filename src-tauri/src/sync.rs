@@ -19,7 +19,7 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use pcompare_core::vfs_write::VfsWrite;
 use std::time::{Duration, Instant};
 
-use pcompare_core::folder::{ChecksumCache, FolderCompareOptions};
+use pcompare_core::folder::{ChecksumCache, FolderCompareOptions, FolderCompareResult};
 use pcompare_core::store::now_ms;
 use pcompare_core::CoreError;
 use pcompare_index::{CachedChecksums, Index, IndexStats, JobDetail, JobStatus, JobSummary, NewJob, OpState};
@@ -33,7 +33,7 @@ use pcompare_sync::remote::{self as remote_sync, Root}; // bc5:remote-write
 use pcompare_sync::merge::{
     self, FolderMergeOptions, FolderMergeResult, MergeDecision, MergeProgress, MergeReport, MergeRun,
 }; // bc5:folder-merge
-use pcompare_sync::sync::{self as engine, ConflictPolicy, PlanOptions, SyncMode, SyncOp, SyncPlan};
+use pcompare_sync::sync::{self as engine, ConflictPolicy, PlanRules, SyncMode, SyncOp, SyncPlan};
 use serde::Serialize;
 use tauri::ipc::Channel;
 use tauri::{AppHandle, Manager};
@@ -72,6 +72,27 @@ fn jobs(app: &AppHandle) -> tauri::State<'_, SyncJobs> {
         app.manage(SyncJobs::default());
     }
     app.state::<SyncJobs>()
+}
+
+/// The comparisons behind the latest previews (bc5:sync-matrix), so changing
+/// a row's action re-plans from memory instead of rescanning both folders.
+/// Small: a big comparison holds every entry of both trees.
+#[derive(Default)]
+struct SyncComparisons(Mutex<Vec<(String, Arc<FolderCompareResult>)>>);
+
+const KEPT_COMPARISONS: usize = 4;
+
+fn comparisons(app: &AppHandle) -> MutexGuard<'_, Vec<(String, Arc<FolderCompareResult>)>> {
+    if app.try_state::<SyncComparisons>().is_none() {
+        app.manage(SyncComparisons::default());
+    }
+    app.state::<SyncComparisons>().inner().0.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+/// Which preview a cached comparison belongs to: the folders and every
+/// compare option.
+fn comparison_key(left: &str, right: &str, options: &FolderCompareOptions) -> String {
+    format!("{left}\n{right}\n{}", serde_json::to_string(options).unwrap_or_default())
 }
 
 /// Folder Merge writes its output locally only.
@@ -168,7 +189,8 @@ fn as_cache<'a>(c: &'a Option<CachedChecksums<'_>>) -> Option<&'a dyn ChecksumCa
     c.as_ref().map(|c| c as &dyn ChecksumCache)
 }
 
-/// Plans a sync, using the pair's baseline (two-way) and the checksum cache.
+/// Plans a sync, using the pair's baseline (two-way and custom) and the
+/// checksum cache.
 pub(crate) fn plan( // automation:shell
     app: &AppHandle,
     left: &str,
@@ -176,27 +198,70 @@ pub(crate) fn plan( // automation:shell
     mode: SyncMode,
     options: &FolderCompareOptions,
     conflicts: ConflictPolicy,
+    rules: &PlanRules, // bc5:sync-matrix
 ) -> pcompare_core::Result<SyncPlan> {
     with_remote(app, [left, right], |r| {
         let (lfs, lpath) = r.target_folder(left)?; // bc5:archives
         let (rfs, rpath) = r.target_folder(right)?;
-        let baseline = match (mode, index(app)) {
-            (SyncMode::TwoWay, Some(ix)) => Some(ix.load_baseline(&pair_key(left), &pair_key(right)).map_err(db_err)?),
-            _ => None,
-        };
+        let baseline = load_baseline(app, left, right, mode)?;
         let cache = checksum_cache(app, [crate::archive::cache_root(left), crate::archive::cache_root(right)]); // bc5:archives
-        let plan_opts = PlanOptions { baseline: baseline.as_ref(), conflicts };
+        let plan_opts = rules.options(baseline.as_ref(), conflicts);
         let mut plan = engine::plan_sync_with(&*lfs, &lpath, &*rfs, &rpath, mode, options, &plan_opts, as_cache(&cache))?;
         if let Some(cache) = cache {
             let _ = cache.flush();
         }
-        // bc5:remote-write — remote deletions can't be undone; say so up front.
-        let remote_warnings = remote_sync::remote_warnings(&plan, pcompare_remote::is_remote(left), pcompare_remote::is_remote(right));
-        plan.warnings.extend(remote_warnings);
-        plan.left_root = left.to_owned();
-        plan.right_root = right.to_owned();
+        finish_plan(&mut plan, left, right);
         Ok(plan)
     })
+}
+
+/// The pair's baseline, for the modes that use one.
+fn load_baseline(app: &AppHandle, left: &str, right: &str, mode: SyncMode) -> pcompare_core::Result<Option<baseline::Baseline>> {
+    match index(app) {
+        Some(ix) if mode.uses_baseline() => Ok(Some(ix.load_baseline(&pair_key(left), &pair_key(right)).map_err(db_err)?)),
+        _ => Ok(None),
+    }
+}
+
+/// What every plan shown to the user gets once it's built.
+fn finish_plan(plan: &mut SyncPlan, left: &str, right: &str) {
+    // bc5:remote-write — remote deletions can't be undone; say so up front.
+    let remote_warnings = remote_sync::remote_warnings(plan, pcompare_remote::is_remote(left), pcompare_remote::is_remote(right));
+    plan.warnings.extend(remote_warnings);
+    plan.left_root = left.to_owned();
+    plan.right_root = right.to_owned();
+}
+
+/// Re-plans from the comparison of an earlier preview of the same folders
+/// and options (bc5:sync-matrix); `None` when there is none to reuse.
+fn replan_cached(
+    app: &AppHandle,
+    left: &str,
+    right: &str,
+    mode: SyncMode,
+    options: &FolderCompareOptions,
+    conflicts: ConflictPolicy,
+    rules: &PlanRules,
+) -> Option<pcompare_core::Result<SyncPlan>> {
+    let key = comparison_key(left, right, options);
+    let cmp = comparisons(app).iter().find(|(k, _)| *k == key).map(|(_, c)| c.clone())?;
+    Some((|| {
+        let baseline = load_baseline(app, left, right, mode)?;
+        let opts = FolderCompareOptions { recursive: true, ..options.clone() };
+        let mut plan = engine::plan_from_comparison_with(&cmp, mode, &opts, &rules.options(baseline.as_ref(), conflicts));
+        finish_plan(&mut plan, left, right);
+        Ok(plan)
+    })())
+}
+
+/// Keeps a preview's comparison for [`replan_cached`].
+fn remember_comparison(app: &AppHandle, left: &str, right: &str, options: &FolderCompareOptions, plan: &mut SyncPlan) {
+    let Some(cmp) = plan.comparison.take() else { return };
+    let key = comparison_key(left, right, options);
+    let mut kept = comparisons(app);
+    kept.retain(|(k, _)| *k != key);
+    kept.insert(0, (key, Arc::new(cmp)));
+    kept.truncate(KEPT_COMPARISONS);
 }
 
 /// Records what is in sync now as the pair's new baseline.
@@ -286,6 +351,7 @@ pub(crate) struct RunSpec<'a> {
     pub(crate) mode: SyncMode,
     pub(crate) compare: &'a FolderCompareOptions,
     pub(crate) conflicts: ConflictPolicy,
+    pub(crate) rules: &'a PlanRules, // bc5:sync-matrix
 }
 // automation:shell end
 
@@ -329,9 +395,11 @@ fn run_job(
             eprintln!("scan database: {e}");
         }
     }
-    let fresh = plan(app, spec.left, spec.right, spec.mode, spec.compare, spec.conflicts).ok();
-    if let Some(p) = &fresh {
+    let mut fresh = plan(app, spec.left, spec.right, spec.mode, spec.compare, spec.conflicts, spec.rules).ok();
+    if let Some(p) = &mut fresh {
         update_baseline(app, spec.left, spec.right, p);
+        // bc5:sync-matrix — later row actions re-plan from this comparison.
+        remember_comparison(app, spec.left, spec.right, spec.compare, p);
     }
     SyncRun {
         job_id: job.map(|(id, _)| id.to_owned()),
@@ -356,6 +424,7 @@ pub(crate) fn recover_job(left: Root, right: Root, detail: &JobDetail) -> Vec<Re
 // ---------- folder sync ----------
 
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 pub async fn sync_plan(
     app: AppHandle,
     left: String,
@@ -363,8 +432,22 @@ pub async fn sync_plan(
     mode: SyncMode,
     options: FolderCompareOptions,
     conflicts: Option<ConflictPolicy>,
+    rules: Option<PlanRules>, // bc5:sync-matrix
+    reuse: Option<bool>,
 ) -> CmdResult<SyncPlan> {
-    blocking(move || plan(&app, &left, &right, mode, &options, conflicts.unwrap_or_default())).await
+    let (conflicts, rules) = (conflicts.unwrap_or_default(), rules.unwrap_or_default());
+    blocking(move || {
+        // bc5:sync-matrix — a changed row action needs no rescan.
+        if reuse == Some(true) {
+            if let Some(p) = replan_cached(&app, &left, &right, mode, &options, conflicts, &rules) {
+                return p;
+            }
+        }
+        let mut p = plan(&app, &left, &right, mode, &options, conflicts, &rules)?;
+        remember_comparison(&app, &left, &right, &options, &mut p);
+        Ok(p)
+    })
+    .await
 }
 
 /// Checks folders, write access and free space before a run — and, when
@@ -473,15 +556,17 @@ pub async fn sync_execute(
     exec: ExecOptions,
     compare: FolderCompareOptions,
     conflicts: ConflictPolicy,
+    rules: Option<PlanRules>, // bc5:sync-matrix
     run_key: String,
     on_progress: Channel<ExecProgress>,
 ) -> CmdResult<SyncRun> {
+    let rules = rules.unwrap_or_default();
     // automation:shell — the body moved to resolve_versioning_folder / execute_new_job.
     let mut exec = exec;
     resolve_versioning_folder(&app, &mut exec)?;
     let guard = RunGuard::new(&app, run_key);
     blocking(move || {
-        let spec = RunSpec { left: &left, right: &right, mode, compare: &compare, conflicts };
+        let spec = RunSpec { left: &left, right: &right, mode, compare: &compare, conflicts, rules: &rules };
         let mut send = progress_sender(on_progress);
         execute_new_job(&app, &spec, &ops, &exec, &guard.flag, &guard.pause, &mut send)
     })
@@ -524,9 +609,11 @@ pub async fn sync_resume(
     job_id: String,
     compare: FolderCompareOptions,
     conflicts: ConflictPolicy,
+    rules: Option<PlanRules>, // bc5:sync-matrix
     run_key: String,
     on_progress: Channel<ExecProgress>,
 ) -> CmdResult<SyncRun> {
+    let rules = rules.unwrap_or_default();
     let guard = RunGuard::new(&app, run_key);
     blocking(move || {
         let ix = require_index(&app)?;
@@ -543,7 +630,7 @@ pub async fn sync_resume(
                 .filter(|o| matches!(o.state, OpState::Pending | OpState::Running))
                 .map(|o| o.op.clone())
                 .collect();
-            let spec = RunSpec { left: &s.left, right: &s.right, mode: s.mode, compare: &compare, conflicts };
+            let spec = RunSpec { left: &s.left, right: &s.right, mode: s.mode, compare: &compare, conflicts, rules: &rules };
             let mut send = progress_sender(on_progress);
             Ok(run_job(
                 &app,

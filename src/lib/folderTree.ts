@@ -28,6 +28,28 @@ export const DISPLAY_FILTERS: { value: DisplayFilter; label: string; primary?: b
 
 const isOrphan = (s: EntryStatus) => s === "leftOnly" || s === "rightOnly";
 
+/** Whether the filters leave the whole row out (shown only with Suppress filters). */
+export const filteredOut = (e: FolderEntry) => e.filtered === "both";
+
+/**
+ * The tree without rows the filters leave out, as the view shows it unless
+ * filters are suppressed. Shares untouched folders with the input.
+ */
+export function withoutFiltered(entries: FolderEntry[]): FolderEntry[] {
+  let changed = false;
+  const out: FolderEntry[] = [];
+  for (const e of entries) {
+    if (filteredOut(e)) {
+      changed = true;
+      continue;
+    }
+    const children = e.children.length ? withoutFiltered(e.children) : e.children;
+    if (children !== e.children) changed = true;
+    out.push(children === e.children ? e : { ...e, children });
+  }
+  return changed ? out : entries;
+}
+
 /** The status filters and totals go by: entries marked "ignore" count as same. */
 export const effectiveStatus = (e: FolderEntry): EntryStatus => (e.ignored ? "same" : e.status);
 
@@ -119,7 +141,7 @@ export function pairedFiles(entries: FolderEntry[], out: FolderEntry[] = []): Fo
 
 /** Mirrors `folder_status` in pcompare-core, with ignored entries as same. */
 function folderStatus(children: FolderEntry[]): EntryStatus {
-  const st = children.map(effectiveStatus);
+  const st = children.filter((c) => !filteredOut(c)).map(effectiveStatus);
   if (st.every((s) => s === "same")) return "same";
   if (st.every((s) => s === "same" || s === "similar")) return "similar";
   return "different";
@@ -157,7 +179,10 @@ export function applyVerdicts(
 export function tally(entries: FolderEntry[], stats: FolderStats = emptyStats()): FolderStats {
   for (const e of entries) {
     if (e.pending && !e.isDir) continue; // not compared yet
-    if (!e.isDir) {
+    if (filteredOut(e)) {
+      // Counted apart, like everything below it.
+      if (!e.isDir) stats.filtered = (stats.filtered ?? 0) + 1;
+    } else if (!e.isDir) {
       if (e.ignored) stats.ignored = (stats.ignored ?? 0) + 1;
       switch (effectiveStatus(e)) {
         case "same":
