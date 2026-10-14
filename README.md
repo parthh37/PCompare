@@ -4,6 +4,25 @@ A fast, modern file & folder comparison tool for Windows and macOS — inspired 
 
 ![status](https://img.shields.io/badge/status-early%20development-orange) ![license](https://img.shields.io/badge/license-MIT-blue)
 
+![PCompare Text Compare: side-by-side diff with word-level highlights](docs/screenshots/bc5/text-compare.png)
+
+## Screenshots
+
+<table>
+  <tr>
+    <td width="50%"><a href="docs/screenshots/folder-compare.png"><img src="docs/screenshots/folder-compare.png" alt="Folder Compare" width="100%"></a><br><b>Folder Compare</b>: quick tests, content compare and display filters</td>
+    <td width="50%"><a href="docs/screenshots/bc5/archive-folder-compare.png"><img src="docs/screenshots/bc5/archive-folder-compare.png" alt="Archives as folders" width="100%"></a><br><b>Archives as folders</b>: zip, tar and 7z browsed and edited in place</td>
+  </tr>
+  <tr>
+    <td width="50%"><a href="docs/screenshots/bc5/hex-aligned.png"><img src="docs/screenshots/bc5/hex-aligned.png" alt="Hex Compare" width="100%"></a><br><b>Hex Compare</b>: byte-level differences with inserted bytes aligned</td>
+    <td width="50%"><a href="docs/screenshots/bc5/patch-viewer.png"><img src="docs/screenshots/bc5/patch-viewer.png" alt="Patch viewer" width="100%"></a><br><b>Patch viewer</b>: browse a <code>.patch</code> file by file and apply it to a folder</td>
+  </tr>
+  <tr>
+    <td width="50%"><a href="docs/screenshots/araxis/git-side.png"><img src="docs/screenshots/araxis/git-side.png" alt="Compare a git revision" width="100%"></a><br><b>Version control</b>: compare against <code>git:&lt;path&gt;@HEAD~3</code></td>
+    <td width="50%"><a href="docs/screenshots/automation-page.png"><img src="docs/screenshots/automation-page.png" alt="Sync Automation" width="100%"></a><br><b>Sync Automation</b>: scheduled and real-time syncs with run history and alerts</td>
+  </tr>
+</table>
+
 ## Features (v0.1)
 
 | Session | What it does |
