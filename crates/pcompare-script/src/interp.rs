@@ -739,6 +739,7 @@ fn mode_label(mode: SyncMode) -> &'static str {
         SyncMode::MirrorLeftToRight => "mirror left->right",
         SyncMode::MirrorRightToLeft => "mirror right->left",
         SyncMode::TwoWay => "two-way",
+        SyncMode::Custom => "custom",
     }
 }
 
@@ -810,6 +811,7 @@ fn copy_ops(f: &Folders, dir: Direction) -> Result<(Vec<SyncOp>, Vec<String>), S
             reason: "script copy".into(),
             dst_before: None,
             left_rel_path: e.left_rel_path.clone().filter(|p| *p != e.rel_path),
+            category: None,
         };
         if e.is_dir {
             if dst.is_none() {
@@ -870,6 +872,7 @@ fn delete_ops(f: &Folders, sides: Sides) -> Result<Vec<SyncOp>, String> {
                 reason: "script delete".into(),
                 dst_before: None,
                 left_rel_path: e.left_rel_path.clone().filter(|p| *p != e.rel_path),
+                category: None,
             });
         }
     }

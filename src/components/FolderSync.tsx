@@ -13,6 +13,7 @@ import {
   Clock,
   FolderPlus,
   FolderSync as FolderSyncIcon,
+  Grid3x3, // bc5:sync-matrix
   Info,
   ListChecks,
   ListX,
@@ -31,13 +32,15 @@ import {
   X,
   type LucideIcon,
 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from "react";
 import { errorMessage, isRemote } from "../lib/api";
 import { COMPARE_PRESETS, DEFAULT_FOLDER_SETTINGS, toEngineOptions, type ComparePreset } from "../lib/folderSettings";
 import { basename, formatSize, formatTime, joinPath } from "../lib/format";
 import type { SyncTask } from "../lib/automationApi"; // automation:ui
 import { matches, shortcutLabel } from "../lib/keymap";
 import type { CompareProps } from "../lib/sessionProps";
+import { SEPARATOR, type MenuItems } from "../lib/nativeMenu"; // bc5:sync-matrix
+import { ACTIONS, PRESET_MATRICES, actionApplies, matrixDeletes, presetOf } from "../lib/syncMatrix"; // bc5:sync-matrix
 import {
   DEFAULT_EXEC_OPTIONS,
   FAILURE_LABELS,
@@ -47,10 +50,13 @@ import {
   type FailureKind,
   type JobDetail,
   type JobSummary,
+  type PlanRules,
   type OpResult,
   type PreflightIssue,
   type Recovery,
   type RollbackResult,
+  type SyncAction,
+  type SyncMatrix,
   type SyncMode,
   type SyncOp,
   type SyncPlan,
@@ -59,7 +65,9 @@ import {
   type SyncRun,
   type SyncSkip,
 } from "../lib/syncApi";
+import { useContextMenu } from "./ContextMenu"; // bc5:sync-matrix
 import { Modal } from "./Modal";
+import { SyncMatrixEditor } from "./SyncMatrixEditor"; // bc5:sync-matrix
 import { PathBar } from "./PathBar";
 import { SyncHistoryDialog } from "./SyncHistoryDialog";
 import { SyncOptionsDialog, TRASH_NAME, safetySummary } from "./SyncOptionsDialog";
@@ -82,6 +90,14 @@ export interface FolderSyncSettings {
   conflicts: ConflictPolicy;
   /** Retries, locked-file policy, verification and disposal for runs. */
   exec: ExecOptions;
+  // bc5:sync-matrix
+  /** One action per category; planning uses it in Custom mode. */
+  matrix: SyncMatrix;
+  /** Don't create orphan folders that hold no files. */
+  skipEmptyFolders: boolean;
+  /** Only these items (Folder Compare's "Synchronize selection"); absent = everything. */
+  scope?: string[];
+  // bc5:sync-matrix end
 }
 
 interface Props extends CompareProps<FolderSyncSettings> {
@@ -142,6 +158,13 @@ export const MODES: ModeInfo[] = [ // automation:ui — exported
     hint: "Make the left side identical to the right, deleting left-only items.",
     deletes: true,
   },
+  // bc5:sync-matrix
+  {
+    value: "custom",
+    label: "Custom…",
+    icon: Grid3x3,
+    hint: "Your own action for each kind of difference: newer, orphan, deleted, different, same.",
+  },
 ];
 
 export const modeLabel = (m: SyncMode) => // automation:ui — exported
@@ -173,6 +196,8 @@ const DEFAULTS: FolderSyncSettings = {
   includeHidden: true,
   conflicts: "skip",
   exec: DEFAULT_EXEC_OPTIONS,
+  matrix: PRESET_MATRICES.updateLeftToRight,
+  skipEmptyFolders: false,
 };
 
 /** Saved sessions may be partial or predate newer fields; anything unknown falls back to the defaults. */
@@ -184,8 +209,41 @@ function restoreSettings(s: Partial<FolderSyncSettings> | undefined): FolderSync
     compare: s?.compare && s.compare in COMPARE_PRESETS ? s.compare : DEFAULTS.compare,
     conflicts: CONFLICT_POLICIES.some((c) => c.value === s?.conflicts) ? s!.conflicts! : DEFAULTS.conflicts,
     exec: { ...DEFAULT_EXEC_OPTIONS, ...s?.exec },
+    // bc5:sync-matrix — sessions saved before the matrix start from their mode's preset.
+    matrix: s?.matrix
+      ? { ...PRESET_MATRICES.updateLeftToRight, ...s.matrix }
+      : PRESET_MATRICES[s?.mode && s.mode !== "custom" && s.mode in PRESET_MATRICES ? s.mode : DEFAULTS.mode as Exclude<SyncMode, "custom">],
+    skipEmptyFolders: !!s?.skipEmptyFolders,
+    scope: Array.isArray(s?.scope) && s.scope.length ? s.scope : undefined,
   };
 }
+
+// ---------- bc5:sync-matrix — per-row actions ----------
+
+/** Which sides hold a preview row's item. */
+function rowSides(row: Row): { left: boolean; right: boolean } {
+  if ("skip" in row) return { left: row.skip.onLeft, right: row.skip.onRight };
+  const op = row.op;
+  const toRight = op.direction === "toRight";
+  const both = { left: true, right: true };
+  switch (op.kind) {
+    case "mkdir":
+      return { left: toRight, right: !toRight };
+    case "copy":
+      return op.overwrite ? both : { left: toRight, right: !toRight };
+    case "delete": {
+      const oneSided = op.category && ["leftOrphan", "rightOrphan", "leftDeleted", "rightDeleted"].includes(op.category);
+      return oneSided ? { left: !toRight, right: toRight } : both;
+    }
+  }
+}
+
+const rowPath = (row: Row) => ("skip" in row ? row.skip.relPath : row.op.relPath);
+/** Identifies an operation across re-plans (ids are renumbered). */
+const opKey = (op: SyncOp) => `${op.kind}|${op.direction}|${op.relPath}`;
+
+/** The actions a row can be set to (Prompt is for the matrix, not for rows). */
+const ROW_ACTIONS = ACTIONS.filter((a) => a.value !== "prompt");
 
 function opMatches(op: SyncOp, f: OpFilter): boolean {
   switch (f) {
@@ -278,7 +336,11 @@ export function FolderSync({ left, right, onPathsChange, settings, onSettingsCha
   const [excluded, setExcluded] = useState<Set<number>>(new Set());
   const [filter, setFilter] = useState<OpFilter>("all");
   const [sort, setSort] = useState<{ key: SortKey; desc: boolean }>({ key: "plan", desc: false });
-  const [selected, setSelected] = useState<string | null>(null);
+  // bc5:sync-matrix — multi-selection (by relPath) and the actions picked for rows.
+  const [selection, setSelection] = useState<Set<string>>(new Set());
+  const anchor = useRef<number | null>(null);
+  const [overrides, setOverrides] = useState<Record<string, SyncAction>>({});
+  const [matrixOpen, setMatrixOpen] = useState(false);
   const [confirming, setConfirming] = useState(false);
   const [optionsOpen, setOptionsOpen] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
@@ -307,6 +369,17 @@ export function FolderSync({ left, right, onPathsChange, settings, onSettingsCha
     });
   }, [cfg.compare, cfg.exclude, cfg.includeHidden]);
 
+  // bc5:sync-matrix — what planning needs besides the mode, compare options and conflicts.
+  const baseRules = useMemo<PlanRules>(
+    () => ({
+      matrix: cfg.mode === "custom" ? cfg.matrix : undefined,
+      skipEmptyFolders: cfg.skipEmptyFolders,
+      scope: cfg.scope,
+    }),
+    [cfg.mode, cfg.matrix, cfg.skipEmptyFolders, cfg.scope],
+  );
+  const rules = useMemo<PlanRules>(() => ({ ...baseRules, overrides }), [baseRules, overrides]);
+
   /** Shows a plan that arrived outside `replan` (a run re-plans itself), superseding any in-flight one. */
   const showPlan = (next: SyncPlan) => {
     planSeq.current++;
@@ -321,8 +394,10 @@ export function FolderSync({ left, right, onPathsChange, settings, onSettingsCha
     const seq = ++planSeq.current;
     setLoading(true);
     setError(null);
+    // A rescan starts from the matrix again, like Beyond Compare's refresh (bc5:sync-matrix).
+    setOverrides({});
     try {
-      const next = await syncApi.plan(left, right, cfg.mode, compare, cfg.conflicts);
+      const next = await syncApi.plan(left, right, cfg.mode, compare, cfg.conflicts, baseRules);
       if (seq !== planSeq.current) return;
       setPlan(next);
       setExcluded(new Set());
@@ -333,7 +408,37 @@ export function FolderSync({ left, right, onPathsChange, settings, onSettingsCha
     } finally {
       if (seq === planSeq.current) setLoading(false);
     }
-  }, [left, right, cfg.mode, cfg.conflicts, compare]);
+  }, [left, right, cfg.mode, cfg.conflicts, compare, baseRules]);
+
+  /**
+   * bc5:sync-matrix — sets (or, with null, resets) the action of `paths` and re-plans from the
+   * comparison already made: only those rows change, unticked operations stay unticked.
+   */
+  const setRowAction = async (paths: string[], action: SyncAction | null) => {
+    if (!left || !right || !paths.length) return;
+    const next = { ...overrides };
+    for (const p of paths) {
+      if (action) next[p] = action;
+      else delete next[p];
+    }
+    setOverrides(next);
+    const before = plan;
+    const off = new Set(before?.ops.filter((op) => excluded.has(op.id)).map(opKey));
+    const seq = ++planSeq.current;
+    setLoading(true);
+    setError(null);
+    try {
+      const fresh = await syncApi.plan(left, right, cfg.mode, compare, cfg.conflicts, { ...baseRules, overrides: next }, true);
+      if (seq !== planSeq.current) return;
+      setPlan(fresh);
+      setExcluded(new Set(fresh.ops.filter((op) => off.has(opKey(op))).map((op) => op.id)));
+    } catch (e) {
+      if (seq !== planSeq.current) return;
+      setError(errorMessage(e));
+    } finally {
+      if (seq === planSeq.current) setLoading(false);
+    }
+  };
 
   useEffect(() => {
     replan();
@@ -426,7 +531,7 @@ export function FolderSync({ left, right, onPathsChange, settings, onSettingsCha
   const executeOps = (l: string, r: string, mode: SyncMode, ops: SyncOp[]) => {
     const exec = cfg.exec;
     return runJob({ left: l, right: r, mode, ops, exec }, (runKey, onProgress) =>
-      syncApi.execute({ left: l, right: r, mode, ops, exec, compare, conflicts: cfg.conflicts, runKey, onProgress }),
+      syncApi.execute({ left: l, right: r, mode, ops, exec, compare, conflicts: cfg.conflicts, rules, runKey, onProgress }),
     );
   };
 
@@ -447,7 +552,7 @@ export function FolderSync({ left, right, onPathsChange, settings, onSettingsCha
       exec: detail?.options ?? cfg.exec,
     };
     await runJob(input, (runKey, onProgress) =>
-      syncApi.resume({ jobId, compare, conflicts: cfg.conflicts, runKey, onProgress }),
+      syncApi.resume({ jobId, compare, conflicts: cfg.conflicts, rules, runKey, onProgress }),
     );
   };
 
@@ -501,16 +606,89 @@ export function FolderSync({ left, right, onPathsChange, settings, onSettingsCha
       onOpenFiles(joinPath(plan.leftRoot, op.leftRelPath ?? op.relPath), joinPath(plan.rightRoot, op.relPath));
   };
 
+  // bc5:sync-matrix — click selects, Ctrl/Cmd+click toggles, Shift+click extends.
+  const clickRow = (i: number, e: { shiftKey: boolean; metaKey: boolean; ctrlKey: boolean }) => {
+    const path = rowPath(rows[i]);
+    if (e.shiftKey && anchor.current != null) {
+      const [a, b] = [Math.min(anchor.current, i), Math.max(anchor.current, i)];
+      setSelection(new Set(rows.slice(a, b + 1).map(rowPath)));
+      return;
+    }
+    anchor.current = i;
+    if (e.metaKey || e.ctrlKey)
+      setSelection((prev) => {
+        const next = new Set(prev);
+        next.has(path) ? next.delete(path) : next.add(path);
+        return next;
+      });
+    else setSelection(new Set([path]));
+  };
+
+  const selectedRows = useMemo(() => rows.filter((r) => selection.has(rowPath(r))), [rows, selection]);
+
+  /** The row actions for `targets`, each applied where it can be (bc5:sync-matrix). */
+  const actionItems = (targets: Row[]): MenuItems => {
+    const paths = targets.map(rowPath);
+    const anySet = paths.some((p) => p in overrides);
+    return [
+      { heading: targets.length === 1 ? "Action" : `Action for ${targets.length} items` },
+      ...ROW_ACTIONS.map((a) => {
+        const fits = targets.filter((r) => {
+          const sides = rowSides(r);
+          return actionApplies(a.value, sides.left, sides.right);
+        });
+        return {
+          label: a.label,
+          disabled: running || fits.length === 0,
+          danger: a.value === "deleteLeft" || a.value === "deleteRight",
+          checked: targets.length > 0 && paths.every((p) => overrides[p] === a.value) ? true : undefined,
+          onClick: () => void setRowAction(fits.map(rowPath), a.value),
+        };
+      }),
+      SEPARATOR,
+      { label: "Reset to plan", disabled: running || !anySet, onClick: () => void setRowAction(paths, null) },
+    ];
+  };
+
+  const rowMenu = useContextMenu((targets: Row[]) => actionItems(targets));
+
+  const onRowMenu = (i: number, e: ReactMouseEvent) => {
+    e.preventDefault();
+    const path = rowPath(rows[i]);
+    // Right-clicking outside the selection selects just that row, like a file manager.
+    const targets = selection.has(path) ? selectedRows : [rows[i]];
+    if (!selection.has(path)) {
+      anchor.current = i;
+      setSelection(new Set([path]));
+    }
+    rowMenu.open(e, targets);
+  };
+
+  /** "Set by you" marker for overridden rows. */
+  const overrideMark = (path: string) =>
+    overrides[path] ? (
+      <span className="sync-override" title={`Set by you: ${ROW_ACTIONS.find((a) => a.value === overrides[path])?.label}`}>
+        ✎
+      </span>
+    ) : null;
+
   const renderRow = (i: number) => {
     const row = rows[i];
     if ("skip" in row) {
       const s = row.skip;
+      const prompt = s.conflict && s.category != null;
       return (
-        <div className={`sync-row skipped${s.conflict ? " conflict" : ""}`} title={s.reason}>
+        <div
+          className={`sync-row skipped${s.conflict ? " conflict" : ""}${selection.has(s.relPath) ? " selected" : ""}`}
+          title={s.reason}
+          onClick={(e) => clickRow(i, e)}
+          onContextMenu={(e) => onRowMenu(i, e)}
+        >
           <div className="sync-cell check" />
           <div className="sync-cell op">
             <TriangleAlert size={13} />
-            {s.conflict ? "Conflict" : "Skipped"}
+            {prompt ? "Choose" : s.conflict ? "Conflict" : "Left alone"}
+            {overrideMark(s.relPath)}
           </div>
           <div className="sync-cell path">
             <span className="ficon">
@@ -528,8 +706,9 @@ export function FolderSync({ left, right, onPathsChange, settings, onSettingsCha
     const { icon: Icon, text } = opLabel(op);
     return (
       <div
-        className={`sync-row k-${op.kind}${on ? "" : " off"}${selected === op.relPath ? " selected" : ""}`}
-        onClick={() => setSelected(op.relPath)}
+        className={`sync-row k-${op.kind}${on ? "" : " off"}${selection.has(op.relPath) ? " selected" : ""}`}
+        onClick={(e) => clickRow(i, e)}
+        onContextMenu={(e) => onRowMenu(i, e)}
         onDoubleClick={() => openPair(op)}
         title={op.overwrite && onOpenFiles ? "Double-click to compare the two versions" : undefined}
       >
@@ -545,6 +724,7 @@ export function FolderSync({ left, right, onPathsChange, settings, onSettingsCha
         <div className="sync-cell op">
           <Icon size={13} />
           {text}
+          {overrideMark(op.relPath)}
         </div>
         <div className="sync-cell path">
           <span className="ficon">
@@ -570,8 +750,18 @@ export function FolderSync({ left, right, onPathsChange, settings, onSettingsCha
     };
   }, [plan]);
 
-  const mode = MODES.find((m) => m.value === cfg.mode) ?? MODES[0];
+  const baseMode = MODES.find((m) => m.value === cfg.mode) ?? MODES[0];
+  // bc5:sync-matrix — a custom matrix deletes if any of its cells do.
+  const mode = cfg.mode === "custom" ? { ...baseMode, deletes: matrixDeletes(cfg.matrix) } : baseMode;
   const ModeIcon = mode.icon;
+
+  /** bc5:sync-matrix — switching to Custom starts from the mode in use unless the matrix was already customised. */
+  const pickMode = (next: SyncMode) => {
+    if (next !== "custom") return update({ mode: next });
+    const seed = cfg.mode !== "custom" && presetOf(cfg.matrix) ? PRESET_MATRICES[cfg.mode] : cfg.matrix;
+    update({ mode: next, matrix: seed });
+    setMatrixOpen(true);
+  };
   const sortMark = (key: SortKey) =>
     sort.key === key ? sort.desc ? <ArrowDown size={11} /> : <ArrowUp size={11} /> : null;
 
@@ -582,7 +772,7 @@ export function FolderSync({ left, right, onPathsChange, settings, onSettingsCha
           <span className={`sync-mode-icon${mode.deletes ? " mirror" : ""}`}>
             <ModeIcon size={15} />
           </span>
-          <select value={cfg.mode} onChange={(e) => update({ mode: e.target.value as SyncMode })} disabled={running}>
+          <select value={cfg.mode} onChange={(e) => pickMode(e.target.value as SyncMode)} disabled={running}>
             {MODES.map((m) => (
               <option key={m.value} value={m.value}>
                 {m.label}
@@ -590,7 +780,13 @@ export function FolderSync({ left, right, onPathsChange, settings, onSettingsCha
             ))}
           </select>
         </label>
-        {cfg.mode === "twoWay" && (
+        {/* bc5:sync-matrix */}
+        {cfg.mode === "custom" && (
+          <button onClick={() => setMatrixOpen(true)} disabled={running} title="Choose the action for each kind of difference">
+            <Grid3x3 size={14} /> Matrix…
+          </button>
+        )}
+        {(cfg.mode === "twoWay" || cfg.mode === "custom") && (
           <label title="How paths changed on both sides since the last sync are settled">
             Conflicts
             <select
@@ -630,6 +826,16 @@ export function FolderSync({ left, right, onPathsChange, settings, onSettingsCha
           />
           Hidden files
         </label>
+        {/* bc5:sync-matrix — BC's "Sync empty folders" */}
+        <label className="check" title="Create folders that hold no files (or only filtered-out ones) on the other side">
+          <input
+            type="checkbox"
+            checked={!cfg.skipEmptyFolders}
+            onChange={(e) => update({ skipEmptyFolders: !e.target.checked })}
+            disabled={running}
+          />
+          Empty folders
+        </label>
         <label className="grow">
           Exclude
           <input
@@ -654,6 +860,8 @@ export function FolderSync({ left, right, onPathsChange, settings, onSettingsCha
                 left,
                 right,
                 mode: cfg.mode,
+                matrix: cfg.mode === "custom" ? cfg.matrix : PRESET_MATRICES[cfg.mode], // bc5:sync-matrix
+                skipEmptyFolders: cfg.skipEmptyFolders,
                 conflicts: cfg.conflicts,
                 compare,
                 exec: cfg.exec,
@@ -702,6 +910,34 @@ export function FolderSync({ left, right, onPathsChange, settings, onSettingsCha
         <button onClick={() => setVisible(false)} disabled={!plan?.ops.length} title="Exclude every operation shown">
           <ListX size={14} /> Select none
         </button>
+        {/* bc5:sync-matrix — the selected rows' action (also on the right-click menu) */}
+        <span className="sep" />
+        <div className="seg-control sync-actions" role="group" aria-label="Action for the selected rows">
+          {ROW_ACTIONS.map((a) => {
+            const fits = selectedRows.filter((r) => {
+              const sides = rowSides(r);
+              return actionApplies(a.value, sides.left, sides.right);
+            });
+            return (
+              <button
+                key={a.value}
+                className={selectedRows.length > 0 && selectedRows.every((r) => overrides[rowPath(r)] === a.value) ? "active" : ""}
+                disabled={running || fits.length === 0}
+                onClick={() => void setRowAction(fits.map(rowPath), a.value)}
+                title={`${a.label} for the selected rows${fits.length < selectedRows.length ? ` (${fits.length} of ${selectedRows.length} can)` : ""}`}
+              >
+                {a.short}
+              </button>
+            );
+          })}
+          <button
+            disabled={running || !selectedRows.some((r) => rowPath(r) in overrides)}
+            onClick={() => void setRowAction(selectedRows.map(rowPath), null)}
+            title="Back to what the sync mode plans for the selected rows"
+          >
+            <RotateCcw size={13} />
+          </button>
+        </div>
         <span className="sep" />
         <button onClick={() => setHistoryOpen(true)} disabled={!left || !right} title="Past syncs of these folders">
           <Clock size={14} /> History
@@ -790,6 +1026,27 @@ export function FolderSync({ left, right, onPathsChange, settings, onSettingsCha
         </div>
       )}
 
+      {/* bc5:sync-matrix — "Synchronize selection" from Folder Compare */}
+      {cfg.scope && (
+        <div className="banner info sync-banner sync-subtle">
+          <Info size={13} /> Only the {count(cfg.scope.length, "item")} selected in Folder Compare (and their contents) are
+          synchronized.
+          <span className="spacer" />
+          <button onClick={() => update({ scope: undefined })} disabled={running}>
+            Sync whole folders
+          </button>
+        </div>
+      )}
+
+      {plan?.mode === "custom" &&
+        !plan.hasBaseline &&
+        (cfg.matrix.leftDeleted !== cfg.matrix.rightOrphan || cfg.matrix.rightDeleted !== cfg.matrix.leftOrphan) && (
+          <div className="banner info sync-banner sync-subtle">
+            <Info size={13} /> No earlier sync of these folders yet, so “Deleted on left/right” can't be told apart from
+            orphans: they follow the “Only on …” rows this time.
+          </div>
+        )}
+
       {plan?.mode === "twoWay" && !plan.hasBaseline && (
         <div className="banner info sync-banner sync-subtle">
           <Info size={13} /> First two-way sync of these folders: nothing will be deleted; history starts after this sync.
@@ -860,6 +1117,16 @@ export function FolderSync({ left, right, onPathsChange, settings, onSettingsCha
         />
       )}
 
+      {/* bc5:sync-matrix */}
+      {matrixOpen && (
+        <SyncMatrixDialog
+          value={cfg.matrix}
+          onApply={(matrix) => update({ mode: "custom", matrix })}
+          onClose={() => setMatrixOpen(false)}
+        />
+      )}
+      {rowMenu.element}
+
       {optionsOpen && (
         <SyncOptionsDialog value={cfg.exec} onApply={(exec) => update({ exec })} onClose={() => setOptionsOpen(false)} />
       )}
@@ -884,6 +1151,41 @@ export function FolderSync({ left, right, onPathsChange, settings, onSettingsCha
         <RollbackDialog jobId={rollbackJob} onDone={rolledBack} onClose={() => setRollbackJob(null)} />
       )}
     </div>
+  );
+}
+
+/** bc5:sync-matrix — edits Custom mode's matrix. */
+function SyncMatrixDialog({
+  value,
+  onApply,
+  onClose,
+}: {
+  value: SyncMatrix;
+  onApply: (m: SyncMatrix) => void;
+  onClose: () => void;
+}) {
+  const [draft, setDraft] = useState(value);
+  return (
+    <Modal
+      title="Custom sync"
+      onClose={onClose}
+      footer={
+        <>
+          <button onClick={onClose}>Cancel</button>
+          <button
+            className="primary"
+            onClick={() => {
+              onApply(draft);
+              onClose();
+            }}
+          >
+            Apply
+          </button>
+        </>
+      }
+    >
+      <SyncMatrixEditor value={draft} onChange={setDraft} presetLabel={modeLabel} />
+    </Modal>
   );
 }
 
