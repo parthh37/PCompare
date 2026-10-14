@@ -287,7 +287,7 @@ interface Props {
   onOpenHex: () => void;
   settings?: Partial<TextSettings>;
   onSettingsChange?: (s: TextSettings) => void;
-  onDirtyChange?: (dirty: boolean) => void;
+  onDirtyChange?: (dirty: boolean, save?: () => unknown) => void;
   /** bc5:editor-patch — "Open in Text Edit" when only one file is chosen. */
   onOpenEditor?: (path: string) => void;
   /** bc5:reports-script — sides opened read-only from the command line (`/readonly`). */
@@ -618,7 +618,9 @@ export function TextCompare({
   const dirty = !!docs && SIDES.some((s) => isDirty(docs[s]) && !docs[s].memory);
   const reportDirty = useRef(onDirtyChange);
   reportDirty.current = onDirtyChange;
-  useEffect(() => void reportDirty.current?.(dirty), [dirty]);
+  // Save all (closing the window or quitting) calls the latest save.
+  const saveForClose = useRef<() => unknown>(() => {});
+  useEffect(() => void reportDirty.current?.(dirty, () => saveForClose.current()), [dirty]);
 
   const requestSeq = useRef(0);
   /**
@@ -1419,6 +1421,8 @@ export function TextCompare({
       setSaving(false);
     }
   };
+
+  saveForClose.current = () => save();
 
   const confirmDiscard = (action: string) =>
     !dirty || window.confirm(`You have unsaved changes. Discard them and ${action}?`);

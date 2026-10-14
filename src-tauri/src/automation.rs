@@ -56,6 +56,7 @@ use tauri_plugin_autostart::ManagerExt as _;
 use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
 use tauri_plugin_notification::NotificationExt;
 
+use crate::close_guard::CloseAction;
 use crate::sync::{self as shell_sync, RunSpec};
 use crate::{blocking, CmdResult};
 
@@ -328,11 +329,19 @@ fn toggle_pause(app: &AppHandle) {
     after_change(app);
 }
 
-/// Quits from the tray menu, asking first while a sync is running.
+/// Quits from the tray menu: asks about unsaved edits, then about a running sync.
 fn quit_from_tray(app: AppHandle) {
+    crate::close_guard::request_quit(&app);
+}
+
+/// Quits, asking first while a sync is running.
+pub fn quit(app: AppHandle) {
     // The question blocks, and the scheduler must not be asked from the UI thread.
     std::thread::spawn(move || {
-        if automation(&app).scheduler.is_busy() {
+        let busy = app
+            .try_state::<AutomationState>()
+            .is_some_and(|st| st.scheduler.is_busy());
+        if busy {
             let quit = app
                 .dialog()
                 .message(
@@ -344,6 +353,7 @@ fn quit_from_tray(app: AppHandle) {
                 .buttons(MessageDialogButtons::OkCancelCustom("Quit".into(), "Keep running".into()))
                 .blocking_show();
             if !quit {
+                crate::close_guard::rearm(&app);
                 return;
             }
         }
@@ -363,7 +373,7 @@ fn shutdown(app: &AppHandle) {
 }
 
 /// Close-to-tray: with background running on and something to run, closing
-/// the main window hides it instead.
+/// the main window hides it instead. Otherwise unsaved edits are asked about.
 pub fn on_window_event(window: &tauri::Window, event: &WindowEvent) {
     let WindowEvent::CloseRequested { api, .. } = event else {
         return;
@@ -372,13 +382,22 @@ pub fn on_window_event(window: &tauri::Window, event: &WindowEvent) {
         return;
     }
     let app = window.app_handle();
-    let Some(st) = app.try_state::<AutomationState>() else {
+    let st = app.try_state::<AutomationState>();
+    let hide = st.as_ref().is_some_and(|st| {
+        st.shell.keep_running.load(Ordering::Relaxed) && !st.shell.shut_down.load(Ordering::Relaxed)
+    });
+    match crate::close_guard::close_action(hide, crate::close_guard::blocks(app)) {
+        CloseAction::Close => return,
+        CloseAction::Ask => {
+            api.prevent_close();
+            crate::close_guard::ask(app, false);
+            return;
+        }
+        CloseAction::HideToTray => {}
+    }
+    let Some(st) = st else {
         return;
     };
-    if !st.shell.keep_running.load(Ordering::Relaxed) || st.shell.shut_down.load(Ordering::Relaxed)
-    {
-        return;
-    }
     api.prevent_close();
     let _ = window.hide();
     if !st.shell.told_about_tray.swap(true, Ordering::Relaxed) {

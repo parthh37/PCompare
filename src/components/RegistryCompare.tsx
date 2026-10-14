@@ -301,7 +301,9 @@ export function RegistryCompare({
 
   const reportDirty = useRef(onDirtyChange);
   reportDirty.current = onDirtyChange;
-  useEffect(() => void reportDirty.current?.(dirty), [dirty]);
+  // Save all (closing the window or quitting) calls the latest save.
+  const saveForClose = useRef<() => unknown>(() => {});
+  useEffect(() => void reportDirty.current?.(dirty, () => saveForClose.current()), [dirty]);
 
   // Edits belong to the files they were made against.
   useEffect(() => {
@@ -523,6 +525,8 @@ export function RegistryCompare({
       setWorking(null);
     }
   };
+
+  saveForClose.current = () => save();
 
   const copyKey = (k: RegKeyDiff, to: RegSide) =>
     commit(

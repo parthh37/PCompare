@@ -521,7 +521,9 @@ export function TextMerge({
   const reportDirty = useRef(onDirtyChange);
   reportDirty.current = onDirtyChange;
   // Only hand edits count: an untouched auto-merge can simply be recomputed.
-  useEffect(() => void reportDirty.current?.(edited), [edited]);
+  // Save all (closing the window or quitting) calls the latest save.
+  const saveForClose = useRef<() => unknown>(() => {});
+  useEffect(() => void reportDirty.current?.(edited, () => saveForClose.current()), [edited]);
   const confirmDiscard = (action: string) =>
     !edited || window.confirm(`The merged output has unsaved edits. Discard them and ${action}?`);
 
@@ -921,6 +923,8 @@ export function TextMerge({
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   });
+
+  saveForClose.current = () => save();
 
   const onSplitterDown = (e: PointerEvent<HTMLDivElement>) => {
     const el = body.current;
