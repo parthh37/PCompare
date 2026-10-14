@@ -1,10 +1,20 @@
 //! Headless quick compare (`pcompare /qc left right`): decides whether two
-//! files or folders are the same without opening a window.
+//! files or folders are the same without opening a window, and exits with
+//! Beyond Compare's codes:
+//!
+//! | code | meaning |
+//! |------|---------|
+//! | 1    | binary same (size, CRC and binary compares: same) |
+//! | 2    | rules-based same (only encoding or line endings differ) |
+//! | 11   | binary differences |
+//! | 12   | similar (only unimportant differences) |
+//! | 13   | rules-based differences |
+//! | 100  | error |
 
 use pcompare_core::folder::{self, ContentMethod, FolderCompareOptions};
 use pcompare_core::text::TextDiffOptions;
 use pcompare_core::vfs::LocalFs;
-use pcompare_core::{CoreError, PathKind, Result};
+use pcompare_core::{textfile, CoreError, PathKind, Result};
 use std::path::Path;
 
 /// How contents are compared.
@@ -43,26 +53,56 @@ impl QuickMethod {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Verdict {
+    /// Byte for byte (or, for a size compare, size for size).
     Same,
+    /// The same text: only the encoding or line endings differ.
+    RulesSame,
     /// Only unimportant differences (rules-based).
     Similar,
     Different,
 }
 
+/// Exit code: binary same.
+pub const EXIT_BINARY_SAME: i32 = 1;
+/// Exit code: rules-based same.
+pub const EXIT_RULES_SAME: i32 = 2;
+/// Exit code: binary differences.
+pub const EXIT_BINARY_DIFFERENT: i32 = 11;
+/// Exit code: similar (only unimportant differences).
+pub const EXIT_SIMILAR: i32 = 12;
+/// Exit code: rules-based differences.
+pub const EXIT_RULES_DIFFERENT: i32 = 13;
+/// Exit code: the comparison failed.
+pub const EXIT_ERROR: i32 = 100;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct QuickResult {
     pub verdict: Verdict,
+    pub method: QuickMethod,
     /// One line for the console, e.g. "Different: 3 differing files, 1 left orphan".
     pub message: String,
 }
 
 impl QuickResult {
-    /// 0 = same (or similar), 1 = different.
+    /// Beyond Compare's quick compare exit code (see the module docs).
     pub fn exit_code(&self) -> i32 {
+        let rules = self.method == QuickMethod::Rules;
         match self.verdict {
-            Verdict::Same | Verdict::Similar => 0,
-            Verdict::Different => 1,
+            Verdict::Same => EXIT_BINARY_SAME,
+            Verdict::RulesSame => EXIT_RULES_SAME,
+            Verdict::Similar => EXIT_SIMILAR,
+            Verdict::Different if rules => EXIT_RULES_DIFFERENT,
+            Verdict::Different => EXIT_BINARY_DIFFERENT,
         }
+    }
+}
+
+/// Beyond Compare's default text rules for a rules-based quick compare:
+/// whitespace changes are unimportant (similar, exit 12), not differences.
+fn rules() -> TextDiffOptions {
+    TextDiffOptions {
+        whitespace: pcompare_core::text::WhitespaceMode::IgnoreChanges,
+        ..TextDiffOptions::default()
     }
 }
 
@@ -83,6 +123,7 @@ pub fn quick_compare(left: &Path, right: &Path, method: QuickMethod) -> Result<Q
         (PathKind::Directory, PathKind::Directory) => folders(left, right, method),
         _ => Ok(QuickResult {
             verdict: Verdict::Different,
+            method,
             message: "Different: a file and a folder".into(),
         }),
     }
@@ -111,28 +152,43 @@ fn files(left: &Path, right: &Path, method: QuickMethod) -> Result<QuickResult> 
             &r,
             rs,
             method.content(),
-            &TextDiffOptions::default(),
+            &rules(),
         )?
         .status
     };
-    Ok(match status {
-        folder::EntryStatus::Same => QuickResult {
-            verdict: Verdict::Same,
-            message: "Same".into(),
-        },
-        folder::EntryStatus::Similar => QuickResult {
-            verdict: Verdict::Similar,
-            message: "Similar: only unimportant differences".into(),
-        },
-        _ if ls != rs => QuickResult {
-            verdict: Verdict::Different,
-            message: format!("Different: {ls} vs {rs} bytes"),
-        },
-        _ => QuickResult {
-            verdict: Verdict::Different,
-            message: "Different".into(),
-        },
+    let (verdict, message) = match status {
+        folder::EntryStatus::Same => (Verdict::Same, "Same".to_owned()),
+        folder::EntryStatus::Similar if !has_unimportant(left, right)? => (
+            Verdict::RulesSame,
+            "Same text: only the encoding or line endings differ".to_owned(),
+        ),
+        folder::EntryStatus::Similar => (
+            Verdict::Similar,
+            "Similar: only unimportant differences".to_owned(),
+        ),
+        _ if ls != rs => (Verdict::Different, format!("Different: {ls} vs {rs} bytes")),
+        _ => (Verdict::Different, "Different".to_owned()),
+    };
+    Ok(QuickResult {
+        verdict,
+        method,
+        message,
     })
+}
+
+/// Whether two texts that compare as similar have unimportant lines
+/// (rather than differing only in encoding or line endings).
+fn has_unimportant(left: &Path, right: &Path) -> Result<bool> {
+    let (l, r) = (textfile::load_text(left)?, textfile::load_text(right)?);
+    let name = |p: &Path| p.file_name().map(|n| n.to_string_lossy().into_owned());
+    let diff = pcompare_core::text::diff_named_text(
+        &l.text,
+        name(left).as_deref(),
+        &r.text,
+        name(right).as_deref(),
+        &rules(),
+    )?;
+    Ok(diff.stats.unimportant > 0)
 }
 
 fn folders(left: &Path, right: &Path, method: QuickMethod) -> Result<QuickResult> {
@@ -140,6 +196,7 @@ fn folders(left: &Path, right: &Path, method: QuickMethod) -> Result<QuickResult
         compare_size: true,
         compare_timestamp: false,
         content: method.content(),
+        rules: rules(),
         ..Default::default()
     };
     let r = folder::compare_folders(left, right, &opts)?;
@@ -154,6 +211,7 @@ fn folders(left: &Path, right: &Path, method: QuickMethod) -> Result<QuickResult
     if s.different + s.left_only + s.right_only > 0 {
         return Ok(QuickResult {
             verdict: Verdict::Different,
+            method,
             message: format!(
                 "Different: {} {}, {}, {} (of {})",
                 plural(s.different, "file"),
@@ -171,6 +229,7 @@ fn folders(left: &Path, right: &Path, method: QuickMethod) -> Result<QuickResult
     if s.similar > 0 {
         return Ok(QuickResult {
             verdict: Verdict::Similar,
+            method,
             message: format!(
                 "Similar: {} with only unimportant differences (of {})",
                 plural(s.similar, "file"),
@@ -180,6 +239,7 @@ fn folders(left: &Path, right: &Path, method: QuickMethod) -> Result<QuickResult
     }
     Ok(QuickResult {
         verdict: Verdict::Same,
+        method,
         message: format!("Same ({})", plural(files, "file")),
     })
 }
@@ -199,13 +259,18 @@ mod tests {
         std::fs::write(&a, "x\r\ny\r\n").unwrap();
         std::fs::write(&b, "x\ny\n").unwrap();
         std::fs::write(&c, "x\nz\n").unwrap();
-        // Line endings are unimportant under the text rules, not byte-wise.
-        assert_eq!(
-            quick_compare(&a, &b, QuickMethod::Rules).unwrap().verdict,
-            Verdict::Similar
-        );
+        // Line endings don't matter to the text rules, they do byte-wise.
+        let rules = quick_compare(&a, &b, QuickMethod::Rules).unwrap();
+        assert_eq!((rules.verdict, rules.exit_code()), (Verdict::RulesSame, 2));
         let bin = quick_compare(&a, &b, QuickMethod::Binary).unwrap();
-        assert_eq!((bin.verdict, bin.exit_code()), (Verdict::Different, 1));
+        assert_eq!((bin.verdict, bin.exit_code()), (Verdict::Different, 11));
+        let diff = quick_compare(&a, &c, QuickMethod::Rules).unwrap();
+        assert_eq!(diff.exit_code(), 13);
+        let ws = d.path().join("ws.txt");
+        std::fs::write(&ws, "x  \ny\n").unwrap();
+        let sim = quick_compare(&b, &ws, QuickMethod::Rules).unwrap();
+        assert_eq!((sim.verdict, sim.exit_code()), (Verdict::Similar, 12));
+        assert_eq!(quick_compare(&b, &b, QuickMethod::Rules).unwrap().exit_code(), 1);
         assert_eq!(
             quick_compare(&b, &c, QuickMethod::Size).unwrap().verdict,
             Verdict::Same
@@ -216,7 +281,7 @@ mod tests {
         );
         assert_eq!(
             quick_compare(&b, &b, QuickMethod::Crc).unwrap().exit_code(),
-            0
+            1
         );
         assert!(quick_compare(&a, &d.path().join("nope"), QuickMethod::Rules).is_err());
         assert_eq!(
