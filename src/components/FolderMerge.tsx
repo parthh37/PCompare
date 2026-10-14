@@ -27,7 +27,9 @@ import {
   type FolderMergeResult,
   type MergeAction,
   type MergeClass,
+  type Disposal,
   type MergeDecision,
+  type MergeProgress,
   type MergeReport,
 } from "../lib/syncApi";
 import { Modal } from "./Modal";
@@ -48,6 +50,8 @@ export interface FolderMergeSettings {
   autoMergeText: boolean;
   /** Two-way: propose the newer of two differing files instead of a conflict. */
   takeNewer: boolean;
+  /** Where replaced and removed output files go (an empty versioning folder means the default). */
+  disposal?: Disposal;
 }
 
 interface Props extends MergeProps<FolderMergeSettings> {
@@ -235,7 +239,10 @@ export function FolderMerge({
   const [overrides, setOverrides] = useState<Map<string, MergeAction>>(new Map());
   const [confirming, setConfirming] = useState(false);
   const [merging, setMerging] = useState(false);
+  const [progress, setProgress] = useState<MergeProgress | null>(null);
+  const runKey = useRef<string | null>(null);
   const [report, setReport] = useState<MergeReport | null>(null);
+  const disposal: Disposal = cfg.disposal ?? { kind: "trash" };
   const list = useRef<VirtualListHandle>(null);
   const root = useRef<HTMLDivElement>(null);
   const pendingScroll = useRef<string | null>(null);
@@ -559,12 +566,28 @@ export function FolderMerge({
     setConfirming(false);
     setMerging(true);
     setError(null);
+    const key = crypto.randomUUID();
+    runKey.current = key;
+    setProgress(null);
     try {
-      setReport(await syncApi.mergeExecute(base, left, right, output, decisions));
+      setReport(
+        await syncApi.mergeExecute({
+          base,
+          left,
+          right,
+          output,
+          decisions,
+          disposal,
+          runKey: key,
+          onProgress: setProgress,
+        }),
+      );
     } catch (e) {
       setError(errorMessage(e));
     } finally {
+      runKey.current = null;
       setMerging(false);
+      setProgress(null);
     }
     await run();
   };
@@ -732,7 +755,23 @@ export function FolderMerge({
 
       <div className="session-body">
         {loading && <div className="overlay">{base ? "Comparing three folders…" : "Comparing folders…"}</div>}
-        {merging && <div className="overlay">Merging…</div>}
+        {merging && (
+          <div className="overlay">
+            <div className="fm-progress">
+              <div>
+                Merging…{progress && progress.total > 0 && ` ${progress.done} of ${progress.total}`}
+                {progress && progress.bytesWritten > 0 && ` · ${formatSize(progress.bytesWritten)} written`}
+              </div>
+              {progress?.current && <div className="fm-progress-path muted">{progress.current}</div>}
+              <button
+                onClick={() => runKey.current && void syncApi.cancel(runKey.current).catch(() => {})}
+                title="Stop after the current file; what was written so far stays"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        )}
         {error && <div className="banner error">{error}</div>}
         {!ready && !result && (
           <div className="empty-state">
@@ -817,13 +856,51 @@ export function FolderMerge({
               and will be skipped.
             </p>
           )}
-          {plan.delete > 0 && <p className="muted">Removed items are moved to the {TRASH_NAME}.</p>}
+          <fieldset className="fm-disposal">
+            <legend>Replaced and removed output files</legend>
+            <label className="field radio">
+              <input
+                type="radio"
+                name="fm-disposal"
+                checked={disposal.kind === "trash"}
+                onChange={() => update({ disposal: { kind: "trash" } })}
+              />
+              <span>Move to the {TRASH_NAME}</span>
+            </label>
+            <label className="field radio">
+              <input
+                type="radio"
+                name="fm-disposal"
+                checked={disposal.kind === "versioning"}
+                onChange={() => update({ disposal: { kind: "versioning", folder: "" } })}
+              />
+              <span>Move to a versioning folder</span>
+            </label>
+            {disposal.kind === "versioning" && (
+              <input
+                className="fm-disposal-folder"
+                value={disposal.folder}
+                onChange={(e) => update({ disposal: { kind: "versioning", folder: e.target.value } })}
+                placeholder="Default: PCompare's Versions folder"
+                spellCheck={false}
+              />
+            )}
+            <label className="field radio sync-danger-choice">
+              <input
+                type="radio"
+                name="fm-disposal"
+                checked={disposal.kind === "permanent"}
+                onChange={() => update({ disposal: { kind: "permanent" } })}
+              />
+              <span>Overwrite and delete permanently (no backup)</span>
+            </label>
+          </fieldset>
         </Modal>
       )}
 
       {report && (
         <Modal
-          title={report.failed ? "Merge finished with errors" : "Merge complete"}
+          title={report.cancelled ? "Merge cancelled" : report.failed ? "Merge finished with errors" : "Merge complete"}
           onClose={() => setReport(null)}
           wide
           footer={<button onClick={() => setReport(null)}>Close</button>}
@@ -837,13 +914,21 @@ export function FolderMerge({
           <p className="muted">
             {formatSize(report.bytesWritten)} written in {(report.elapsedMs / 1000).toFixed(1)} s
           </p>
-          {report.results.some((r) => r.outcome === "failed" || r.outcome === "skipped") && (
+          {report.cancelled && <p className="fm-warn">Stopped before every item was merged; what was written so far stays.</p>}
+          {report.results.some((r) => r.backup) && (
+            <p className="muted">
+              {report.results.filter((r) => r.backup).length} replaced file(s) kept in the versioning folder.
+            </p>
+          )}
+          {report.results.some((r) => r.outcome === "failed" || r.outcome === "skipped" || r.error) && (
             <ul className="fm-report-list">
               {report.results
-                .filter((r) => r.outcome === "failed" || r.outcome === "skipped")
+                .filter((r) => r.outcome === "failed" || r.outcome === "skipped" || r.error)
                 .map((r) => (
                   <li key={r.relPath} className={`o-${r.outcome}`}>
-                    <span className="what">{r.outcome === "failed" ? "Failed" : "Skipped"}</span>
+                    <span className="what">
+                      {r.outcome === "failed" ? "Failed" : r.outcome === "skipped" ? "Skipped" : "Note"}
+                    </span>
                     <span className="path">{r.relPath}</span>
                     {r.error && <span className="err">{r.error}</span>}
                   </li>

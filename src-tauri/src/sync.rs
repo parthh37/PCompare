@@ -30,7 +30,9 @@ use pcompare_sync::exec::{
 use pcompare_sync::fsops::{self, TrashDeleter};
 use pcompare_sync::journal::{Journal, NullJournal};
 use pcompare_sync::remote::{self as remote_sync, Root}; // bc5:remote-write
-use pcompare_sync::merge::{self, FolderMergeOptions, FolderMergeResult, MergeDecision, MergeReport}; // bc5:folder-merge
+use pcompare_sync::merge::{
+    self, FolderMergeOptions, FolderMergeResult, MergeDecision, MergeProgress, MergeReport, MergeRun,
+}; // bc5:folder-merge
 use pcompare_sync::sync::{self as engine, ConflictPolicy, PlanOptions, SyncMode, SyncOp, SyncPlan};
 use serde::Serialize;
 use tauri::ipc::Channel;
@@ -699,14 +701,30 @@ pub async fn folder_merge_compare(
     .await
 }
 
+/// Builds the merged tree, streaming progress over `on_progress`. Old
+/// versions of replaced and removed output files go where `disposal` says
+/// (Trash by default). The run can be stopped with [`sync_cancel`] using
+/// `run_key`.
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 pub async fn folder_merge_execute(
+    app: AppHandle,
     base: String,
     left: String,
     right: String,
     output: String,
     decisions: Vec<MergeDecision>,
+    disposal: Option<Disposal>,
+    run_key: String,
+    on_progress: Channel<MergeProgress>,
 ) -> CmdResult<MergeReport> {
+    let mut disposal = disposal.unwrap_or_default();
+    if let Disposal::Versioning { folder } = &mut disposal {
+        if folder.trim().is_empty() {
+            *folder = sync_default_versioning_folder(app.clone())?;
+        }
+    }
+    let guard = RunGuard::new(&app, run_key);
     blocking(move || {
         require_local_dirs(&[("base", &base), ("left", &left), ("right", &right), ("output", &output)])?;
         for (label, path) in [("base", &base), ("left", &left), ("right", &right)] {
@@ -714,13 +732,26 @@ pub async fn folder_merge_execute(
                 require_existing_dir(label, path)?;
             }
         }
-        merge::execute_merge(
+        let deleter = disposal.deleter(&fsops::run_stamp(now_ms()));
+        let mut last_sent: Option<Instant> = None;
+        let mut send = |p: &MergeProgress| {
+            if p.current.is_none() || last_sent.is_none_or(|t| t.elapsed() >= PROGRESS_INTERVAL) {
+                last_sent = Some(Instant::now());
+                let _ = on_progress.send(p.clone());
+            }
+        };
+        let run = MergeRun {
+            cancel: &guard.flag,
+            on_progress: &mut send,
+        };
+        merge::execute_merge_with(
             (!base.is_empty()).then(|| Path::new(&base)),
             Path::new(&left),
             Path::new(&right),
             Path::new(&output),
             &decisions,
-            &TrashDeleter::new(),
+            &*deleter,
+            run,
         )
     })
     .await

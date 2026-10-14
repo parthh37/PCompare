@@ -378,6 +378,8 @@ export interface MergeItemResult {
   isDir: boolean;
   outcome: MergeOutcome;
   error: string | null;
+  /** Where the overwritten version went, or a note on where it was kept. */
+  backup: string | null;
 }
 
 export interface MergeReport {
@@ -390,6 +392,16 @@ export interface MergeReport {
   failed: number;
   bytesWritten: number;
   elapsedMs: number;
+  /** Stopped by the user; the remaining decisions were not applied. */
+  cancelled: boolean;
+}
+
+export interface MergeProgress {
+  done: number;
+  total: number;
+  /** The item being written; `null` once finished. */
+  current: string | null;
+  bytesWritten: number;
 }
 
 export const syncApi = {
@@ -459,8 +471,22 @@ export const syncApi = {
     options: FolderCompareOptions,
     mergeOptions: FolderMergeOptions,
   ) => invoke<FolderMergeResult>("folder_merge_compare", { base, left, right, options, mergeOptions }),
-  mergeExecute: (base: string, left: string, right: string, output: string, decisions: MergeDecision[]) =>
-    invoke<MergeReport>("folder_merge_execute", { base, left, right, output, decisions }),
+  /** Builds the merged tree; stop it with `cancel(runKey)`. Old versions of replaced files go per `disposal`. */
+  mergeExecute: (args: {
+    base: string;
+    left: string;
+    right: string;
+    output: string;
+    decisions: MergeDecision[];
+    disposal: Disposal;
+    runKey: string;
+    onProgress: (p: MergeProgress) => void;
+  }) => {
+    const { onProgress, ...rest } = args;
+    const channel = new Channel<MergeProgress>();
+    channel.onmessage = onProgress;
+    return invoke<MergeReport>("folder_merge_execute", { ...rest, onProgress: channel });
+  },
 };
 
 /** Merge classes that need a decision from the user. */
