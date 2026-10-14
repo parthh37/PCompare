@@ -7,18 +7,7 @@
 // other side or a folder, delete, rename, new folder, attributes, touch —
 // work on the selected side's items, run in the background Operations queue
 // and rescan the comparison when they finish.
-import {
-  ArrowLeftToLine,
-  ArrowRightToLine,
-  CalendarClock,
-  FolderInput,
-  FolderOutput,
-  FolderPlus,
-  ListTodo,
-  Pencil,
-  Settings2,
-  Trash,
-} from "lucide-react";
+import { ArrowLeftToLine, ArrowRightToLine, ListTodo, Trash } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type MouseEvent, type ReactNode, type RefObject } from "react";
 import type { FolderCompareResult, FolderEntry, Side } from "../lib/api";
 import {
@@ -32,6 +21,7 @@ import {
   type FileOpOptions,
 } from "../lib/fileOpsApi";
 import { eventBinding, isMac, matches, shortcutLabel } from "../lib/keymap";
+import { SEPARATOR, type MenuItems } from "../lib/nativeMenu";
 import {
   AttributesDialog,
   DeleteDialog,
@@ -367,10 +357,6 @@ export function useFolderFileOps({ root, result, entries, flat, left, right, onO
 
   // ----- UI pieces -----
 
-  const key = (id: string) => {
-    const k = shortcutLabel(id);
-    return k ? <span className="fop-key">{k}</span> : null;
-  };
   const tip = (label: string, id: string) => {
     const k = shortcutLabel(id);
     return k ? `${label} (${k})` : label;
@@ -418,58 +404,32 @@ export function useFolderFileOps({ root, result, entries, flat, left, right, onO
     </>
   );
 
-  /** File-operation items for the context menu (after `close()` they act on the selection). */
-  const menuItems = (close: () => void): ReactNode => {
-    const act = (f: () => void) => () => {
-      close();
-      f();
-    };
+  /** File-operation items for the context menu; they act on the selection. */
+  const menuItems = (): MenuItems => {
     const sideLabel = sel.side === "both" ? "both sides" : `the ${sel.side}`;
-    return (
-      <>
-        <div className="ctx-label">
-          {selected.length > 1 ? `${selected.length} items on ${sideLabel}` : `File operations · ${sideLabel}`}
-        </div>
-        <button className="ctx-icon" disabled={!has("left") || !right} onClick={act(() => copyTo("copy", "right"))}>
-          <ArrowRightToLine size={16} /> Copy to Right{key("folder.copyToRight")}
-        </button>
-        <button className="ctx-icon" disabled={!has("right") || !left} onClick={act(() => copyTo("copy", "left"))}>
-          <ArrowLeftToLine size={16} /> Copy to Left{key("folder.copyToLeft")}
-        </button>
-        <button className="ctx-icon" disabled={!has("left") || !right} onClick={act(() => copyTo("move", "right"))}>
-          <ArrowRightToLine size={16} /> Move to Right{key("folder.moveToRight")}
-        </button>
-        <button className="ctx-icon" disabled={!has("right") || !left} onClick={act(() => copyTo("move", "left"))}>
-          <ArrowLeftToLine size={16} /> Move to Left{key("folder.moveToLeft")}
-        </button>
-        <button className="ctx-icon" disabled={!selected.length} onClick={act(() => toFolder("copy"))}>
-          <FolderOutput size={16} /> Copy to Folder…{key("folder.copyToFolder")}
-        </button>
-        <button className="ctx-icon" disabled={!selected.length} onClick={act(() => toFolder("move"))}>
-          <FolderInput size={16} /> Move to Folder…{key("folder.moveToFolder")}
-        </button>
-        <hr />
-        <button className="ctx-icon" disabled={selected.length !== 1} onClick={act(rename)}>
-          <Pencil size={16} /> Rename…{key("folder.rename")}
-        </button>
-        <button className="ctx-icon" onClick={act(newFolder)}>
-          <FolderPlus size={16} /> New Folder…{key("folder.newFolder")}
-        </button>
-        <button className="ctx-icon" disabled={!selected.length} onClick={act(() => remove(false))}>
-          <Trash size={16} /> Delete{key("folder.delete")}
-        </button>
-        <button className="ctx-icon" disabled={!selected.length} onClick={act(() => remove(true))}>
-          <Trash size={16} /> Delete Permanently…{key("folder.deletePermanently")}
-        </button>
-        <hr />
-        <button className="ctx-icon" disabled={!selected.length} onClick={act(attributes)}>
-          <Settings2 size={16} /> Change Attributes…{key("folder.attributes")}
-        </button>
-        <button className="ctx-icon" disabled={!selected.length} onClick={act(touch)}>
-          <CalendarClock size={16} /> Touch (Set Modified Time)…{key("folder.touch")}
-        </button>
-      </>
-    );
+    const item = (label: string, id: string, disabled: boolean, onClick: () => void) => ({
+      label,
+      shortcut: shortcutLabel(id),
+      disabled,
+      onClick,
+    });
+    return [
+      { heading: selected.length > 1 ? `${selected.length} items on ${sideLabel}` : `File operations · ${sideLabel}` },
+      item("Copy to Right", "folder.copyToRight", !has("left") || !right, () => copyTo("copy", "right")),
+      item("Copy to Left", "folder.copyToLeft", !has("right") || !left, () => copyTo("copy", "left")),
+      item("Move to Right", "folder.moveToRight", !has("left") || !right, () => copyTo("move", "right")),
+      item("Move to Left", "folder.moveToLeft", !has("right") || !left, () => copyTo("move", "left")),
+      item("Copy to Folder…", "folder.copyToFolder", !selected.length, () => toFolder("copy")),
+      item("Move to Folder…", "folder.moveToFolder", !selected.length, () => toFolder("move")),
+      SEPARATOR,
+      item("Rename…", "folder.rename", selected.length !== 1, rename),
+      item("New Folder…", "folder.newFolder", false, newFolder),
+      item("Delete", "folder.delete", !selected.length, () => remove(false)),
+      item("Delete Permanently…", "folder.deletePermanently", !selected.length, () => remove(true)),
+      SEPARATOR,
+      item("Change Attributes…", "folder.attributes", !selected.length, attributes),
+      item("Touch (Set Modified Time)…", "folder.touch", !selected.length, touch),
+    ];
   };
 
   const panel = panelOpen ? <FileOpsPanel ops={ops} onClose={() => setPanelOpen(false)} /> : null;

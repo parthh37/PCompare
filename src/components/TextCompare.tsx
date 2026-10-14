@@ -55,6 +55,8 @@ import { joinLines, type TextDocument, type TextFormat } from "../lib/mergeApi";
 import { EyeOff, SlidersHorizontal } from "lucide-react";
 import { FilePen } from "lucide-react"; // bc5:editor-patch
 import { addRange, lineEndingsFor, loadBackups, textApi, type DiffSide } from "../lib/textApi";
+import { SEPARATOR, type MenuEntry, type MenuItems } from "../lib/nativeMenu";
+import { useContextMenu } from "./ContextMenu";
 import { TextEncodingPicker } from "./TextEncodingPicker";
 import { TextRulesDialog } from "./TextRulesDialog";
 import { autoRefreshTitle, useAutoRefresh } from "../lib/useAutoRefresh";
@@ -435,7 +437,6 @@ export function TextCompare({
   const [gotoOpen, setGotoOpen] = useState(false);
   const [gotoSide, setGotoSide] = useState<Side>("left");
   const [gotoText, setGotoText] = useState("");
-  const [toolsMenu, setToolsMenu] = useState<{ x: number; y: number } | null>(null);
   /** Caret index in the line editor (for the Ln/Col indicator). */
   const [caretIdx, setCaretIdx] = useState(0);
   // araxis:text-view end
@@ -495,7 +496,114 @@ export function TextCompare({
   const [cursor, setCursor] = useState<{ side: Side; row: number } | null>(null);
   const [anchor, setAnchor] = useState<number | null>(null);
   const [hoverHunk, setHoverHunk] = useState(-1);
-  const [menu, setMenu] = useState<{ x: number; y: number; side: Side; row: number } | null>(null);
+  // Row context menu; built after the right-click's caret/hunk change renders.
+  const menu = useContextMenu(({ side, row }: { side: Side; row: number }): MenuItems => {
+    if (!rows[row]) return [];
+    const line = lineNo(rows[row], side);
+    const resolvedHere = rangeResolved(resolveRange());
+    const what = selRange ? "Selection" : "Line";
+    const lines = selRange ? "Selected Lines" : "Line";
+    return [
+      ...(rowHunk[row] >= 0
+        ? [
+            menuItem("Copy to Right", "Alt+→", !fresh || readOnly.right, () => copyHunk(rowHunk[row], "left")),
+            menuItem("Copy to Left", "Alt+←", !fresh || readOnly.left, () => copyHunk(rowHunk[row], "right")),
+          ]
+        : []),
+      menuItem(
+        `Copy ${what} to Right`,
+        selRange && cursor?.side === "left" ? "Alt+→" : null,
+        !fresh || readOnly.right || !pickRange,
+        () => copySelection("left", pickRange),
+      ),
+      menuItem(
+        `Copy ${what} to Left`,
+        selRange && cursor?.side === "right" ? "Alt+←" : null,
+        !fresh || readOnly.left || !pickRange,
+        () => copySelection("right", pickRange),
+      ),
+      SEPARATOR,
+      menuItem(line == null ? "Insert Line Here" : "Edit Line", "Enter", !fresh || readOnly[side], () => startEdit(row, side)),
+      menuItem(
+        `Delete ${lines}`,
+        selRange ? "Del" : null,
+        !fresh || readOnly[side] || !hasLines(pickRange, side),
+        () => deleteLines(pickRange),
+      ),
+      menuItem(`Copy ${lines} as Text`, "Ctrl+C", !pickRange, () => copyLinesText()),
+      SEPARATOR,
+      menuItem("Toggle Bookmark", "Ctrl+F2", false, toggleBookmark),
+      menuItem("Comment…", null, false, () => review.commentRow(side, row)), // araxis:text-review
+      menuItem("Find…", "Ctrl+F", false, () => openFind(false)),
+      menuItem(showDetails ? "Hide Line Details" : "Line Details", null, false, () => setShowDetails((s) => !s)),
+      // araxis:text-view
+      SEPARATOR,
+      menuItem(
+        syncPick && syncPick.side !== side ? `Link to ${syncPick.side} line ${syncPick.line}` : "Set Sync Point Here",
+        syncHint,
+        !fresh || line == null,
+        () => setSyncPoint(side, row),
+      ),
+      line != null && syncLines[side].has(line) && menuItem("Remove Sync Point", null, false, () => removeSyncPoint(side, row)),
+      menuItem(resolvedHere ? "Unmark Resolved" : "Mark Resolved", shortcutLabel("text.markResolved") || null, false, () =>
+        markResolved(resolvedHere),
+      ),
+      ...(selRange && cursor?.side === side
+        ? [
+            menuItem("Indent Lines", "Tab", !fresh || readOnly[side], () => indentSelection(1)),
+            menuItem("Un-indent Lines", "Shift+Tab", !fresh || readOnly[side], () => indentSelection(-1)),
+          ]
+        : []),
+      menuItem("Copy All to Right", shortcutLabel("text.copyAllToRight") || null, readOnly.right, () => replaceFile("left")),
+      menuItem("Copy All to Left", shortcutLabel("text.copyAllToLeft") || null, readOnly.left, () => replaceFile("right")),
+      // araxis:text-view end
+    ];
+  });
+
+  // araxis:text-view — toolbar "…" menu
+  const toolsMenu = useContextMenu((): MenuItems => [
+    menuItem("Go to Line…", shortcutLabel("text.goToLine") || null, !docs || binary, openGoto),
+    SEPARATOR,
+    menuItem("Copy All to Right (replace right text)", shortcutLabel("text.copyAllToRight") || null, !docs || readOnly.right, () =>
+      replaceFile("left"),
+    ),
+    menuItem("Copy All to Left (replace left text)", shortcutLabel("text.copyAllToLeft") || null, !docs || readOnly.left, () =>
+      replaceFile("right"),
+    ),
+    menuItem("Indent Selected Lines", "Tab", !selRange || !cursor || readOnly[cursor.side], () => indentSelection(1)),
+    menuItem("Un-indent Selected Lines", "Shift+Tab", !pickRange || !cursor || readOnly[cursor.side], () =>
+      indentSelection(-1),
+    ),
+    SEPARATOR,
+    menuItem("Mark Selected Lines Resolved", shortcutLabel("text.markResolved") || null, !resolveRange(), () =>
+      markResolved(false),
+    ),
+    menuItem("Unmark Resolved", null, !rangeResolved(resolveRange()), () => markResolved(true)),
+    menuItem(`Clear All Resolved Marks${resolved.length ? ` (${resolved.length})` : ""}`, null, !resolved.length, () =>
+      setResolved([]),
+    ),
+    SEPARATOR,
+    menuItem("Set Sync Point on Caret Line", shortcutLabel("text.setSyncPoint") || syncHint, !cursor || !fresh, () =>
+      cursor ? setSyncPoint(cursor.side, cursor.row) : undefined,
+    ),
+    menuItem(
+      `Clear Sync Points${options.anchors.length ? ` (${options.anchors.length})` : ""}`,
+      null,
+      !options.anchors.length && !syncPick,
+      clearSyncPoints,
+    ),
+    menuItem("Clear Edit Markers", null, !edited.length, () => setEdited([])),
+    SEPARATOR,
+    menuItem(
+      padding ? "Vertical Padding Off (Linked Lines)" : "Vertical Padding On",
+      shortcutLabel("text.togglePadding") || null,
+      false,
+      togglePadding,
+    ),
+    menuItem(showEol ? "Hide Line Endings" : "Show Line Endings", shortcutLabel("text.lineEndings") || null, false, () =>
+      setShowEol((v) => !v),
+    ),
+  ]);
   /** A short status message (e.g. how many matches Replace All changed). */
   const [notice, setNotice] = useState<string | null>(null);
   const list = useRef<VarListHandle>(null);
@@ -828,25 +936,6 @@ export function TextCompare({
     return () => window.clearTimeout(t);
   }, [notice]);
 
-  // Keep the context menu on screen, and close it on any outside click.
-  const menuRef = useRef<HTMLDivElement>(null);
-  useLayoutEffect(() => {
-    const el = menuRef.current;
-    if (!el || !menu) return;
-    const { width, height } = el.getBoundingClientRect();
-    el.style.left = `${Math.max(4, Math.min(menu.x, window.innerWidth - width - 4))}px`;
-    el.style.top = `${menu.y + height > window.innerHeight - 4 ? Math.max(4, menu.y - height) : menu.y}px`;
-  }, [menu]);
-  useEffect(() => {
-    if (!menu) return;
-    const close = () => setMenu(null);
-    window.addEventListener("click", close);
-    window.addEventListener("blur", close);
-    return () => {
-      window.removeEventListener("click", close);
-      window.removeEventListener("blur", close);
-    };
-  }, [menu]);
 
   /** Typing in one line merges into one undo step; anything else starts a new one. */
   const coalesceKey = useRef<string | null>(null);
@@ -1664,17 +1753,6 @@ export function TextCompare({
     return true;
   };
 
-  // Tools menu (toolbar "…"): closes on any outside click.
-  useEffect(() => {
-    if (!toolsMenu) return;
-    const close = () => setToolsMenu(null);
-    window.addEventListener("click", close);
-    window.addEventListener("blur", close);
-    return () => {
-      window.removeEventListener("click", close);
-      window.removeEventListener("blur", close);
-    };
-  }, [toolsMenu]);
   // araxis:text-view end
 
   /**
@@ -1768,7 +1846,6 @@ export function TextCompare({
       } else if (plain && !e.shiftKey && e.key === "Enter" && cursor && t?.tagName !== "BUTTON")
         startEdit(cursor.row, cursor.side);
       else if (plain && e.key === "Delete" && selRange) deleteLines(selRange);
-      else if (e.key === "Escape" && menu) setMenu(null);
       else if (e.key === "Escape" && anchor !== null) setAnchor(null);
       else if (e.key === "Escape" && findOpen) setFindOpen(false);
       else if (e.key === "F5") refresh();
@@ -1818,7 +1895,7 @@ export function TextCompare({
       setAnchor(null);
     }
     if (rowHunk[row] >= 0) setHunkIdx(rowHunk[row]);
-    setMenu({ x: e.clientX, y: e.clientY, side, row });
+    menu.open(e, { side, row });
   };
 
   /** One side of a row: diff marks, syntax colours and find hits layered into runs, wrapped if needed. */
@@ -2143,20 +2220,13 @@ export function TextCompare({
     return span.end > span.start;
   };
 
-  /** Context-menu entry that closes the menu before acting. */
-  const menuItem = (label: string, hint: string | null, disabled: boolean, act: () => void) => (
-    <button
-      disabled={disabled}
-      onClick={() => {
-        setMenu(null);
-        setToolsMenu(null); // araxis:text-view
-        act();
-      }}
-    >
-      {label}
-      {hint && <span className="tc-menu-key">{hint}</span>}
-    </button>
-  );
+  /** A context-menu entry; `hint` is its shortcut text. */
+  const menuItem = (label: string, hint: string | null, disabled: boolean, act: () => void): MenuEntry => ({
+    label,
+    shortcut: hint,
+    disabled,
+    onClick: act,
+  });
 
   const stats = diff?.stats;
   const canSave = SIDES.some(sideSavable);
@@ -2171,8 +2241,6 @@ export function TextCompare({
       : cursor && caretLine != null
         ? `${sideName(cursor.side)} · Ln ${caretLine}, Col 1`
         : null;
-  const menuLine = menu && rows[menu.row] ? lineNo(rows[menu.row], menu.side) : null;
-  const menuResolved = !!menu && rangeResolved(resolveRange());
   const syncHint = isMac ? "⌘+click" : "Ctrl+click";
   // araxis:text-view end
   return (
@@ -2333,12 +2401,11 @@ export function TextCompare({
           <Pilcrow size={14} />
         </button>
         <button
-          className={`icon-btn${toolsMenu ? " active" : ""}`}
+          className={`icon-btn${toolsMenu.isOpen ? " active" : ""}`}
           onClick={(e) => {
             e.stopPropagation();
             const r = e.currentTarget.getBoundingClientRect();
-            setMenu(null);
-            setToolsMenu(toolsMenu ? null : { x: window.innerWidth - r.right, y: r.bottom + 2 });
+            toolsMenu.open({ clientX: r.left, clientY: r.bottom + 2 }, null);
           }}
           title="More: go to line, copy all, sync points, resolved lines, indent"
         >
@@ -2600,127 +2667,8 @@ export function TextCompare({
         )}
       </div>
 
-      {menu && rows[menu.row] && (
-        <div
-          className="ctx-menu tc-menu"
-          ref={menuRef}
-          style={{ left: menu.x, top: menu.y }}
-          onClick={(e) => e.stopPropagation()}
-        >
-          {rowHunk[menu.row] >= 0 && (
-            <>
-              {menuItem("Copy to Right", "Alt+→", !fresh || readOnly.right, () => copyHunk(rowHunk[menu.row], "left"))}
-              {menuItem("Copy to Left", "Alt+←", !fresh || readOnly.left, () => copyHunk(rowHunk[menu.row], "right"))}
-            </>
-          )}
-          {menuItem(
-            `Copy ${selRange ? "Selection" : "Line"} to Right`,
-            selRange && cursor?.side === "left" ? "Alt+→" : null,
-            !fresh || readOnly.right || !pickRange,
-            () => copySelection("left", pickRange),
-          )}
-          {menuItem(
-            `Copy ${selRange ? "Selection" : "Line"} to Left`,
-            selRange && cursor?.side === "right" ? "Alt+←" : null,
-            !fresh || readOnly.left || !pickRange,
-            () => copySelection("right", pickRange),
-          )}
-          <hr />
-          {menuItem(
-            lineNo(rows[menu.row], menu.side) == null ? "Insert Line Here" : "Edit Line",
-            "Enter",
-            !fresh || readOnly[menu.side],
-            () => startEdit(menu.row, menu.side),
-          )}
-          {menuItem(
-            `Delete ${selRange ? "Selected Lines" : "Line"}`,
-            selRange ? "Del" : null,
-            !fresh || readOnly[menu.side] || !hasLines(pickRange, menu.side),
-            () => deleteLines(pickRange),
-          )}
-          {menuItem(`Copy ${selRange ? "Selected Lines" : "Line"} as Text`, "Ctrl+C", !pickRange, () => copyLinesText())}
-          <hr />
-          {menuItem("Toggle Bookmark", "Ctrl+F2", false, toggleBookmark)}
-          {menuItem("Comment…", null, false, () => review.commentRow(menu.side, menu.row)) /* araxis:text-review */}
-          {menuItem("Find…", "Ctrl+F", false, () => openFind(false))}
-          {menuItem(showDetails ? "Hide Line Details" : "Line Details", null, false, () => setShowDetails((s) => !s))}
-          {/* araxis:text-view */}
-          <hr />
-          {menuItem(
-            syncPick && syncPick.side !== menu.side ? `Link to ${syncPick.side} line ${syncPick.line}` : "Set Sync Point Here",
-            syncHint,
-            !fresh || menuLine == null,
-            () => setSyncPoint(menu.side, menu.row),
-          )}
-          {menuLine != null &&
-            syncLines[menu.side].has(menuLine) &&
-            menuItem("Remove Sync Point", null, false, () => removeSyncPoint(menu.side, menu.row))}
-          {menuItem(menuResolved ? "Unmark Resolved" : "Mark Resolved", shortcutLabel("text.markResolved") || null, false, () =>
-            markResolved(menuResolved),
-          )}
-          {selRange && cursor?.side === menu.side && (
-            <>
-              {menuItem("Indent Lines", "Tab", !fresh || readOnly[menu.side], () => indentSelection(1))}
-              {menuItem("Un-indent Lines", "Shift+Tab", !fresh || readOnly[menu.side], () => indentSelection(-1))}
-            </>
-          )}
-          {menuItem("Copy All to Right", shortcutLabel("text.copyAllToRight") || null, readOnly.right, () => replaceFile("left"))}
-          {menuItem("Copy All to Left", shortcutLabel("text.copyAllToLeft") || null, readOnly.left, () => replaceFile("right"))}
-          {/* araxis:text-view end */}
-        </div>
-      )}
-
-      {/* araxis:text-view — toolbar "…" menu */}
-      {toolsMenu && (
-        <div
-          className="ctx-menu tc-menu"
-          style={{ right: toolsMenu.x, top: toolsMenu.y }}
-          onClick={(e) => e.stopPropagation()}
-        >
-          {menuItem("Go to Line…", shortcutLabel("text.goToLine") || null, !docs || binary, openGoto)}
-          <hr />
-          {menuItem("Copy All to Right (replace right text)", shortcutLabel("text.copyAllToRight") || null, !docs || readOnly.right, () =>
-            replaceFile("left"),
-          )}
-          {menuItem("Copy All to Left (replace left text)", shortcutLabel("text.copyAllToLeft") || null, !docs || readOnly.left, () =>
-            replaceFile("right"),
-          )}
-          {menuItem("Indent Selected Lines", "Tab", !selRange || !cursor || readOnly[cursor.side], () => indentSelection(1))}
-          {menuItem("Un-indent Selected Lines", "Shift+Tab", !pickRange || !cursor || readOnly[cursor.side], () =>
-            indentSelection(-1),
-          )}
-          <hr />
-          {menuItem("Mark Selected Lines Resolved", shortcutLabel("text.markResolved") || null, !resolveRange(), () =>
-            markResolved(false),
-          )}
-          {menuItem("Unmark Resolved", null, !rangeResolved(resolveRange()), () => markResolved(true))}
-          {menuItem(`Clear All Resolved Marks${resolved.length ? ` (${resolved.length})` : ""}`, null, !resolved.length, () =>
-            setResolved([]),
-          )}
-          <hr />
-          {menuItem("Set Sync Point on Caret Line", shortcutLabel("text.setSyncPoint") || syncHint, !cursor || !fresh, () =>
-            cursor ? setSyncPoint(cursor.side, cursor.row) : undefined,
-          )}
-          {menuItem(
-            `Clear Sync Points${options.anchors.length ? ` (${options.anchors.length})` : ""}`,
-            null,
-            !options.anchors.length && !syncPick,
-            clearSyncPoints,
-          )}
-          {menuItem("Clear Edit Markers", null, !edited.length, () => setEdited([]))}
-          <hr />
-          {menuItem(
-            padding ? "Vertical Padding Off (Linked Lines)" : "Vertical Padding On",
-            shortcutLabel("text.togglePadding") || null,
-            false,
-            togglePadding,
-          )}
-          {menuItem(showEol ? "Hide Line Endings" : "Show Line Endings", shortcutLabel("text.lineEndings") || null, false, () =>
-            setShowEol((v) => !v),
-          )}
-        </div>
-      )}
-      {/* araxis:text-view end */}
+      {menu.element}
+      {toolsMenu.element /* araxis:text-view */}
 
       <div className="statusbar">
         {diff &&

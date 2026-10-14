@@ -8,12 +8,6 @@
 .fc-attrs .frow.fc-sel-right > .fcell:nth-last-child(4) {
   background: var(--sel-bg-strong);
 }
-.ctx-menu .fop-key {
-  margin-left: auto;
-  padding-left: 18px;
-  color: var(--muted);
-  font-size: 11px;
-}
 .frow.fc-focus {
   outline: 1px dotted var(--accent-border-strong);
   outline-offset: -1px;
