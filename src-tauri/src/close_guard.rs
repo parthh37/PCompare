@@ -14,9 +14,6 @@ use tauri::{AppHandle, Emitter, Manager, RunEvent, RESTART_EXIT_CODE};
 /// Emitted to the main window with [`AskPayload`] when a close or quit
 /// was stopped because of unsaved edits.
 pub const ASK_EVENT: &str = "close-guard-ask";
-/// Id of the macOS app menu's Quit item, which replaces the predefined one
-/// (that calls `terminate:` directly, which can't be stopped).
-pub const QUIT_MENU_ID: &str = "app-quit";
 
 const MAIN_WINDOW: &str = "main";
 
@@ -115,6 +112,9 @@ pub fn on_run_event(app: &AppHandle, event: &RunEvent) {
 #[cfg(target_os = "macos")]
 pub fn install_app_menu(app: &AppHandle) -> tauri::Result<()> {
     use tauri::menu::{Menu, MenuItem};
+    /// The replacement Quit item (the predefined one calls `terminate:`
+    /// directly, which can't be stopped).
+    const QUIT_MENU_ID: &str = "app-quit";
     let menu = Menu::default(app)?;
     if let Some(app_menu) = menu.items()?.first().and_then(|i| i.as_submenu().cloned()) {
         let last = app_menu.items()?.len().saturating_sub(1);
