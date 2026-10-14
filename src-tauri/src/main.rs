@@ -468,6 +468,8 @@ fn main() {
             review::review_read_file,
             // araxis:text-review end
             folder::compare_folders_cancel,
+            folder::restage_folders,
+            folder::forget_folder_scan,
             watch_paths,
             unwatch_paths,
             // bc5:hex — hex compare (hex.rs)

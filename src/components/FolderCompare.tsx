@@ -11,7 +11,7 @@ import {
   TriangleAlert,
   type LucideIcon,
 } from "lucide-react";
-import { ListChecks, PanelBottom } from "lucide-react";
+import { FunnelX, ListChecks, PanelBottom } from "lucide-react";
 import {
   useCallback,
   useEffect,
@@ -54,6 +54,7 @@ import {
   effectiveStatus,
   LiveTree,
   nameMatcher,
+  withoutFiltered,
   pairedFiles,
   selectMatching,
   tally,
@@ -167,6 +168,9 @@ const RECHECK_CONCURRENCY = 4;
 
 type Verdicts = Map<string, ContentVerdict & { method: ContentMethod }>;
 
+/** "refresh" lists the folders afresh; "restage" re-runs only what changed options need. */
+type RunMode = "refresh" | "quiet" | "restage";
+
 interface FlatRow {
   entry: FolderEntry;
   depth: number;
@@ -185,9 +189,16 @@ const FILTER_ICON: Partial<Record<DisplayFilter, ToolIconName>> = {
   orphans: "orphans",
 };
 
+const FILTERED_LABEL: Record<NonNullable<FolderEntry["filtered"]>, string> = {
+  both: "left out by the filters (shown because filters are suppressed)",
+  left: "the left side is left out by the filters",
+  right: "the right side is left out by the filters",
+};
+
 function rowTitle(e: FolderEntry): string {
   if (e.pending) return "Not compared yet";
   const parts = e.ignored ? [`Ignored (marked as same; really ${STATUS_LABEL[e.status].toLowerCase()})`] : [STATUS_LABEL[e.status]];
+  if (e.filtered) parts.push(FILTERED_LABEL[e.filtered]);
   if (e.leftRelPath) parts.push(`aligned with ${e.leftRelPath} on the left`);
   if (attributesDiffer(e)) parts.push(`attributes ${formatAttributes(e.left)} ↔ ${formatAttributes(e.right)}`);
   for (const side of ["left", "right"] as const) {
@@ -239,7 +250,7 @@ export function FolderCompare({
   const [checking, setChecking] = useState<{ done: number; total: number } | null>(null);
   const [error, setError] = useState<string | null>(null);
   /** What the running compare is doing; the list stays usable throughout. */
-  const [phase, setPhase] = useState<"scanning" | "contents" | null>(null);
+  const [phase, setPhase] = useState<"scanning" | "contents" | "updating" | null>(null);
   const [progress, setProgress] = useState<ScanProgress | null>(null);
   /** The rows on screen come from the quick pass; contents weren't read yet. */
   const [quickOnly, setQuickOnly] = useState(false);
@@ -259,16 +270,28 @@ export function FolderCompare({
   /** Rows streamed for the folders on screen; refreshes refine it in place. */
   const live = useRef<LiveTree | null>(null);
 
+  /** The listing the backend keeps for the folders on screen (`api.compareFolders`'s `scan`). */
+  const scanId = useRef<string | null>(null);
+  /** The folders (and archive expansion) that listing is of. */
+  const scanKey = useRef("");
+  /** Options of the latest pass on it, to tell what a restage will do. */
+  const scanOptions = useRef<FolderCompareOptions | null>(null);
+  /** Read by `run`, so toggling it doesn't re-run on its own. */
+  const suppressFilters = useRef(cfg.suppressFilters);
+  suppressFilters.current = cfg.suppressFilters;
+
   /**
    * Compares live: rows stream in folder by folder as they're listed, a quick
    * size/timestamp pass settles them, then the content pass (CRC, binary,
-   * rules) refines them in place. `quiet` refreshes (auto-refresh) skip the
-   * quick pass; their rows replace settled ones only when final, so nothing
-   * flickers.
+   * rules) refines them in place on the same listing. A "restage" (options
+   * changed) re-runs filters, alignment and comparison on the listing the
+   * backend kept, reading no folder again; "refresh" lists afresh. `quiet`
+   * refreshes (auto-refresh) skip the quick pass; their rows replace settled
+   * ones only when final, so nothing flickers.
    */
   const expandArchives = !!cfg.expandArchives; // bc5:archives
   const run = useCallback(
-    async (quiet = false) => {
+    async (mode: RunMode = "refresh") => {
       // One folder is enough: it lists on its own until the other side is picked.
       if (!left && !right) return;
       const seq = ++requestSeq.current;
@@ -282,6 +305,16 @@ export function FolderCompare({
         setResult(null);
       }
       const tree = live.current;
+      const listing = `${pathsKey}\n${expandArchives}`;
+      const quiet = mode === "quiet";
+      const restage = mode === "restage" && !!scanId.current && scanKey.current === listing;
+      if (!restage) {
+        if (scanId.current) api.forgetFolderScan(scanId.current).catch(() => {});
+        scanId.current = `folder-scan-${crypto.randomUUID()}`;
+        scanKey.current = listing;
+      }
+      const scan = scanId.current!;
+      const before = scanOptions.current;
       let shown = false;
       let painted = false;
       let streamed = 0;
@@ -311,25 +344,33 @@ export function FolderCompare({
         setError(null);
       };
       // A superseded compare would only burn CPU: stop it. Each pass gets its
-      // own run key so Esc / Cancel stops whichever one is in flight.
-      const pass = (opts: FolderCompareOptions) => {
+      // own run key so Esc / Cancel stops whichever one is in flight. Every
+      // pass but a fresh listing's first works on the listing kept so far.
+      const pass = (opts: FolderCompareOptions, again: boolean) => {
         if (runKey.current) api.cancelCompareFolders(runKey.current).catch(() => {});
         const key = `folder-${crypto.randomUUID()}`;
         runKey.current = key;
         if (!quiet) setProgress(null);
+        scanOptions.current = opts;
         tree.beginPass();
-        return api.compareFolders(left, right, opts, key, (p) => !stale() && setProgress(p), expandArchives, onLevels);
+        return api.compareFolders(left, right, opts, key, (p) => !stale() && setProgress(p), expandArchives, onLevels, {
+          id: scan,
+          restage: again,
+          showFiltered: suppressFilters.current,
+        });
       };
-      const twoPass = !quiet && options.content !== "off";
+      const twoPass = !quiet && !restage && options.content !== "off";
+      // Only reading contents anew takes long enough to name.
+      const reads = options.content !== "off" && before?.content !== options.content;
       try {
         if (twoPass) {
           setPhase("scanning");
-          const quick = await pass({ ...options, content: "off" });
+          const quick = await pass({ ...options, content: "off" }, false);
           if (stale()) return;
           finish(quick, true);
         }
-        if (!quiet) setPhase(twoPass ? "contents" : "scanning");
-        const res = await pass(options);
+        if (!quiet) setPhase(twoPass || (restage && reads) ? "contents" : restage ? "updating" : "scanning");
+        const res = await pass(options, restage || twoPass);
         if (stale()) return;
         finish(res);
       } catch (e) {
@@ -354,27 +395,47 @@ export function FolderCompare({
     },
     [left, right, optionsKey, expandArchives],
   );
+  const runRef = useRef(run);
+  runRef.current = run;
 
   const cancel = () => {
     if (runKey.current) api.cancelCompareFolders(runKey.current).catch(() => {});
   };
 
+  // Options changed (or first show): re-run what they need on the kept listing.
   useEffect(() => {
-    run();
+    run("restage");
   }, [run]);
+
+  // Suppressing filters walks the folders they left out (listing only those);
+  // turning it back off just hides the rows again.
+  useEffect(() => {
+    if (cfg.suppressFilters && hasResult.current) void runRef.current("restage");
+  }, [cfg.suppressFilters]);
+
+  useEffect(
+    () => () => {
+      if (scanId.current) void api.forgetFolderScan(scanId.current).catch(() => {});
+    },
+    [],
+  );
 
   const watchState = useAutoRefresh({
     enabled: cfg.autoRefresh,
     paths: [left, right],
     exclude: engineOptions.exclude.concat(engineOptions.filters.excludeFolders),
-    onChange: () => run(true),
+    onChange: () => run("quiet"),
   });
 
   const ignoredSet = useMemo(() => new Set(cfg.ignored), [cfg.ignored]);
-  const entries = useMemo(
-    () => (result ? applyVerdicts(result.entries, verdicts, ignoredSet) : []),
-    [result, verdicts, ignoredSet],
-  );
+  const entries = useMemo(() => {
+    if (!result) return [];
+    const all = applyVerdicts(result.entries, verdicts, ignoredSet);
+    // Everything downstream (selection, file operations, reports) sees what's shown.
+    return cfg.suppressFilters ? all : withoutFiltered(all);
+  }, [result, verdicts, ignoredSet, cfg.suppressFilters]);
+  /** Files the filters leave out, shown or not. */
+  const filteredCount = result?.stats.filtered ?? 0;
   const stats = useMemo(
     () => (verdicts.size || ignoredSet.size ? tally(entries) : result?.stats),
     [entries, verdicts, ignoredSet, result],
@@ -502,7 +563,7 @@ export function FolderCompare({
     right,
     // Enter opens the selection: one folder toggles, file pairs open (a handful at most).
     onOpen: (list) => (list.length === 1 ? open(list[0]) : list.filter((e) => !e.isDir).slice(0, 10).forEach(open)),
-    onRefresh: () => run(true),
+    onRefresh: () => run("quiet"),
     onError: setError,
   });
 
@@ -655,10 +716,12 @@ export function FolderCompare({
     const meta = e[side];
     // Beyond Compare draws the newer of two differing files in red and the older in grey.
     const newer = e.newer === side ? " newer" : e.newer ? " older" : "";
+    // Beyond Compare draws what the filters leave out in teal; a half-filtered pair only on that side.
+    const filtered = e.filtered === "both" || e.filtered === side ? " filtered" : "";
     const showChevron = e.isDir && meta && !cfg.flatten;
     return (
       <>
-        <div className={`fcell name${meta ? "" : " absent"}${newer}`} style={{ paddingLeft: 6 + depth * 16 }}>
+        <div className={`fcell name${meta ? "" : " absent"}${newer}${filtered}`} style={{ paddingLeft: 6 + depth * 16 }}>
           {showChevron ? (
             <span
               className="chevron"
@@ -687,8 +750,8 @@ export function FolderCompare({
             </>
           )}
         </div>
-        <div className={`fcell num${newer}`}>{meta && !meta.isDir ? formatSize(meta.size) : ""}</div>
-        <div className={`fcell time${newer}`}>{meta ? formatTime(meta.modifiedMs) : ""}</div>
+        <div className={`fcell num${newer}${filtered}`}>{meta && !meta.isDir ? formatSize(meta.size) : ""}</div>
+        <div className={`fcell time${newer}${filtered}`}>{meta ? formatTime(meta.modifiedMs) : ""}</div>
         {cfg.showAttributes && (
           <div className={`fcell fc-attr${attributesDiffer(e) ? " differs" : ""}`}>{formatAttributes(meta)}</div>
         )}
@@ -716,7 +779,7 @@ export function FolderCompare({
         title={review.title(e.relPath, rowTitle(e)) /* araxis:text-review */}
       >
         {renderSide(e, "left", depth)}
-        <div className={`fcell status${checked ? " checked" : ""}`}>
+        <div className={`fcell status${checked ? " checked" : ""}${e.filtered === "both" ? " filtered" : ""}`}>
           {oneSided ? null : e.pending ? (
             phase ? <span className="spinner" /> : <span className="muted">…</span>
           ) : (
@@ -736,7 +799,7 @@ export function FolderCompare({
   const liveStatus = phase && (
     <span className="live-progress" title={progress?.current}>
       <span className="spinner" />
-      {phase === "scanning" ? "Scanning folders…" : "Comparing contents…"}
+      {phase === "scanning" ? "Scanning folders…" : phase === "updating" ? "Applying changes…" : "Comparing contents…"}
       {progress && (
         <span className="muted">
           {progress.scanned.toLocaleString()} items
@@ -792,6 +855,15 @@ export function FolderCompare({
           title={`Comparison, alignment, filters and text rules${filterCount ? ` (${filterCount} filter${filterCount > 1 ? "s" : ""} or override${filterCount > 1 ? "s" : ""} active)` : ""}`}
           onClick={() => setShowSettings(true)}
         />
+        <button
+          className={`tool-btn${cfg.suppressFilters ? " active" : ""}`}
+          aria-pressed={cfg.suppressFilters}
+          title="Suppress filters: also show what the filters leave out, in teal (filtered folders are listed once, then kept)"
+          onClick={() => update({ suppressFilters: !cfg.suppressFilters })}
+        >
+          <FunnelX size={20} className="fop-tool" />
+          <span>Suppress</span>
+        </button>
         <span className="tool-sep" />
         <ToolButton icon="swap" label="Swap" title="Swap sides" disabled={!left && !right} onClick={() => onPathsChange(right, left)} />
         <ToolButton icon="refresh" label="Refresh" title="Refresh (F5)" onClick={() => run()} />
@@ -931,7 +1003,7 @@ export function FolderCompare({
                 splitDirty.current = d;
                 onDirtyChange?.(d);
               }}
-              onSaved={() => run(true)}
+              onSaved={() => run("quiet")}
             />
           </>
         )}
@@ -961,6 +1033,14 @@ export function FolderCompare({
             <span className="s-leftOnly-fg">{stats.leftOnly} left only</span>
             <span className="s-rightOnly-fg">{stats.rightOnly} right only</span>
             {stats.errors > 0 && <span className="s-error-fg">{stats.errors} errors</span>}
+            {filteredCount > 0 && (
+              <span
+                className="s-filtered-fg"
+                title={cfg.suppressFilters ? "Left out by the filters, shown in teal" : "Left out by the filters — Suppress shows them"}
+              >
+                {filteredCount} filtered
+              </span>
+            )}
             <span className="spacer" />
             {liveStatus}
             {checking && (
@@ -968,7 +1048,10 @@ export function FolderCompare({
                 Comparing contents {checking.done}/{checking.total}…
               </span>
             )}
-            <span className="muted">
+            <span
+              className="muted"
+              title={result!.needs && !result!.stats.dirsRead ? "Applied to the folders already listed; nothing was read again" : undefined}
+            >
               {cfg.content !== "off" && !quickOnly ? `${METHOD_LABEL[cfg.content]} · ` : ""}
               {result!.elapsedMs} ms
             </span>
