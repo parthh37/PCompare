@@ -19,6 +19,8 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
+import { SEPARATOR, type MenuItems } from "../lib/nativeMenu";
+import { useContextMenu } from "./ContextMenu";
 import { RootFolderPicker } from "./RootFolderPicker";
 import {
   api,
@@ -115,7 +117,6 @@ export function Profiles() {
   const [status, setStatus] = useState<Status>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
-  const [menu, setMenu] = useState<{ x: number; y: number; profile: Profile } | null>(null);
   const [pickingRoot, setPickingRoot] = useState(false);
   /** A sign-in is waiting for the browser (so leaving the page cancels it). */
   const signingIn = useRef(false);
@@ -138,20 +139,6 @@ export function Profiles() {
     },
     [],
   );
-
-  useEffect(() => {
-    if (!menu) return;
-    const close = () => setMenu(null);
-    const onKey = (e: KeyboardEvent) => e.key === "Escape" && close();
-    window.addEventListener("click", close);
-    window.addEventListener("blur", close);
-    window.addEventListener("keydown", onKey);
-    return () => {
-      window.removeEventListener("click", close);
-      window.removeEventListener("blur", close);
-      window.removeEventListener("keydown", onKey);
-    };
-  }, [menu]);
 
   const spec = useMemo(() => providers.find((p) => p.kind === draft?.kind), [providers, draft?.kind]);
 
@@ -256,11 +243,15 @@ export function Profiles() {
 
   /** From the list's context menu: asks first, since secrets go with it. */
   const removeFromMenu = (p: Profile) => {
-    setMenu(null);
     if (busy) return;
     const secrets = p.storedSecrets.length ? " Its saved passwords and tokens are removed from the keychain too." : "";
     if (window.confirm(`Delete the connection profile “${p.name}”?${secrets}`)) void deleteProfile(p.id);
   };
+  const menu = useContextMenu((p: Profile): MenuItems => [
+    { label: "Edit", onClick: () => select(draftFrom(p)) },
+    SEPARATOR,
+    { label: "Delete…", danger: true, disabled: !!busy, onClick: () => removeFromMenu(p) },
+  ]);
 
   const renderField = (f: FieldSpec) => {
     if (!draft || !visible(f)) return null;
@@ -410,7 +401,7 @@ export function Profiles() {
             onClick={() => select(draftFrom(p))}
             onContextMenu={(e) => {
               e.preventDefault();
-              setMenu({ x: e.clientX, y: e.clientY, profile: p });
+              menu.open(e, p);
             }}
           >
             <span className="pi-icon">
@@ -554,15 +545,7 @@ export function Profiles() {
         />
       )}
 
-      {menu && (
-        <div className="ctx-menu" style={{ left: menu.x, top: menu.y }} onClick={(e) => e.stopPropagation()}>
-          <button onClick={() => (setMenu(null), select(draftFrom(menu.profile)))}>Edit</button>
-          <hr />
-          <button className="danger-text" onClick={() => removeFromMenu(menu.profile)} disabled={!!busy}>
-            Delete…
-          </button>
-        </div>
-      )}
+      {menu.element}
     </div>
   );
 }

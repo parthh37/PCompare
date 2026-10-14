@@ -1145,11 +1145,19 @@ textarea:focus {
   flex-direction: column;
 }
 .ctx-menu button {
+  display: flex;
+  align-items: center;
   border: none;
   background: none;
   text-align: left;
   padding: 5px 10px;
   border-radius: 4px;
+}
+.ctx-menu .ctx-key {
+  margin-left: auto;
+  padding-left: 24px;
+  color: var(--muted);
+  font-size: 11px;
 }
 .ctx-menu button:hover:not(:disabled) {
   background: var(--sel-bg-strong);
@@ -1391,11 +1399,6 @@ button,
 .tool-icon {
   display: block;
   flex-shrink: 0;
-}
-.ctx-menu button.ctx-icon {
-  display: flex;
-  align-items: center;
-  gap: 8px;
 }
 /* Older of two differing files: grey, as in Beyond Compare (the newer stays red). */
 .s-different .fcell.name.older,

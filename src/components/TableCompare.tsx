@@ -37,6 +37,8 @@ import {
   type TableRow,
   type TableSource,
 } from "../lib/tableApi";
+import { SEPARATOR, type MenuItems } from "../lib/nativeMenu";
+import { useContextMenu } from "./ContextMenu";
 import { Modal } from "./Modal";
 import { columnLetter, TableMappingDialog } from "./TableMappingDialog";
 import { PathBar } from "./PathBar";
@@ -195,12 +197,6 @@ function lastAtOrBefore(offsets: number[], x: number): number {
   return lo;
 }
 
-interface MenuState {
-  col: number;
-  x: number;
-  y: number;
-}
-
 export function TableCompare({ left, right, onPathsChange, settings, onSettingsChange }: CompareProps<TableSettings>) {
   const [options, setOptions] = useState<TableCompareOptions>({ ...DEFAULT_OPTIONS, ...settings?.options });
   const [filter, setFilter] = useState<Filter>(settings?.filter ?? "all");
@@ -221,7 +217,6 @@ export function TableCompare({ left, right, onPathsChange, settings, onSettingsC
   const [diffIdx, setDiffIdx] = useState(-1);
   const [hx, setHx] = useState(0);
   const [viewW, setViewW] = useState(400);
-  const [menu, setMenu] = useState<MenuState | null>(null);
   const [showColumns, setShowColumns] = useState(false);
   const [showMapping, setShowMapping] = useState(false);
   const [reporting, setReporting] = useState(false); // bc5:reports-script
@@ -452,19 +447,23 @@ export function TableCompare({ left, right, onPathsChange, settings, onSettingsC
     return () => window.removeEventListener("keydown", onKey);
   }, [goDiff, diffIdx, run]);
 
-  useEffect(() => {
-    if (!menu) return;
-    const close = () => setMenu(null);
-    const onKey = (e: KeyboardEvent) => e.key === "Escape" && close();
-    window.addEventListener("mousedown", close);
-    window.addEventListener("keydown", onKey);
-    window.addEventListener("resize", close);
-    return () => {
-      window.removeEventListener("mousedown", close);
-      window.removeEventListener("keydown", onKey);
-      window.removeEventListener("resize", close);
-    };
-  }, [menu]);
+  // Column options, from a click or right-click on a header cell.
+  const menu = useContextMenu((c: number): MenuItems => {
+    const col = columns[c];
+    if (!col) return [];
+    const oneSided = col.left === null || col.right === null;
+    const sorted = options.sortRows && options.sortColumns.includes(c);
+    return [
+      { heading: columnName(col) },
+      { label: col.key ? "Remove key" : "Use as key", disabled: oneSided, onClick: () => toggleKey(c) },
+      { label: col.ignored ? "Compare column" : "Ignore column", onClick: () => toggleIgnored(c) },
+      { label: sorted ? "Stop sorting on column" : "Sort on column", onClick: () => toggleSort(c) },
+      { label: "Hide column", onClick: () => toggleHidden(c) },
+      SEPARATOR,
+      { label: "Column mapping…", onClick: () => setShowMapping(true) },
+      { label: "All columns…", onClick: () => setShowColumns(true) },
+    ];
+  });
 
   const set = (patch: Partial<TableCompareOptions>) => setOptions((o) => ({ ...o, ...patch }));
 
@@ -558,7 +557,7 @@ export function TableCompare({ left, right, onPathsChange, settings, onSettingsC
   const openMenu = (e: ReactMouseEvent, col: number) => {
     e.preventDefault();
     e.stopPropagation();
-    setMenu({ col, x: e.clientX, y: e.clientY });
+    menu.open(e, col);
   };
 
   // Only the displayed columns intersecting the viewport are rendered;
@@ -666,7 +665,6 @@ export function TableCompare({ left, right, onPathsChange, settings, onSettingsC
   };
 
   const s = result?.stats;
-  const menuCol = menu ? columns[menu.col] : null;
 
   // Spell out how rows were lined up, since it decides what counts as a change.
   const keyCols = columns.flatMap((c, i) => (c.key ? [i] : []));
@@ -1025,75 +1023,7 @@ export function TableCompare({ left, right, onPathsChange, settings, onSettingsC
         )}
       </div>
 
-      {menu && menuCol && (
-        <div
-          className="tbl-menu"
-          style={{ left: Math.min(menu.x, window.innerWidth - 200), top: Math.min(menu.y, window.innerHeight - 230) }}
-          onMouseDown={(e) => e.stopPropagation()}
-          role="menu"
-        >
-          <div className="tbl-menu-title">{columnName(menuCol)}</div>
-          <button
-            role="menuitemcheckbox"
-            aria-checked={menuCol.key}
-            disabled={menuCol.left === null || menuCol.right === null}
-            title={menuCol.left === null || menuCol.right === null ? "Key columns must exist on both sides" : undefined}
-            onClick={() => {
-              toggleKey(menu.col);
-              setMenu(null);
-            }}
-          >
-            <KeyRound size={13} /> {menuCol.key ? "Remove key" : "Use as key"}
-          </button>
-          <button
-            role="menuitemcheckbox"
-            aria-checked={menuCol.ignored}
-            onClick={() => {
-              toggleIgnored(menu.col);
-              setMenu(null);
-            }}
-          >
-            <EyeOff size={13} /> {menuCol.ignored ? "Compare column" : "Ignore column"}
-          </button>
-          <button
-            role="menuitemcheckbox"
-            aria-checked={options.sortRows && options.sortColumns.includes(menu.col)}
-            onClick={() => {
-              toggleSort(menu.col);
-              setMenu(null);
-            }}
-          >
-            <ArrowDownWideNarrow size={13} />{" "}
-            {options.sortRows && options.sortColumns.includes(menu.col) ? "Stop sorting on column" : "Sort on column"}
-          </button>
-          <button
-            onClick={() => {
-              toggleHidden(menu.col);
-              setMenu(null);
-            }}
-            title="Hide from view; the column is still compared"
-          >
-            <Eye size={13} /> Hide column
-          </button>
-          <div className="tbl-menu-sep" />
-          <button
-            onClick={() => {
-              setShowMapping(true);
-              setMenu(null);
-            }}
-          >
-            <ArrowLeftRight size={13} /> Column mapping…
-          </button>
-          <button
-            onClick={() => {
-              setShowColumns(true);
-              setMenu(null);
-            }}
-          >
-            <Columns3 size={13} /> All columns…
-          </button>
-        </div>
-      )}
+      {menu.element}
 
       {showColumns && (
         <Modal

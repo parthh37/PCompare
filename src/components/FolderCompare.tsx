@@ -11,12 +11,10 @@ import {
   TriangleAlert,
   type LucideIcon,
 } from "lucide-react";
-import { FilePen } from "lucide-react"; // bc5:editor-patch
 import { ListChecks, PanelBottom } from "lucide-react";
 import {
   useCallback,
   useEffect,
-  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -64,14 +62,17 @@ import {
   type SelectCriteria,
 } from "../lib/folderTree";
 import { basename, formatSize, formatTime, hex, joinPath } from "../lib/format";
+import { writeClipboardText } from "../lib/clipboard";
 import { useShell } from "../lib/shell";
 import { autoRefreshTitle, useAutoRefresh } from "../lib/useAutoRefresh";
 import { FolderSettingsDialog } from "./FolderSettingsDialog";
-import { FileIcon, ToolIcon, type ToolIconName } from "./icons";
+import { FileIcon, type ToolIconName } from "./icons";
 import { ToolButton } from "./ToolButton";
 // bc5:converters — external comparison tools.
 import { openExternalIfAlways } from "../lib/convertApi";
-import { ExternalToolItems } from "./ExternalToolItems";
+import { externalToolItems } from "../lib/externalToolMenu";
+import { SEPARATOR, type MenuItems } from "../lib/nativeMenu";
+import { useContextMenu } from "./ContextMenu";
 import { FileFormatsDialog } from "./FileFormatsDialog";
 import { PathBar } from "./PathBar";
 import { VirtualList } from "./VirtualList";
@@ -171,9 +172,7 @@ interface FlatRow {
   depth: number;
 }
 
-interface Menu {
-  x: number;
-  y: number;
+interface MenuTarget {
   entry: FolderEntry;
   /** The half of the row that was right-clicked (or the only side the entry exists on). */
   side: Side;
@@ -249,7 +248,6 @@ export function FolderCompare({
   const hasResult = useRef(false);
   hasResult.current = !!result;
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
-  const [menu, setMenu] = useState<Menu | null>(null);
   const root = useRef<HTMLDivElement>(null);
   const shell = useShell();
 
@@ -571,27 +569,56 @@ export function FolderCompare({
     fops.selectRows(rows, side, add);
   };
 
-  // Keep the context menu on screen: shift it left at the right edge and
-  // open it upwards when it would run past the bottom.
-  const menuRef = useRef<HTMLDivElement>(null);
-  useLayoutEffect(() => {
-    const el = menuRef.current;
-    if (!el || !menu) return;
-    const { width, height } = el.getBoundingClientRect();
-    el.style.left = `${Math.max(4, Math.min(menu.x, window.innerWidth - width - 4))}px`;
-    el.style.top = `${menu.y + height > window.innerHeight - 4 ? Math.max(4, menu.y - height) : menu.y}px`;
-  }, [menu]);
-
-  useEffect(() => {
-    if (!menu) return;
-    const close = () => setMenu(null);
-    window.addEventListener("click", close);
-    window.addEventListener("blur", close);
-    return () => {
-      window.removeEventListener("click", close);
-      window.removeEventListener("blur", close);
-    };
-  }, [menu]);
+  // Row context menu; built after the right-click's selection change renders.
+  const menu = useContextMenu(({ entry, side }: MenuTarget): Promise<MenuItems> | MenuItems => {
+    // bc5:file-ops — context-menu actions cover the whole selection.
+    const list = fops.menuEntries(entry);
+    const files = list.flatMap((e) => (e.isDir ? pairedFiles(e.children) : paths(e) ? [e] : []));
+    const pair = !entry.isDir ? paths(entry) : null;
+    const path = sidePath(entry, side);
+    const items = (tools: MenuItems): MenuItems => [
+      ...(pair
+        ? [
+            { label: "Open in Text Compare", onClick: () => onOpenFiles(...pair, engineOptions.rules) },
+            { label: "Open in Hex Compare", onClick: () => onOpenHex(...pair) },
+            ...tools, // bc5:converters — third-party comparison tools
+            SEPARATOR,
+          ]
+        : []),
+      // bc5:editor-patch — edit the clicked side's file on its own
+      onEditFile && !entry.isDir && entry[side] && { label: `Edit ${side} file`, onClick: () => onEditFile(path) },
+      SEPARATOR,
+      ...review.menuItems(entry), // araxis:text-review
+      SEPARATOR,
+      ...fops.menuItems(), // bc5:file-ops
+      SEPARATOR,
+      {
+        label: `Compare contents${list.length > 1 || entry.isDir ? ` (${files.length} files)` : ""}`,
+        disabled: !files.length || !!checking,
+        submenu: (["binary", "crc", "rules", "version"] as ContentMethod[]).map((m) => ({
+          label: m === "binary" ? "Binary" : m === "crc" ? "CRC-32" : m === "rules" ? "Rules-based" : "Exe/dll version",
+          onClick: () => recheck(files, m),
+        })),
+      },
+      SEPARATOR,
+      entry.ignored
+        ? { label: "Unignore", onClick: () => setIgnored(list, false) }
+        : { label: "Ignore (mark as same)", onClick: () => setIgnored(list, true) },
+      SEPARATOR,
+      { label: "Select Left Side for Compare", onClick: () => shell.selectLeft(path) },
+      shell.leftSelection &&
+        shell.leftSelection !== path && {
+          label: `Compare to “${basename(shell.leftSelection)}”`,
+          onClick: () => shell.compareToLeft(path),
+        },
+      SEPARATOR,
+      // Through the clipboard plugin: a native menu click is no user gesture for the WebView's clipboard API.
+      { label: "Copy relative path", onClick: () => void writeClipboardText(entry.relPath).catch(() => {}) },
+    ];
+    return pair
+      ? externalToolItems(pair[0], pair[1], setError, () => setToolsDialog(true)).then(items)
+      : items([]);
+  });
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -684,7 +711,7 @@ export function FolderCompare({
           const clicked: Side = ev.clientX < box.left + box.width / 2 ? "left" : "right";
           const side: Side = e[clicked] ? clicked : clicked === "left" ? "right" : "left";
           fops.onRowContext(e, side);
-          setMenu({ x: ev.clientX, y: ev.clientY, entry: e, side });
+          menu.open(ev, { entry: e, side });
         }}
         title={review.title(e.relPath, rowTitle(e)) /* araxis:text-review */}
       >
@@ -705,9 +732,6 @@ export function FolderCompare({
   const filterCount = activeFilterCount(cfg) + activeAlignCount(cfg);
   const primaryFilters = DISPLAY_FILTERS.filter((f) => f.primary);
   const moreFilters = DISPLAY_FILTERS.filter((f) => !f.primary);
-  // bc5:file-ops — context-menu actions cover the whole selection.
-  const menuList = menu ? fops.menuEntries(menu.entry) : [];
-  const menuFiles = menuList.flatMap((e) => (e.isDir ? pairedFiles(e.children) : paths(e) ? [e] : []));
   /** Status-bar stand-in for the old blocking overlay. */
   const liveStatus = phase && (
     <span className="live-progress" title={progress?.current}>
@@ -952,96 +976,7 @@ export function FolderCompare({
         )}
       </div>
 
-      {menu && (
-        <div className="ctx-menu" ref={menuRef} style={{ left: menu.x, top: menu.y }} onClick={(e) => e.stopPropagation()}>
-          {!menu.entry.isDir && paths(menu.entry) && (
-            <>
-              <button className="ctx-icon" onClick={() => (setMenu(null), onOpenFiles(...paths(menu.entry)!, engineOptions.rules))}>
-                <ToolIcon name="text" size={16} /> Open in Text Compare
-              </button>
-              <button className="ctx-icon" onClick={() => (setMenu(null), onOpenHex(...paths(menu.entry)!))}>
-                <ToolIcon name="hex" size={16} /> Open in Hex Compare
-              </button>
-              {/* bc5:converters — third-party comparison tools */}
-              <ExternalToolItems
-                left={paths(menu.entry)![0]}
-                right={paths(menu.entry)![1]}
-                onClose={() => setMenu(null)}
-                onError={setError}
-                onConfigure={() => (setMenu(null), setToolsDialog(true))}
-              />
-              <hr />
-            </>
-          )}
-          {/* bc5:editor-patch — edit the clicked side's file on its own */}
-          {onEditFile && !menu.entry.isDir && menu.entry[menu.side] && (
-            <>
-              <button className="ctx-icon" onClick={() => (setMenu(null), onEditFile(sidePath(menu.entry, menu.side)))}>
-                <FilePen size={16} /> Edit {menu.side} file
-              </button>
-              <hr />
-            </>
-          )}
-          {/* araxis:text-review */}
-          {review.menuItems(menu.entry, () => setMenu(null))}
-          <hr />
-          {/* bc5:file-ops */}
-          {fops.menuItems(() => setMenu(null))}
-          <hr />
-          <div className="ctx-label">
-            Compare contents{menuList.length > 1 || menu.entry.isDir ? ` (${menuFiles.length} files)` : ""}
-          </div>
-          {(["binary", "crc", "rules", "version"] as ContentMethod[]).map((m) => (
-            <button
-              key={m}
-              disabled={!menuFiles.length || !!checking}
-              onClick={() => {
-                setMenu(null);
-                recheck(menuFiles, m);
-              }}
-            >
-              {m === "binary" ? "Binary" : m === "crc" ? "CRC-32" : m === "rules" ? "Rules-based" : "Exe/dll version"}
-            </button>
-          ))}
-          <hr />
-          {menu.entry.ignored ? (
-            <button className="ctx-icon" onClick={() => (setMenu(null), setIgnored(menuList, false))}>
-              <EyeOff size={16} /> Unignore
-            </button>
-          ) : (
-            <button
-              className="ctx-icon"
-              title="Treat as same: hidden by the Differences filter and counted as same"
-              onClick={() => (setMenu(null), setIgnored(menuList, true))}
-            >
-              <EyeOff size={16} /> Ignore (mark as same)
-            </button>
-          )}
-          <hr />
-          <button className="ctx-icon" onClick={() => (setMenu(null), shell.selectLeft(sidePath(menu.entry, menu.side)))}>
-            <ToolIcon name="selectLeft" size={16} /> Select Left Side for Compare
-          </button>
-          {shell.leftSelection && shell.leftSelection !== sidePath(menu.entry, menu.side) && (
-            <button
-              className="ctx-icon"
-              title={`${shell.leftSelection}\n↔ ${sidePath(menu.entry, menu.side)}`}
-              onClick={() => (setMenu(null), shell.compareToLeft(sidePath(menu.entry, menu.side)))}
-            >
-              <ToolIcon name="compareTo" size={16} /> Compare to “{basename(shell.leftSelection)}”
-            </button>
-          )}
-          <hr />
-          <button
-            className="ctx-icon"
-            onClick={() => {
-              setMenu(null);
-              navigator.clipboard.writeText(menu.entry.relPath).catch(() => {});
-            }}
-          >
-            <ToolIcon name="copy" size={16} /> Copy relative path
-          </button>
-        </div>
-      )}
+      {menu.element}
 
       {/* bc5:reports-script — the report lists what the view shows (re-checks and ignore marks included). */}
       {reporting && result && (
