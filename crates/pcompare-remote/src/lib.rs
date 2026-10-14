@@ -7,6 +7,7 @@
 //! text and hex engines.
 
 mod containers; // bc5:archives
+mod github_fs;
 mod graph_fs;
 mod opendal_fs;
 pub mod oauth;
@@ -58,6 +59,7 @@ pub fn is_remote(path: &str) -> bool {
     parse_remote(path).is_some()
 }
 
+pub use github_fs::{decode_ref as decode_github_ref, encode_ref as encode_github_ref};
 pub use containers::{is_container_path, is_inside_container, read_only_inside}; // bc5:archives
 
 /// Errors from a remote byte stream: anything but a clear refusal means the
@@ -174,6 +176,9 @@ impl RemoteManager {
     /// "Test connection", which runs on unsaved form values.
     fn connect(&self, p: &ResolvedProfile, pin_host_key: bool) -> Result<Arc<dyn VfsWrite>> {
         let kind = p.profile.kind;
+        if kind == ProviderKind::Github {
+            return Ok(Arc::new(github_fs::GithubFs::connect(p)?));
+        }
         if kind == ProviderKind::Sftp {
             let prompter = self.prompter.lock().unwrap().clone();
             let conn = sftp_fs::SftpFs::connect(p, prompter)?;

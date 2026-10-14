@@ -20,6 +20,7 @@ pub enum ProviderKind {
     Dropbox,
     Gdrive,
     Sharepoint,
+    Github,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -419,6 +420,32 @@ pub fn catalog() -> Vec<ProviderSpec> {
                 GOOGLE_APP,
             ),
         },
+        ProviderSpec {
+            kind: ProviderKind::Github,
+            label: "GitHub",
+            description: "Repositories on GitHub or GitHub Enterprise, read-only. Branches and tags show up as folders, so you can compare one with another or with a local folder.",
+            fields: vec![
+                field("auth", "Sign in with", Select)
+                    .options(&["token", "github-cli", "anonymous"])
+                    .default("token"),
+                field("token", "Personal access token", Secret)
+                    .required()
+                    .show_if("auth", "token")
+                    .placeholder("github_pat_… or ghp_…")
+                    .help("A fine-grained token with read-only Contents access to the repositories, or a classic token with the repo scope. Create one at github.com/settings/tokens."),
+                field("owner", "Owner", Text)
+                    .placeholder("All owners you can see")
+                    .help("A user or organisation, to start browsing there."),
+                field("repo", "Repository", Text)
+                    .placeholder("All of the owner's repositories")
+                    .help("Pin one repository: paths then start at its branches, e.g. main/src."),
+                field("host", "Host", Text)
+                    .advanced()
+                    .placeholder("github.com")
+                    .help("Your GitHub Enterprise Server's host name."),
+            ],
+            oauth: None,
+        },
     ]
 }
 
@@ -447,6 +474,7 @@ mod tests {
             ProviderKind::Dropbox,
             ProviderKind::Gdrive,
             ProviderKind::Sharepoint,
+            ProviderKind::Github,
         ];
         let cat = catalog();
         assert_eq!(cat.len(), all.len());

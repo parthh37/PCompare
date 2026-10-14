@@ -221,6 +221,11 @@ pub struct EntryMeta {
     /// points to (empty if unreadable).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub link_target: Option<String>,
+    /// An id that is equal exactly when the bytes are (a git blob id), on
+    /// file systems that know one. Two files that both have one compare by
+    /// it without being read.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub content_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -818,6 +823,14 @@ fn compare_file_pair(
             },
             crc: None,
         });
+    }
+    if let (Some(a), Some(b)) = (&l.content_id, &r.content_id) {
+        // Equal ids prove equal bytes. Different ones prove different bytes,
+        // which only a rules or version compare may still call similar/same.
+        if a == b || !matches!(opts.content, ContentMethod::Rules | ContentMethod::Version) {
+            let status = if a == b { EntryStatus::Same } else { EntryStatus::Different };
+            return Ok(ContentVerdict { status, crc: None });
+        }
     }
     let quick_same = quick_tests_pass(l, r, opts);
     let quick = ContentVerdict {
@@ -2226,5 +2239,54 @@ mod feature_tests {
             (o.large_file_threshold, o.large_file_method),
             (Some(10), LargeFileMethod::SizeTimestamp)
         );
+    }
+}
+
+#[cfg(test)]
+mod content_id_tests {
+    use super::*;
+    use crate::vfs::VfsEntry;
+    use std::io::Read;
+
+    /// A flat folder whose files carry content ids and can't be read.
+    struct IdFs(Vec<(&'static str, &'static str, i64)>);
+
+    impl Vfs for IdFs {
+        fn read_dir(&self, _dir: &str) -> Result<Vec<VfsEntry>> {
+            Ok(self
+                .0
+                .iter()
+                .map(|(name, id, modified_ms)| VfsEntry {
+                    name: (*name).into(),
+                    hidden: false,
+                    meta: EntryMeta {
+                        size: 3,
+                        modified_ms: Some(*modified_ms),
+                        content_id: Some((*id).into()),
+                        ..Default::default()
+                    },
+                })
+                .collect())
+        }
+        fn open(&self, path: &str) -> Result<Box<dyn Read + Send>> {
+            panic!("{path} was read; content ids should have decided");
+        }
+        fn join(&self, dir: &str, name: &str) -> String {
+            format!("{dir}/{name}")
+        }
+    }
+
+    #[test]
+    fn content_ids_decide_without_reading_or_timestamps() {
+        // Same size everywhere and an hour apart, as two branches' commits are.
+        let left = IdFs(vec![("same.txt", "a1", 0), ("changed.txt", "b1", 0)]);
+        let right = IdFs(vec![("same.txt", "a1", 3_600_000), ("changed.txt", "b2", 3_600_000)]);
+        for content in [ContentMethod::Off, ContentMethod::Binary, ContentMethod::Crc] {
+            let opts = FolderCompareOptions { content, ..Default::default() };
+            let res = compare_folders_with(&left, "", &right, "", &opts).unwrap();
+            let status = |n: &str| res.entries.iter().find(|e| e.name == n).unwrap().status;
+            assert_eq!(status("same.txt"), EntryStatus::Same, "{content:?}");
+            assert_eq!(status("changed.txt"), EntryStatus::Different, "{content:?}");
+        }
     }
 }

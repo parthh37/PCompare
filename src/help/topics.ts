@@ -296,13 +296,15 @@ Rows are matched by primary key (or a unique index, or key columns you choose) w
     title: "Connection profiles",
     kinds: ["profiles"],
     body: `
-Profiles connect remote storage: Amazon S3 and compatibles, Azure Blob, Google Cloud Storage, Backblaze B2, FTP/FTPS, SFTP, WebDAV, OneDrive, SharePoint, Dropbox and Google Drive. Secrets are stored in the OS keychain.
+Profiles connect remote storage: Amazon S3 and compatibles, Azure Blob, Google Cloud Storage, Backblaze B2, FTP/FTPS, SFTP, WebDAV, OneDrive, SharePoint, Dropbox, Google Drive and GitHub. Secrets are stored in the OS keychain.
 
 Use \`remote://<profile>/path\` (or the globe button next to a path) on either side of any comparison. **Test** checks a profile before saving.
 
 **OneDrive, SharePoint, Dropbox, Google Drive**: click **Sign in** and approve PCompare in your browser. To go through an app registration of your own instead (some organisations require it), open **Advanced** and enter its Client ID. Builds without a built-in app always need one — follow the link in the form.
 
 **SharePoint**: paste the site's address from the browser (e.g. \`https://contoso.sharepoint.com/sites/Marketing\`); a link into a library also picks that library. Leave **Library** empty for the site's default *Documents* library. Deletes go to the site's recycle bin. SharePoint adds metadata to Office files it stores, so a .docx synced there can differ in size from the original even though nothing was edited.
+
+**GitHub** (read-only): sign in with a personal access token, with the GitHub CLI's login (run \`gh auth login\` once), or not at all for public repositories (60 requests an hour). Paths are \`remote://<profile>/<owner>/<repository>/<branch or tag>/path\`. The remote browser walks owners → repositories → branches and tags, so comparing two branches is picking one on each side; a commit id works in place of a branch name. A branch name with a slash is written with \`%2F\` (\`feature%2Flogin\`). Set **Owner** and **Repository** in the profile to start paths at that repository's branches (\`remote://<profile>/main/src\`). Every file shows the time of its branch's latest commit. Between two GitHub sides, files compare by their Git ids — exact and without downloading anything, whatever the timestamps say; against a local folder, turn on a content comparison, since the commit time won't match the files' own times. Files stored with Git LFS compare as their pointer files.
 `,
   },
   // automation:ui
