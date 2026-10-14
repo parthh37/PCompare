@@ -8,6 +8,7 @@ import {
   Earth,
   Flame,
   FolderOpen,
+  GitBranch,
   Globe,
   Hexagon,
   Library,
@@ -37,6 +38,9 @@ const OPTION_LABELS: Record<string, string> = {
   "keyboard-interactive": "Keyboard-interactive (password, one-time codes)",
   key: "Private key file",
   agent: "SSH agent",
+  token: "Personal access token",
+  "github-cli": "GitHub CLI login (gh auth login)",
+  anonymous: "Nothing (public repositories only)",
 };
 
 /** Generic glyphs tinted with each vendor's brand colour (no trademarked logos). */
@@ -52,6 +56,7 @@ const PROVIDER_ICON: Record<ProviderKind, [LucideIcon, string]> = {
   dropbox: [Box, "#0061ff"],
   gdrive: [Triangle, "#34a853"],
   sharepoint: [Library, "#038387"],
+  github: [GitBranch, "#8b949e"],
 };
 
 /** Whose account the sign-in button asks for. */
@@ -340,7 +345,7 @@ export function Profiles() {
             </span>
           </button>
         ))}
-        {!profiles.length && <p className="muted pad">No profiles yet. Click “New” to connect S3, SFTP, OneDrive, SharePoint and more.</p>}
+        {!profiles.length && <p className="muted pad">No profiles yet. Click “New” to connect S3, SFTP, OneDrive, SharePoint, GitHub and more.</p>}
       </aside>
 
       <section className="profile-edit">
@@ -382,8 +387,8 @@ export function Profiles() {
               {basicFields.map(renderField)}
               {advancedFields.length > 0 && (
                 <details className="advanced-fields" open={ownApp || undefined}>
-                  <summary className="muted">Advanced: use your own app registration</summary>
-                  <p className="muted">{appSetup}</p>
+                  <summary className="muted">{spec.oauth ? "Advanced: use your own app registration" : "Advanced"}</summary>
+                  {spec.oauth && <p className="muted">{appSetup}</p>}
                   {advancedFields.map(renderField)}
                 </details>
               )}
