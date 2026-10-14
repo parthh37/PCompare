@@ -46,6 +46,16 @@ fn live_github() {
     eprintln!("Hello-World master vs test: {:?}", res.stats);
     assert!(res.stats.same + res.stats.different + res.stats.left_only + res.stats.right_only > 0);
 
+    // Two releases with the default (metadata-only) options: git blob ids
+    // decide, so unchanged files are Same despite different commit times.
+    let tauri = format!("{base}/tauri-apps/tauri");
+    let started = std::time::Instant::now();
+    let (lfs, l) = m.target(&format!("{tauri}/tauri-v2.0.0")).unwrap();
+    let (rfs, r) = m.target(&format!("{tauri}/tauri-v2.0.1")).unwrap();
+    let res = compare_folders_with(&*lfs, &l, &*rfs, &r, &FolderCompareOptions::default()).unwrap();
+    eprintln!("tauri v2.0.0 vs v2.0.1 in {:?}: {:?}", started.elapsed(), res.stats);
+    assert!(res.stats.same > 500 && res.stats.different > 0, "{:?}", res.stats);
+
     let readme = m.local_copy(&format!("{hello}/master/README"), true).unwrap();
     assert!(std::fs::read_to_string(readme).unwrap().contains("Hello World"));
 

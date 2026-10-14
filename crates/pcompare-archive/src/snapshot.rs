@@ -318,6 +318,7 @@ impl SnapshotFs {
                     attributes: e.attributes,
                     mode: e.mode,
                     link_target: e.link_target.clone(),
+                    content_id: None,
                 };
                 tree.insert(&path, meta, e.crc, Loc::None);
                 if e.dir {
