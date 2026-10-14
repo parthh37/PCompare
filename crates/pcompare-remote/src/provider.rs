@@ -122,6 +122,8 @@ pub struct ProviderSpec {
 
 /// Secret key under which an OAuth refresh token is stored.
 pub const REFRESH_TOKEN: &str = "refresh_token";
+/// Secret key of an access token pasted instead of signing in.
+pub const ACCESS_TOKEN: &str = "access_token";
 
 const fn field(key: &'static str, label: &'static str, kind: FieldKind) -> FieldSpec {
     FieldSpec {
@@ -395,8 +397,19 @@ pub fn catalog() -> Vec<ProviderSpec> {
         ProviderSpec {
             kind: ProviderKind::Dropbox,
             label: "Dropbox",
-            description: "Dropbox via Dropbox sign-in.",
-            fields: oauth_fields(false, DROPBOX_APP),
+            description: "Dropbox via Dropbox sign-in, or an access token you paste.",
+            fields: {
+                let mut v = oauth_client_fields(false, DROPBOX_APP);
+                // Signing in needs a Client ID; a pasted token doesn't.
+                v[0].required = false;
+                v.push(
+                    field(ACCESS_TOKEN, "Access token", Secret)
+                        .placeholder("sl.… — instead of signing in")
+                        .help("Paste a token generated on your app's page in the Dropbox App Console (Settings → Generated access token). Used instead of the sign-in while set. Generated tokens expire after about 4 hours; signing in doesn't."),
+                );
+                v.push(root());
+                v
+            },
             oauth: oauth(
                 "https://www.dropbox.com/oauth2/authorize",
                 "https://api.dropboxapi.com/oauth2/token",
@@ -500,5 +513,13 @@ mod tests {
         assert!(own.iter().all(|f| f.required && !f.advanced));
         let shipped = oauth_client_fields(true, app);
         assert!(shipped.iter().all(|f| !f.required && f.advanced));
+    }
+
+    #[test]
+    fn dropbox_takes_a_pasted_token_without_a_client_id() {
+        let dropbox = spec(ProviderKind::Dropbox);
+        let token = dropbox.fields.iter().find(|f| f.key == ACCESS_TOKEN).unwrap();
+        assert_eq!(token.kind, FieldKind::Secret, "kept in the keychain");
+        assert!(dropbox.fields.iter().all(|f| !f.required));
     }
 }
