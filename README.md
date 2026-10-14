@@ -70,10 +70,17 @@ npm run tauri build        # installers for the current OS (needs the updater ke
 
 ## Releasing
 
-Every pushed `v*` tag runs [`.github/workflows/release.yml`](.github/workflows/release.yml), which builds
-**Windows** (NSIS `.exe` + `.msi`) and **macOS** (Apple Silicon and Intel `.dmg`) installers, signs the update
-packages, and publishes a GitHub release with `latest.json` — the feed installed copies poll for updates.
-The release stays a draft until every platform has built.
+[`.github/workflows/release.yml`](.github/workflows/release.yml) builds **Windows** (NSIS `.exe` + `.msi`) and
+**macOS** (Apple Silicon and Intel `.dmg`) installers, signs the update packages, and publishes a GitHub release
+with `latest.json` — the feed installed copies poll for updates. The release stays a draft until every
+platform has built (~20 min).
+
+**From the browser (easiest):** GitHub → **Actions** → **Release** → **Run workflow** → pick a bump
+(`patch` / `minor` / `major`, or `as-is` to release the version already on `main`; the *Exact version* box takes
+e.g. `1.0.0-beta.1`) → **Run workflow**. It bumps the version files, commits `Release vX.Y.Z` to `main`, tags
+it and builds. Works from the GitHub mobile app too. From a terminal: `gh workflow run release.yml -f bump=minor`.
+
+**By pushing a tag** (also works from any git GUI — create tag `vX.Y.Z` on the commit, push it):
 
 ```bash
 npm run version:bump 0.2.0         # package.json, Cargo.toml, tauri.conf.json stay in sync
@@ -81,8 +88,8 @@ cargo check                        # refresh Cargo.lock
 git commit -am "Release v0.2.0" && git tag v0.2.0 && git push --follow-tags
 ```
 
-The workflow refuses to run if the tag doesn't match the app version — otherwise the updater would keep
-offering the same release.
+Either way the workflow refuses to release a tag that doesn't match the app version — otherwise the updater
+would keep offering the same release. `node scripts/version.mjs next minor` previews what a bump would produce.
 
 **One-time setup**
 
