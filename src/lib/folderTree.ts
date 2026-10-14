@@ -1,7 +1,16 @@
 // Pure helpers over the folder-compare result tree: display filters, name
 // search, flattening, "ignore" marks, and re-tallying after per-file content
 // re-checks.
-import type { ContentVerdict, EntryStatus, FolderEntry, FolderLevel, FolderStats } from "./api";
+import type {
+  ContentVerdict,
+  EntryStatus,
+  FolderEntry,
+  FolderLevel,
+  FolderStats,
+  Side,
+  StatusCounts,
+  StatusDetail,
+} from "./api";
 
 export type DisplayFilter =
   | "all"
@@ -53,13 +62,142 @@ export function withoutFiltered(entries: FolderEntry[]): FolderEntry[] {
 /** The status filters and totals go by: entries marked "ignore" count as same. */
 export const effectiveStatus = (e: FolderEntry): EntryStatus => (e.ignored ? "same" : e.status);
 
+// ---- Status detail and folder counts (mirrors pcompare-core's folder/status.rs) ----
+
+export const STATUS_DETAILS: StatusDetail[] = [
+  "unknown",
+  "same",
+  "sameDiff",
+  "similar",
+  "leftNewer",
+  "rightNewer",
+  "different",
+  "leftOnly",
+  "rightOnly",
+  "typeMismatch",
+  "error",
+];
+
+/** Details a folder's status treats as same (`StatusDetail::is_same`). */
+const SAME_LIKE: ReadonlySet<StatusDetail> = new Set(["unknown", "same", "sameDiff"]);
+
+/**
+ * A row's {@link StatusDetail} as filters and colours use it: ignored rows
+ * are same, streamed pairs unknown, and results saved before details
+ * existed derive one from status and newer side.
+ */
+export function detailOf(e: FolderEntry): StatusDetail {
+  if (e.ignored) return "same";
+  if (e.pending) return "unknown";
+  if (e.detail) return e.detail;
+  if (e.status === "different" && !e.isDir && e.newer) return e.newer === "left" ? "leftNewer" : "rightNewer";
+  return e.status;
+}
+
+/** A paired folder whose status comes from its counts. */
+const isDerived = (e: FolderEntry) => e.isDir && !!e.left && !!e.right && !!e.counts;
+
+/** What `e` adds to its parent's counts: its own detail (unless derived) and everything below it. */
+export function contribution(e: FolderEntry): StatusCounts {
+  // Rows the filters leave out count nowhere, like everything below them.
+  if (filteredOut(e)) return {};
+  const c: StatusCounts = { ...e.counts };
+  if (!isDerived(e)) {
+    const d = detailOf(e);
+    c[d] = (c[d] ?? 0) + 1;
+  }
+  return c;
+}
+
+/** `a + b - minus`, dropping zeros like the engine's JSON does. */
+function combine(a: StatusCounts, b: StatusCounts, minus: StatusCounts = {}): StatusCounts {
+  const out: StatusCounts = {};
+  for (const d of STATUS_DETAILS) {
+    const n = Math.max(0, (a[d] ?? 0) - (minus[d] ?? 0)) + (b[d] ?? 0);
+    if (n) out[d] = n;
+  }
+  return out;
+}
+
+/** The counts of a folder with these children. */
+export const aggregate = (children: FolderEntry[]): StatusCounts =>
+  children.reduce<StatusCounts>((c, e) => combine(c, contribution(e)), {});
+
+/** The side every newer file below is on; null when none or both sides have some. */
+export function countsNewer(c: StatusCounts | undefined): Side | null {
+  const [l, r] = [(c?.leftNewer ?? 0) > 0, (c?.rightNewer ?? 0) > 0];
+  return l && !r ? "left" : r && !l ? "right" : null;
+}
+
+/** The status of a paired folder with these counts (`StatusCounts::folder_status`). */
+export function folderStatusOf(c: StatusCounts): EntryStatus {
+  let same = 0;
+  let total = 0;
+  for (const d of STATUS_DETAILS) {
+    total += c[d] ?? 0;
+    if (SAME_LIKE.has(d)) same += c[d] ?? 0;
+  }
+  if (total === same) return "same";
+  return total === same + (c.similar ?? 0) ? "similar" : "different";
+}
+
+/** Whether the row has `d`, or (a folder) holds a row that does. */
+function hasDetail(e: FolderEntry, d: StatusDetail): boolean {
+  return detailOf(e) === d || (e.isDir && !e.ignored && (e.counts?.[d] ?? 0) > 0);
+}
+
+/**
+ * Mirrors `replace_entry` in pcompare-core: swaps the row at `relPath`
+ * (with everything below it) for `next`, removes it (`null`), or inserts it
+ * into its parent folder, and updates each folder above it from the change
+ * alone: no rescan, no walk over siblings. Returns the new tree (unchanged
+ * rows shared), or null when the path's parent folder isn't in it.
+ */
+export function replaceEntry(entries: FolderEntry[], relPath: string, next: FolderEntry | null): FolderEntry[] | null {
+  type Change = { list: FolderEntry[]; before: StatusCounts; after: StatusCounts };
+  const go = (list: FolderEntry[], listRel: string): Change | null => {
+    const i = list.findIndex((e) => e.relPath === relPath);
+    if (i >= 0) {
+      const out = [...list];
+      const before = contribution(list[i]);
+      if (next) out[i] = next;
+      else out.splice(i, 1);
+      return { list: out, before, after: next ? contribution(next) : {} };
+    }
+    const j = list.findIndex((e) => e.isDir && relPath.startsWith(`${e.relPath}/`));
+    if (j >= 0) {
+      const dir = list[j];
+      const inner = go(dir.children, dir.relPath);
+      if (!inner) return null;
+      const counts = dir.counts ? combine(dir.counts, inner.after, inner.before) : aggregate(inner.list);
+      let moved: FolderEntry = { ...dir, children: inner.list, counts };
+      if (isDerived(moved) && !moved.error) {
+        const status = folderStatusOf(counts);
+        moved = { ...moved, status, detail: status };
+      }
+      const out = [...list];
+      out[j] = moved;
+      return { list: out, before: contribution(dir), after: contribution(moved) };
+    }
+    const parent = relPath.includes("/") ? relPath.slice(0, relPath.lastIndexOf("/")) : "";
+    if (!next || parent !== listRel) return null;
+    // The engine's order: folders first, then by case-folded name.
+    const key = (e: FolderEntry) => `${e.isDir ? 0 : 1}${e.name.toLowerCase()}`;
+    const at = list.findIndex((e) => key(e) > key(next));
+    const out = [...list];
+    out.splice(at < 0 ? out.length : at, 0, next);
+    return { list: out, before: {}, after: contribution(next) };
+  };
+  return go(entries, "")?.list ?? null;
+}
+
 /**
  * "Similar" files (only unimportant differences under rules-based compare)
  * and ignored ones count as same, so "Differences" shows exactly what needs
  * attention.
  */
 export function matchesFilter(entry: FolderEntry, f: DisplayFilter): boolean {
-  const e = entry.ignored ? { status: "same" as EntryStatus, newer: null } : entry;
+  const e = { status: effectiveStatus(entry) };
   switch (f) {
     case "all":
       return true;
@@ -75,10 +213,11 @@ export function matchesFilter(entry: FolderEntry, f: DisplayFilter): boolean {
       return e.status === "leftOnly";
     case "rightOrphans":
       return e.status === "rightOnly";
+    // Files by their own detail; folders when they hold such a file.
     case "leftNewer":
-      return e.newer === "left";
+      return hasDetail(entry, "leftNewer");
     case "rightNewer":
-      return e.newer === "right";
+      return hasDetail(entry, "rightNewer");
   }
 }
 
@@ -164,19 +303,46 @@ export function applyVerdicts(
       let next = e;
       if (e.isDir) {
         const children = walk(e.children, ignore);
+        // Folders have counts only once their contents are known.
+        const counts = e.counts && aggregate(children);
+        next = { ...e, children, counts };
         const keep = !e.children.length || e.status === "leftOnly" || e.status === "rightOnly" || e.status === "error";
-        next = { ...e, children, status: keep ? e.status : folderStatus(children) };
+        if (!keep) {
+          const status = counts ? folderStatusOf(counts) : folderStatus(children);
+          next = { ...next, status, detail: e.detail && status };
+        }
       } else {
         const v = verdicts.get(e.relPath);
-        if (v) next = { ...e, status: v.status, crc: v.crc ?? e.crc, contentChecked: v.method };
+        if (v) next = { ...e, status: v.status, crc: v.crc ?? e.crc, contentChecked: v.method, ...recheckedDetail(e, v.status) };
       }
       return ignore ? { ...next, ignored: true } : next;
     });
   return walk(entries, false);
 }
 
+/**
+ * A re-checked file's detail and newer side, as the engine would set them
+ * (`StatusDetail::for_file`): the engine only records a newer side when
+ * the timestamps differ, and a `sameDiff` verdict means a quick test did.
+ */
+function recheckedDetail(e: FolderEntry, status: EntryStatus): Pick<FolderEntry, "detail" | "newer"> {
+  const stampsMayDiffer = !!e.newer || e.detail === "sameDiff";
+  const quickDiffers = stampsMayDiffer || e.left?.size !== e.right?.size;
+  if (status === "same") return { detail: quickDiffers ? "sameDiff" : "same", newer: null };
+  const [l, r] = [e.left?.modifiedMs, e.right?.modifiedMs];
+  const newer = e.newer ?? (stampsMayDiffer && l != null && r != null && l !== r ? (l > r ? "left" : "right") : null);
+  if (status === "different" && newer) return { detail: newer === "left" ? "leftNewer" : "rightNewer", newer };
+  return { detail: status, newer };
+}
+
 /** Mirrors `tally` in pcompare-core so stats stay right after re-checks and ignore marks. */
 export function tally(entries: FolderEntry[], stats: FolderStats = emptyStats()): FolderStats {
+  countFiles(entries, stats);
+  stats.counts = aggregate(entries);
+  return stats;
+}
+
+function countFiles(entries: FolderEntry[], stats: FolderStats) {
   for (const e of entries) {
     if (e.pending && !e.isDir) continue; // not compared yet
     if (filteredOut(e)) {
@@ -206,9 +372,8 @@ export function tally(entries: FolderEntry[], stats: FolderStats = emptyStats())
           break;
       }
     } else if (effectiveStatus(e) === "error") stats.errors++;
-    tally(e.children, stats);
+    countFiles(e.children, stats);
   }
-  return stats;
 }
 
 const emptyStats = (): FolderStats => ({ same: 0, similar: 0, different: 0, leftOnly: 0, rightOnly: 0, errors: 0 });
