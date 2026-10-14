@@ -18,6 +18,11 @@ name: Release
 # Required secrets:  TAURI_SIGNING_PRIVATE_KEY (+ TAURI_SIGNING_PRIVATE_KEY_PASSWORD if set)
 # Optional secrets:  APPLE_CERTIFICATE, APPLE_CERTIFICATE_PASSWORD, APPLE_SIGNING_IDENTITY,
 #                    APPLE_ID, APPLE_PASSWORD, APPLE_TEAM_ID  (Developer ID signing + notarization)
+#                    PCOMPARE_GOOGLE_CLIENT_SECRET (with the variable below)
+# Optional variables (Settings → Secrets and variables → Actions → Variables): PCOMPARE_MICROSOFT_CLIENT_ID,
+#   PCOMPARE_GOOGLE_CLIENT_ID, PCOMPARE_DROPBOX_CLIENT_ID — PCompare's own OAuth apps, compiled in so users
+#   just click "Sign in" for OneDrive/SharePoint, Google Drive and Dropbox. Without them each user
+#   registers an app of their own. See README → Cloud sign-in.
 on:
   push:
     tags: ["v*"]
@@ -184,6 +189,11 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          # Read at compile time by pcompare-remote (provider.rs); empty = not built in.
+          PCOMPARE_MICROSOFT_CLIENT_ID: ${{ vars.PCOMPARE_MICROSOFT_CLIENT_ID }}
+          PCOMPARE_GOOGLE_CLIENT_ID: ${{ vars.PCOMPARE_GOOGLE_CLIENT_ID }}
+          PCOMPARE_GOOGLE_CLIENT_SECRET: ${{ secrets.PCOMPARE_GOOGLE_CLIENT_SECRET }}
+          PCOMPARE_DROPBOX_CLIENT_ID: ${{ vars.PCOMPARE_DROPBOX_CLIENT_ID }}
         with:
           releaseId: ${{ needs.create-release.outputs.release_id }}
           args: ${{ matrix.args }}

@@ -19,6 +19,7 @@ pub enum ProviderKind {
     Onedrive,
     Dropbox,
     Gdrive,
+    Sharepoint,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -48,6 +49,8 @@ pub struct FieldSpec {
     /// Only show this field when another field has a given value: `(key, value)`;
     /// `value` may list alternatives separated by `|`.
     pub show_if: Option<(&'static str, &'static str)>,
+    /// Tucked away under "Advanced" in the form.
+    pub advanced: bool,
 }
 
 /// OAuth 2.0 authorization-code + PKCE endpoints for "Sign in" providers.
@@ -61,7 +64,50 @@ pub struct OAuthSpec {
     pub extra_auth_params: &'static [(&'static str, &'static str)],
     /// Where the user registers their own app to obtain a client id.
     pub console_url: &'static str,
+    /// PCompare's own app registration, compiled into release builds. With
+    /// one, users just sign in; without (dev builds), each user registers
+    /// their own app and enters its Client ID.
+    #[serde(skip)]
+    pub builtin: Option<BuiltinClient>,
+    /// Tells the UI a Client ID is optional.
+    pub has_builtin_client: bool,
 }
+
+/// An OAuth client shipped inside the app. For desktop apps neither half is
+/// confidential (RFC 8252 §8.5; Google says the same of its "Desktop app"
+/// secrets) — they identify the app, PKCE protects the sign-in.
+#[derive(Debug, Clone, Copy)]
+pub struct BuiltinClient {
+    pub id: &'static str,
+    pub secret: Option<&'static str>,
+}
+
+/// Release builds set these from repository variables (see release.yml);
+/// CI passes unset ones as empty strings, which count as absent.
+const fn builtin(id: Option<&'static str>, secret: Option<&'static str>, needs_secret: bool) -> Option<BuiltinClient> {
+    let secret = match secret {
+        Some(s) if !s.is_empty() => Some(s),
+        _ => None,
+    };
+    match id {
+        Some(id) if !id.is_empty() && (secret.is_some() || !needs_secret) => Some(BuiltinClient { id, secret }),
+        _ => None,
+    }
+}
+
+/// One Microsoft Entra app serves OneDrive and SharePoint.
+const MICROSOFT_APP: Option<BuiltinClient> = builtin(option_env!("PCOMPARE_MICROSOFT_CLIENT_ID"), None, false);
+const DROPBOX_APP: Option<BuiltinClient> = builtin(option_env!("PCOMPARE_DROPBOX_CLIENT_ID"), None, false);
+/// Google's token endpoint wants the secret even with PKCE.
+const GOOGLE_APP: Option<BuiltinClient> = builtin(
+    option_env!("PCOMPARE_GOOGLE_CLIENT_ID"),
+    option_env!("PCOMPARE_GOOGLE_CLIENT_SECRET"),
+    true,
+);
+
+const MICROSOFT_CONSOLE: &str = "https://entra.microsoft.com/#view/Microsoft_AAD_RegisteredApps/ApplicationsListBlade";
+const MICROSOFT_AUTH: &str = "https://login.microsoftonline.com/common/oauth2/v2.0/authorize";
+const MICROSOFT_TOKEN: &str = "https://login.microsoftonline.com/common/oauth2/v2.0/token";
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -87,6 +133,7 @@ const fn field(key: &'static str, label: &'static str, kind: FieldKind) -> Field
         default: "",
         options: &[],
         show_if: None,
+        advanced: false,
     }
 }
 
@@ -115,6 +162,10 @@ impl FieldSpec {
         self.show_if = Some((key, value));
         self
     }
+    const fn advanced(mut self) -> Self {
+        self.advanced = true;
+        self
+    }
 }
 
 use FieldKind::*;
@@ -135,15 +186,49 @@ fn root() -> FieldSpec {
         .help("Paths are relative to this folder.")
 }
 
-fn oauth_client_fields(with_secret: bool) -> Vec<FieldSpec> {
-    let mut v = vec![field("client_id", "Client ID", Text)
-        .required()
-        .help("From your app registration (see the link below).")];
+/// Client ID (and secret) fields for a sign-in provider: required when the
+/// build has no app of its own, otherwise an optional override.
+fn oauth_client_fields(with_secret: bool, builtin: Option<BuiltinClient>) -> Vec<FieldSpec> {
+    let own = builtin.is_none();
+    let mut id = field("client_id", "Client ID", Text);
+    id = if own {
+        id.required().help("From your app registration (see the link below).")
+    } else {
+        id.advanced()
+            .placeholder("PCompare's app")
+            .help("Only to sign in through an app registration of your own.")
+    };
+    let mut v = vec![id];
     if with_secret {
-        v.push(field("client_secret", "Client secret", Secret).required());
+        let secret = field("client_secret", "Client secret", Secret);
+        v.push(if own { secret.required() } else { secret.advanced() });
     }
+    v
+}
+
+fn oauth_fields(with_secret: bool, builtin: Option<BuiltinClient>) -> Vec<FieldSpec> {
+    let mut v = oauth_client_fields(with_secret, builtin);
     v.push(root());
     v
+}
+
+const fn oauth(
+    auth_url: &'static str,
+    token_url: &'static str,
+    scopes: &'static str,
+    extra_auth_params: &'static [(&'static str, &'static str)],
+    console_url: &'static str,
+    builtin: Option<BuiltinClient>,
+) -> Option<OAuthSpec> {
+    Some(OAuthSpec {
+        auth_url,
+        token_url,
+        scopes,
+        extra_auth_params,
+        console_url,
+        builtin,
+        has_builtin_client: builtin.is_some(),
+    })
 }
 
 pub fn catalog() -> Vec<ProviderSpec> {
@@ -268,40 +353,71 @@ pub fn catalog() -> Vec<ProviderSpec> {
             kind: ProviderKind::Onedrive,
             label: "Microsoft OneDrive",
             description: "Personal or work OneDrive via Microsoft sign-in.",
-            fields: oauth_client_fields(false),
-            oauth: Some(OAuthSpec {
-                auth_url: "https://login.microsoftonline.com/common/oauth2/v2.0/authorize",
-                token_url: "https://login.microsoftonline.com/common/oauth2/v2.0/token",
-                scopes: "offline_access Files.ReadWrite",
-                extra_auth_params: &[],
-                console_url: "https://entra.microsoft.com/#view/Microsoft_AAD_RegisteredApps/ApplicationsListBlade",
-            }),
+            fields: oauth_fields(false, MICROSOFT_APP),
+            oauth: oauth(
+                MICROSOFT_AUTH,
+                MICROSOFT_TOKEN,
+                "offline_access Files.ReadWrite",
+                &[],
+                MICROSOFT_CONSOLE,
+                MICROSOFT_APP,
+            ),
+        },
+        ProviderSpec {
+            kind: ProviderKind::Sharepoint,
+            label: "Microsoft SharePoint",
+            description: "A document library on a SharePoint Online or Microsoft Teams site, via Microsoft sign-in.",
+            fields: {
+                let mut v = vec![
+                    field("site_url", "Site", Text)
+                        .required()
+                        .placeholder("https://contoso.sharepoint.com/sites/Marketing")
+                        .help("Paste the site's address from the browser — a link into a library works too."),
+                    field("library", "Library", Text)
+                        .placeholder("Documents")
+                        .help("The document library's name. Leave empty for the site's default library."),
+                ];
+                v.extend(oauth_fields(false, MICROSOFT_APP));
+                v
+            },
+            // Sites.Read.All finds the site by its address; neither scope
+            // needs a tenant admin's consent.
+            oauth: oauth(
+                MICROSOFT_AUTH,
+                MICROSOFT_TOKEN,
+                "offline_access Sites.Read.All Files.ReadWrite.All",
+                &[],
+                MICROSOFT_CONSOLE,
+                MICROSOFT_APP,
+            ),
         },
         ProviderSpec {
             kind: ProviderKind::Dropbox,
             label: "Dropbox",
             description: "Dropbox via Dropbox sign-in.",
-            fields: oauth_client_fields(false),
-            oauth: Some(OAuthSpec {
-                auth_url: "https://www.dropbox.com/oauth2/authorize",
-                token_url: "https://api.dropboxapi.com/oauth2/token",
-                scopes: "files.metadata.read files.content.read files.content.write",
-                extra_auth_params: &[("token_access_type", "offline")],
-                console_url: "https://www.dropbox.com/developers/apps",
-            }),
+            fields: oauth_fields(false, DROPBOX_APP),
+            oauth: oauth(
+                "https://www.dropbox.com/oauth2/authorize",
+                "https://api.dropboxapi.com/oauth2/token",
+                "files.metadata.read files.content.read files.content.write",
+                &[("token_access_type", "offline")],
+                "https://www.dropbox.com/developers/apps",
+                DROPBOX_APP,
+            ),
         },
         ProviderSpec {
             kind: ProviderKind::Gdrive,
             label: "Google Drive",
             description: "Google Drive via Google sign-in.",
-            fields: oauth_client_fields(true),
-            oauth: Some(OAuthSpec {
-                auth_url: "https://accounts.google.com/o/oauth2/v2/auth",
-                token_url: "https://oauth2.googleapis.com/token",
-                scopes: "https://www.googleapis.com/auth/drive",
-                extra_auth_params: &[("access_type", "offline"), ("prompt", "consent")],
-                console_url: "https://console.cloud.google.com/apis/credentials",
-            }),
+            fields: oauth_fields(true, GOOGLE_APP),
+            oauth: oauth(
+                "https://accounts.google.com/o/oauth2/v2/auth",
+                "https://oauth2.googleapis.com/token",
+                "https://www.googleapis.com/auth/drive",
+                &[("access_type", "offline"), ("prompt", "consent")],
+                "https://console.cloud.google.com/apis/credentials",
+                GOOGLE_APP,
+            ),
         },
     ]
 }
@@ -330,11 +446,31 @@ mod tests {
             ProviderKind::Onedrive,
             ProviderKind::Dropbox,
             ProviderKind::Gdrive,
+            ProviderKind::Sharepoint,
         ];
         let cat = catalog();
         assert_eq!(cat.len(), all.len());
         for k in all {
             assert_eq!(cat.iter().filter(|p| p.kind == k).count(), 1, "{k:?}");
         }
+    }
+
+    #[test]
+    fn builtin_clients_need_every_part() {
+        assert!(builtin(None, None, false).is_none());
+        assert!(builtin(Some(""), None, false).is_none(), "CI passes unset variables as empty");
+        assert!(builtin(Some("id"), Some(""), true).is_none());
+        let c = builtin(Some("id"), Some(""), false).unwrap();
+        assert_eq!((c.id, c.secret), ("id", None));
+        assert_eq!(builtin(Some("id"), Some("s"), true).unwrap().secret, Some("s"));
+    }
+
+    #[test]
+    fn client_id_is_required_only_without_a_builtin_app() {
+        let app = Some(BuiltinClient { id: "x", secret: None });
+        let own = oauth_client_fields(true, None);
+        assert!(own.iter().all(|f| f.required && !f.advanced));
+        let shipped = oauth_client_fields(true, app);
+        assert!(shipped.iter().all(|f| !f.required && f.advanced));
     }
 }

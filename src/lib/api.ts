@@ -412,7 +412,8 @@ export type ProviderKind =
   | "webdav"
   | "onedrive"
   | "dropbox"
-  | "gdrive";
+  | "gdrive"
+  | "sharepoint";
 
 export type FieldKind = "text" | "secret" | "number" | "checkbox" | "select" | "file";
 
@@ -426,6 +427,8 @@ export interface FieldSpec {
   default: string;
   options: string[];
   showIf: [string, string] | null;
+  /** Shown under "Advanced" in the form. */
+  advanced: boolean;
 }
 
 export interface ProviderSpec {
@@ -433,7 +436,14 @@ export interface ProviderSpec {
   label: string;
   description: string;
   fields: FieldSpec[];
-  oauth: { authUrl: string; tokenUrl: string; scopes: string; consoleUrl: string } | null;
+  oauth: {
+    authUrl: string;
+    tokenUrl: string;
+    scopes: string;
+    consoleUrl: string;
+    /** This build ships its own app registration, so a Client ID is optional. */
+    hasBuiltinClient: boolean;
+  } | null;
 }
 
 export interface Profile {
