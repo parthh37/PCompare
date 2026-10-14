@@ -127,6 +127,18 @@ fn entry_meta(m: &opendal::Metadata) -> EntryMeta {
     }
 }
 
+/// Whether a listed entry shows up in the browser and in comparisons.
+///
+/// Entries of unknown kind come from Google Drive: shortcuts and native
+/// Docs/Sheets/Slides. They have no size and can't be downloaded as bytes.
+fn keep_entry(m: &opendal::Metadata) -> bool {
+    // TODO(you): decide what to do with `m.mode() == EntryMode::Unknown`
+    // (`m.content_type()` holds the Drive MIME type,
+    // e.g. "application/vnd.google-apps.shortcut").
+    let _ = m;
+    true
+}
+
 /// Maps an OpenDAL error to the `io::ErrorKind` the sync executor acts on.
 fn io_err(e: opendal::Error) -> io::Error {
     use opendal::ErrorKind as K;
@@ -156,6 +168,7 @@ impl Vfs for OpendalFs {
             .into_iter()
             // Some services include the listed directory itself.
             .filter(|e| e.path() != path && e.path().trim_start_matches('/') != path)
+            .filter(|e| keep_entry(e.metadata()))
             .map(|e| {
                 let name = e.name().trim_end_matches('/').to_owned();
                 VfsEntry {
