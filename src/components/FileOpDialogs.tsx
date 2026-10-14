@@ -13,6 +13,7 @@ import {
   type ConflictMode,
   type FileItem,
   type FileOpOptions,
+  type ItemFilter,
   type TouchTime,
 } from "../lib/fileOpsApi";
 import { formatSize } from "../lib/format";
@@ -71,12 +72,14 @@ interface TransferProps {
   parts: OpPart[];
   /** Ask for a destination folder instead of using the other side. */
   toFolder: boolean;
+  /** The comparison's filters; items they hide inside selected folders are left out unless included. */
+  filter?: ItemFilter | null;
   onCancel: () => void;
   onConfirm: (parts: ReadyPart[], options: Partial<FileOpOptions>) => void;
 }
 
 /** Confirms a copy or move, with conflict handling and (to a folder) the destination. */
-export function TransferDialog({ action, parts, toFolder, onCancel, onConfirm }: TransferProps) {
+export function TransferDialog({ action, parts, toFolder, filter, onCancel, onConfirm }: TransferProps) {
   const [folder, setFolder] = useState(() => localStorage.getItem("pcompare.fileOps.lastFolder") ?? "");
   const [keepStructure, setKeepStructure] = useState(true);
   const [conflicts, setConflicts] = useState<ConflictMode>(
@@ -85,6 +88,8 @@ export function TransferDialog({ action, parts, toFolder, onCancel, onConfirm }:
   const [trashReplaced, setTrashReplaced] = useState(true);
   const [copyAcls, setCopyAcls] = useState(false);
   const [copyShortNames, setCopyShortNames] = useState(false);
+  // Beyond Compare's default (OpIncludeFiltered off): filtered items stay behind.
+  const [includeFiltered, setIncludeFiltered] = useState(false);
 
   const verb = action === "copy" ? "Copy" : "Move";
   const files = parts.reduce((n, p) => n + p.files, 0);
@@ -125,6 +130,7 @@ export function TransferDialog({ action, parts, toFolder, onCancel, onConfirm }:
       trashReplaced,
       copyAcls: IS_WINDOWS && allLocal && copyAcls,
       copyShortNames: IS_WINDOWS && allLocal && copyShortNames,
+      filter: includeFiltered ? null : (filter ?? null),
     });
   };
 
@@ -181,6 +187,15 @@ export function TransferDialog({ action, parts, toFolder, onCancel, onConfirm }:
             ))}
           </select>
         </label>
+        {filter && folders > 0 && (
+          <label
+            className="field check"
+            title="Selected folders are copied with what the comparison's filters hide in them (excluded names, hidden files, size and date limits)"
+          >
+            <input type="checkbox" checked={includeFiltered} onChange={(e) => setIncludeFiltered(e.target.checked)} />
+            Include filtered items
+          </label>
+        )}
         {!anyRemoteDst && (
           <label className="field check">
             <input type="checkbox" checked={trashReplaced} onChange={(e) => setTrashReplaced(e.target.checked)} />

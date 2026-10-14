@@ -25,7 +25,8 @@ use std::sync::{Condvar, Mutex};
 use std::time::{Duration, Instant, UNIX_EPOCH};
 
 use filetime::FileTime;
-use pcompare_core::folder::EntryMeta;
+use globset::{GlobBuilder, GlobSet, GlobSetBuilder};
+use pcompare_core::folder::{attr, pair_passes, EntryMeta, FolderFilters};
 use pcompare_core::vfs_write::{pump, VfsWrite};
 use serde::{Deserialize, Serialize};
 
@@ -125,6 +126,103 @@ pub struct FileOpOptions {
     /// Attributes and touch: apply to everything inside selected folders too.
     pub recursive: bool,
     pub touch: TouchTime,
+    /// Copy and move: leave out what's inside selected folders that these
+    /// filters hide in the comparison (Beyond Compare's default, with its
+    /// "Include filtered items" off). `None`: everything is copied.
+    pub filter: Option<ItemFilter>,
+}
+
+/// The folder compare's name, attribute, size and date filters, as far as
+/// file operations apply them (see [`FileOpOptions::filter`]). Mirrors what
+/// the folder engine's listing leaves out; the "containing text" filters
+/// aren't applied (they would read every file).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct ItemFilter {
+    /// Globs excluded everywhere (files and folders), matched against the
+    /// name and the path relative to the operation's root.
+    pub exclude: Vec<String>,
+    /// When non-empty, only files matching one of these are kept.
+    pub include_files: Vec<String>,
+    pub exclude_files: Vec<String>,
+    pub exclude_folders: Vec<String>,
+    pub include_hidden: bool,
+    pub ignore_name_case: bool,
+    pub min_size: Option<u64>,
+    pub max_size: Option<u64>,
+    pub modified_after_ms: Option<i64>,
+    pub modified_before_ms: Option<i64>,
+    /// [`attr`] bits that exclude an entry (hidden and system apply to
+    /// folders too).
+    pub exclude_attributes: u32,
+    pub exclude_executable: bool,
+}
+
+/// An [`ItemFilter`] with its globs compiled.
+struct CompiledFilter {
+    exclude: GlobSet,
+    include_files: GlobSet,
+    exclude_files: GlobSet,
+    exclude_folders: GlobSet,
+    include_hidden: bool,
+    /// The size and date limits, in the folder engine's form.
+    limits: FolderFilters,
+}
+
+fn globs(patterns: &[String], case_insensitive: bool) -> Result<GlobSet, String> {
+    let mut builder = GlobSetBuilder::new();
+    for p in patterns.iter().map(|p| p.trim()).filter(|p| !p.is_empty()) {
+        let glob = GlobBuilder::new(p)
+            .case_insensitive(case_insensitive)
+            .build()
+            .map_err(|e| format!("bad filter pattern `{p}`: {e}"))?;
+        builder.add(glob);
+    }
+    builder.build().map_err(|e| e.to_string())
+}
+
+impl CompiledFilter {
+    fn new(f: &ItemFilter) -> Result<Self, String> {
+        let ci = f.ignore_name_case;
+        Ok(CompiledFilter {
+            exclude: globs(&f.exclude, ci)?,
+            include_files: globs(&f.include_files, ci)?,
+            exclude_files: globs(&f.exclude_files, ci)?,
+            exclude_folders: globs(&f.exclude_folders, ci)?,
+            include_hidden: f.include_hidden,
+            limits: FolderFilters {
+                min_size: f.min_size,
+                max_size: f.max_size,
+                modified_after_ms: f.modified_after_ms,
+                modified_before_ms: f.modified_before_ms,
+                exclude_attributes: f.exclude_attributes,
+                exclude_executable: f.exclude_executable,
+                ..Default::default()
+            },
+        })
+    }
+
+    /// Whether the comparison would leave out `name` (at `rel`, relative to
+    /// the operation's root).
+    fn hides(&self, name: &str, rel: &str, meta: &EntryMeta) -> bool {
+        let attrs = meta.attributes.unwrap_or(0);
+        if !self.include_hidden && (name.starts_with('.') || attrs & attr::HIDDEN != 0) {
+            return true;
+        }
+        let hit = |set: &GlobSet| set.is_match(name) || set.is_match(rel);
+        if hit(&self.exclude) {
+            return true;
+        }
+        let f = &self.limits;
+        if meta.is_dir {
+            return hit(&self.exclude_folders) || attrs & f.exclude_attributes & (attr::HIDDEN | attr::SYSTEM) != 0;
+        }
+        hit(&self.exclude_files)
+            || (!self.include_files.is_empty() && !hit(&self.include_files))
+            || attrs & f.exclude_attributes != 0
+            || (f.exclude_executable && meta.mode.is_some_and(|m| m & 0o111 != 0))
+            || !pair_passes(Some(meta), None, f)
+    }
 }
 
 impl Default for FileOpOptions {
@@ -139,6 +237,7 @@ impl Default for FileOpOptions {
             attributes: AttrChange::default(),
             recursive: false,
             touch: TouchTime::Now,
+            filter: None,
         }
     }
 }
@@ -212,6 +311,9 @@ pub struct FileOpReport {
     pub skipped: usize,
     pub bytes: u64,
     pub cancelled: bool,
+    /// Items inside selected folders left out because the comparison's
+    /// filters hide them (see [`FileOpOptions::filter`]).
+    pub filtered: usize,
     pub failures: Vec<FileOpFailure>,
     /// Caveats on items that succeeded (e.g. an ACL that couldn't be copied).
     pub notes: Vec<String>,
@@ -572,6 +674,9 @@ struct Node {
     name: String,
     meta: EntryMeta,
     children: Vec<Node>,
+    /// Some of the folder's contents (at any depth) were left out by the
+    /// filter, so a move must leave the folder itself behind.
+    holds_filtered: bool,
 }
 
 impl Node {
@@ -639,6 +744,8 @@ struct Runner<'r> {
     state: FileOpProgress,
     report: FileOpReport,
     last_tick: Option<Instant>,
+    /// Leaves filtered items out of scanned folders (copy and move).
+    filter: Option<CompiledFilter>,
 }
 
 impl Runner<'_> {
@@ -800,6 +907,7 @@ impl Runner<'_> {
             name,
             meta,
             children: Vec::new(),
+            holds_filtered: false,
         };
         if node.is_dir() {
             self.state.current = Some(shown.to_owned());
@@ -808,9 +916,16 @@ impl Runner<'_> {
                 if self.cancelled() {
                     break;
                 }
-                let child = at.child(&name);
                 let shown = format!("{shown}/{name}");
-                node.children.push(self.scan(&child, name, meta, &shown)?);
+                if self.filter.as_ref().is_some_and(|f| f.hides(&name, &shown, &meta)) {
+                    self.report.filtered += 1;
+                    node.holds_filtered = true;
+                    continue;
+                }
+                let child = at.child(&name);
+                let child = self.scan(&child, name, meta, &shown)?;
+                node.holds_filtered |= child.holds_filtered;
+                node.children.push(child);
             }
         }
         Ok(node)
@@ -911,8 +1026,9 @@ impl Runner<'_> {
             self.skip_rest(node);
             return false;
         }
-        // A move into a free spot is a single rename when the volume allows.
-        if moving && existing.is_none() && self.rename_within(src, dst) {
+        // A move into a free spot is a single rename when the volume allows
+        // (not when filtered items must stay behind).
+        if moving && !node.holds_filtered && existing.is_none() && self.rename_within(src, dst) {
             let (files, bytes) = node.totals();
             self.succeed(files, bytes);
             return true;
@@ -946,6 +1062,10 @@ impl Runner<'_> {
         }
         if let Some(ms) = node.meta.modified_ms {
             let _ = dst.set_modified(ms);
+        }
+        if moving && node.holds_filtered {
+            // The filtered items stay, and so does their folder.
+            return false;
         }
         if moving && all {
             if let Err(e) = src.remove_empty_dir() {
@@ -1412,7 +1532,21 @@ pub fn run(
         },
         report: FileOpReport::default(),
         last_tick: None,
+        filter: None,
     };
+    if matches!(req.action, FileAction::Copy | FileAction::Move) {
+        if let Some(f) = &req.options.filter {
+            match CompiledFilter::new(f) {
+                Ok(f) => r.filter = Some(f),
+                Err(e) => {
+                    r.fail("", invalid(&e));
+                    r.state.phase = FilePhase::Finished;
+                    r.emit();
+                    return std::mem::take(&mut r.report);
+                }
+            }
+        }
+    }
     r.emit();
     let items = match req.action {
         FileAction::Rename | FileAction::NewFolder => req.items.iter().take(1).cloned().collect(),
@@ -1487,6 +1621,7 @@ pub fn run(
                         name: at.name(),
                         meta,
                         children: Vec::new(),
+                        holds_filtered: false,
                     }),
                     Ok(None) => Err(io::Error::new(
                         io::ErrorKind::NotFound,
@@ -1656,6 +1791,104 @@ mod tests {
             &mut |_| {},
             &mut |_| panic!("not expected to ask"),
         )
+    }
+
+    /// left: proj/{main.rs, notes.tmp, .env, build/out.o, src/lib.rs, src/old.tmp}
+    fn filtered_tree() -> Pair {
+        let dir = tempfile::tempdir().unwrap();
+        let (left, right) = (dir.path().join("L"), dir.path().join("R"));
+        for rel in ["main.rs", "notes.tmp", ".env", "build/out.o", "src/lib.rs", "src/old.tmp"] {
+            write(&left, &format!("proj/{rel}"), rel, OLD);
+        }
+        fs::create_dir_all(&right).unwrap();
+        Pair { _dir: dir, left, right }
+    }
+
+    /// The folder compare's filters: no *.tmp, no build folders, no hidden files.
+    fn compare_filter() -> FileOpOptions {
+        FileOpOptions {
+            conflicts: ConflictMode::Overwrite,
+            filter: Some(ItemFilter {
+                exclude: vec!["*.tmp".into()],
+                exclude_folders: vec!["build".into()],
+                ..Default::default()
+            }),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn copying_a_folder_skips_filtered_items() {
+        let p = filtered_tree();
+        let r = go(&req(FileAction::Copy, &["proj"], compare_filter()), &p.left, Some(&p.right));
+        assert_eq!((r.failed, r.succeeded), (0, 2), "{:?}", r.failures);
+        assert_eq!(files(&p.right), vec!["proj/main.rs", "proj/src/lib.rs"]);
+        // notes.tmp, .env, build, src/old.tmp
+        assert_eq!(r.filtered, 4);
+    }
+
+    #[test]
+    fn include_filtered_items_copies_everything() {
+        let p = filtered_tree();
+        let o = FileOpOptions {
+            filter: None,
+            ..compare_filter()
+        };
+        let r = go(&req(FileAction::Copy, &["proj"], o), &p.left, Some(&p.right));
+        assert_eq!((r.failed, r.succeeded, r.filtered), (0, 6, 0), "{:?}", r.failures);
+        assert_eq!(files(&p.right).len(), 6);
+    }
+
+    #[test]
+    fn explicitly_selected_items_are_copied_even_if_filtered() {
+        let p = filtered_tree();
+        let r = go(&req(FileAction::Copy, &["proj/notes.tmp"], compare_filter()), &p.left, Some(&p.right));
+        assert_eq!(r.succeeded, 1);
+        assert_eq!(files(&p.right), vec!["proj/notes.tmp"]);
+    }
+
+    #[test]
+    fn moving_a_folder_leaves_filtered_items_and_their_folders_behind() {
+        let p = filtered_tree();
+        let r = go(&req(FileAction::Move, &["proj"], compare_filter()), &p.left, Some(&p.right));
+        assert_eq!((r.failed, r.succeeded), (0, 2), "{:?}", r.failures);
+        assert_eq!(files(&p.right), vec!["proj/main.rs", "proj/src/lib.rs"]);
+        // The hidden items stay where they were, folders included.
+        assert_eq!(
+            files(&p.left),
+            vec!["proj/.env", "proj/build/out.o", "proj/notes.tmp", "proj/src/old.tmp"]
+        );
+    }
+
+    #[test]
+    fn filter_names_sizes_and_case() {
+        let meta = |is_dir: bool, size: u64| EntryMeta {
+            is_dir,
+            size,
+            ..Default::default()
+        };
+        let f = CompiledFilter::new(&ItemFilter {
+            include_files: vec!["*.rs".into()],
+            exclude_folders: vec!["target".into(), "docs/old".into()],
+            max_size: Some(100),
+            include_hidden: true,
+            ignore_name_case: true,
+            ..Default::default()
+        })
+        .unwrap();
+        assert!(!f.hides("lib.RS", "src/lib.RS", &meta(false, 10)));
+        assert!(f.hides("lib.c", "src/lib.c", &meta(false, 10)), "not included");
+        assert!(f.hides("big.rs", "big.rs", &meta(false, 1000)), "too large");
+        // Include masks are for files; folders are only excluded by folder masks.
+        assert!(!f.hides("src", "src", &meta(true, 0)));
+        assert!(f.hides("Target", "a/Target", &meta(true, 0)));
+        assert!(f.hides("old", "docs/old", &meta(true, 0)), "relative path match");
+        assert!(!f.hides(".git", ".git", &meta(true, 0)), "hidden items included");
+        assert!(CompiledFilter::new(&ItemFilter {
+            exclude: vec!["[".into()],
+            ..Default::default()
+        })
+        .is_err());
     }
 
     #[test]
