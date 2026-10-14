@@ -127,13 +127,21 @@ src-tauri/               Tauri shell exposing the engines as commands
 src/                     React + TypeScript UI
 ```
 
-### Connecting OneDrive, Dropbox or Google Drive
+### Cloud sign-in (OneDrive, SharePoint, Dropbox, Google Drive)
 
-These use OAuth sign-in, which needs an app registration you control:
+Users click **Sign in with Microsoft/Google/Dropbox…** in the profile form and approve PCompare in the browser — as long as the build carries PCompare's own OAuth apps. Those are compiled in from environment variables, which the release and PR-bundle workflows read from the repository's Actions **variables** (IDs) and **secrets** (the Google client secret):
 
-1. Register an app in the provider's developer console (linked from the profile form).
-2. Add the redirect URI `http://localhost:53682/` (Microsoft: "Mobile and desktop applications"; Google: "Desktop app").
-3. Paste the Client ID (and, for Google, the client secret) into the profile and click **Sign in…**.
+| Variable | Provider | One-time setup |
+| --- | --- | --- |
+| `PCOMPARE_MICROSOFT_CLIENT_ID` | OneDrive + SharePoint | [Entra → App registrations](https://entra.microsoft.com/#view/Microsoft_AAD_RegisteredApps/ApplicationsListBlade) → New: *Accounts in any organizational directory and personal Microsoft accounts*; platform **Mobile and desktop applications**, redirect URI `http://localhost:53682/`. No secret. |
+| `PCOMPARE_GOOGLE_CLIENT_ID` + secret `PCOMPARE_GOOGLE_CLIENT_SECRET` | Google Drive | [Cloud console](https://console.cloud.google.com/apis/credentials): enable the Drive API, configure the OAuth consent screen, create an OAuth client of type **Desktop app**. |
+| `PCOMPARE_DROPBOX_CLIENT_ID` | Dropbox | [App console](https://www.dropbox.com/developers/apps): scoped app, full Dropbox, redirect URI `http://localhost:53682/`, the `files.*` read/write scopes. |
+
+Desktop OAuth clients can't keep a secret (RFC 8252); the IDs only identify the app and PKCE protects each sign-in. Local builds pick the same variables up from your shell (`export PCOMPARE_MICROSOFT_CLIENT_ID=…` before `npx tauri build`).
+
+Without them — or under **Advanced** in any build — users enter a Client ID of their own, registered the same way.
+
+Google treats full Drive access as a *restricted* scope: until the app passes Google's verification, sign-in shows an "unverified app" warning and is capped at 100 users, and while the consent screen is in *Testing* only listed test users can sign in and their sign-ins expire after 7 days. Set the consent screen to *In production* for personal or small-team use.
 
 ### Testing against live servers
 

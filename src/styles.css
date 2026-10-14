@@ -973,6 +973,17 @@ kbd {
 .profile-edit .form {
   max-width: 560px;
 }
+.advanced-fields {
+  margin: 4px 0 12px;
+}
+.advanced-fields summary {
+  cursor: pointer;
+  user-select: none;
+  margin-bottom: 8px;
+}
+.advanced-fields > p {
+  margin: 0 0 10px;
+}
 .oauth-box {
   max-width: 560px;
   display: flex;
@@ -987,6 +998,10 @@ kbd {
 }
 .oauth-box p {
   margin: 4px 0 0;
+}
+.oauth-box > button {
+  flex-shrink: 0;
+  white-space: nowrap;
 }
 .uri-hint {
   max-width: 560px;

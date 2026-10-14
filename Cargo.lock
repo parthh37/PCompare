@@ -5351,6 +5351,7 @@ name = "pcompare-remote"
 version = "1.0.0"
 dependencies = [
  "base64 0.22.1",
+ "chrono",
  "keyring",
  "opendal",
  "pcompare-archive",
