@@ -1,13 +1,14 @@
 //! Saved database connections.
 //!
-//! Like remote profiles, the non-secret settings live in
-//! `db-connections.json` and the password goes to the OS keychain. A DB
+//! Like remote profiles, the password goes to the OS keychain and the rest
+//! is sealed in `db-connections.vault` (see [`pcompare_core::vault`]). A DB
 //! session's "path" is `db://<connection-id>` or `db://<connection-id>/<database>`
 //! (the second form lets one saved server compare two of its databases).
 
 use crate::model::Engine;
 use pcompare_core::secrets::SecretStore;
-use pcompare_core::store::{now_ms, read_json, write_json};
+use pcompare_core::store::now_ms;
+use pcompare_core::vault::SealedFile;
 use pcompare_core::{CoreError, Result};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
@@ -132,7 +133,7 @@ pub fn is_db_path(path: &str) -> bool {
 }
 
 pub struct ConnectionStore {
-    path: PathBuf,
+    file: SealedFile,
     secrets: Box<dyn SecretStore>,
     lock: Mutex<()>,
 }
@@ -144,7 +145,7 @@ fn secret_owner(id: &str) -> String {
 impl ConnectionStore {
     pub fn new(path: impl Into<PathBuf>, secrets: Box<dyn SecretStore>) -> Self {
         Self {
-            path: path.into(),
+            file: SealedFile::new(path),
             secrets,
             lock: Mutex::new(()),
         }
@@ -156,7 +157,7 @@ impl ConnectionStore {
 
     pub fn list(&self) -> Result<Vec<DbConnection>> {
         let _g = self.guard();
-        let mut file: ConnectionFile = read_json(&self.path)?;
+        let mut file: ConnectionFile = self.file.read(&*self.secrets)?;
         file.connections.sort_by_key(|c| c.name.to_lowercase());
         Ok(file.connections)
     }
@@ -208,7 +209,7 @@ impl ConnectionStore {
         }
         input.config.engine()?;
         let _g = self.guard();
-        let mut file: ConnectionFile = read_json(&self.path)?;
+        let mut file: ConnectionFile = self.file.read(&*self.secrets)?;
         let now = now_ms();
         let idx = input.id.as_ref().and_then(|id| file.connections.iter().position(|c| &c.id == id));
         let id = match idx {
@@ -241,15 +242,15 @@ impl ConnectionStore {
             Some(i) => file.connections[i] = conn.clone(),
             None => file.connections.push(conn.clone()),
         }
-        write_json(&self.path, &file)?;
+        self.file.write(&*self.secrets, &file)?;
         Ok(conn)
     }
 
     pub fn delete(&self, id: &str) -> Result<()> {
         let _g = self.guard();
-        let mut file: ConnectionFile = read_json(&self.path)?;
+        let mut file: ConnectionFile = self.file.read(&*self.secrets)?;
         file.connections.retain(|c| c.id != id);
-        write_json(&self.path, &file)?;
+        self.file.write(&*self.secrets, &file)?;
         self.secrets.delete(&secret_owner(id), PASSWORD)
     }
 }
@@ -306,8 +307,11 @@ mod tests {
         let c = s.save(input("Prod DB", Some("hunter2"))).unwrap();
         assert_eq!(c.id, "prod-db");
         assert!(c.has_password);
-        let raw = std::fs::read_to_string(dir.path().join("db.json")).unwrap();
-        assert!(!raw.contains("hunter2"));
+        let raw = std::fs::read(dir.path().join("db.vault")).unwrap();
+        let raw = String::from_utf8_lossy(&raw);
+        assert!(!raw.contains("hunter2") && !raw.contains("Prod DB"), "sealed, not plaintext");
+        let plain: serde_json::Value = s.file.read(&*s.secrets).unwrap();
+        assert!(!plain.to_string().contains("hunter2"));
         assert_eq!(s.resolve("prod-db").unwrap().password, "hunter2");
 
         // Absent password keeps it; "" deletes it.

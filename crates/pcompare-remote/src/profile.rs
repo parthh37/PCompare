@@ -1,14 +1,16 @@
 //! Connection profiles: named, saved remote connections.
 //!
-//! Non-secret settings live in `profiles.json`; every [`FieldKind::Secret`]
-//! value (passwords, keys, OAuth refresh tokens) goes to the OS keychain —
-//! Windows Credential Manager, macOS Keychain, or Secret Service on Linux.
+//! Every [`FieldKind::Secret`] value (passwords, keys, OAuth tokens) goes to
+//! the OS keychain — Windows Credential Manager, macOS Keychain, or Secret
+//! Service on Linux. The rest is sealed in `profiles.vault` with a key from
+//! that same keychain (see [`pcompare_core::vault`]).
 //! Secret values flow UI → Rust only; the UI just learns *which* secrets are
 //! stored so it can show "saved" placeholders.
 
 use crate::provider::{spec, FieldKind, ProviderKind, REFRESH_TOKEN};
 pub use pcompare_core::secrets::{MemorySecrets, SecretStore};
-use pcompare_core::store::{now_ms, read_json, write_json};
+use pcompare_core::store::now_ms;
+use pcompare_core::vault::SealedFile;
 use pcompare_core::{CoreError, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
@@ -100,7 +102,7 @@ impl ResolvedProfile {
 }
 
 pub struct ProfileStore {
-    path: PathBuf,
+    file: SealedFile,
     secrets: Box<dyn SecretStore>,
     lock: Mutex<()>,
 }
@@ -126,7 +128,7 @@ pub fn slugify(name: &str) -> String {
 impl ProfileStore {
     pub fn new(path: impl Into<PathBuf>, secrets: Box<dyn SecretStore>) -> Self {
         Self {
-            path: path.into(),
+            file: SealedFile::new(path),
             secrets,
             lock: Mutex::new(()),
         }
@@ -136,9 +138,17 @@ impl ProfileStore {
         self.lock.lock().unwrap_or_else(|p| p.into_inner())
     }
 
+    fn read(&self) -> Result<ProfileFile> {
+        self.file.read(&*self.secrets)
+    }
+
+    fn write(&self, file: &ProfileFile) -> Result<()> {
+        self.file.write(&*self.secrets, file)
+    }
+
     pub fn list(&self) -> Result<Vec<Profile>> {
         let _g = self.guard();
-        let mut file: ProfileFile = read_json(&self.path)?;
+        let mut file = self.read()?;
         file.profiles.sort_by_key(|p| p.name.to_lowercase());
         Ok(file.profiles)
     }
@@ -206,7 +216,7 @@ impl ProfileStore {
             .collect();
 
         let _g = self.guard();
-        let mut file: ProfileFile = read_json(&self.path)?;
+        let mut file = self.read()?;
         let now = now_ms();
         let idx = match &input.id {
             Some(id) => file
@@ -264,17 +274,17 @@ impl ProfileStore {
             .collect();
         p.modified_ms = now;
         let saved = p.clone();
-        write_json(&self.path, &file)?;
+        self.write(&file)?;
         Ok(saved)
     }
 
     /// Updates one non-secret setting (e.g. a newly trusted SSH host key).
     pub fn set_setting(&self, id: &str, key: &str, value: &str) -> Result<()> {
         let _g = self.guard();
-        let mut file: ProfileFile = read_json(&self.path)?;
+        let mut file = self.read()?;
         if let Some(p) = file.profiles.iter_mut().find(|p| p.id == id) {
             p.settings.insert(key.into(), value.into());
-            write_json(&self.path, &file)?;
+            self.write(&file)?;
         }
         Ok(())
     }
@@ -282,7 +292,7 @@ impl ProfileStore {
     /// Stores one secret outside a form save (e.g. a rotated refresh token).
     pub fn set_secret(&self, id: &str, key: &str, value: &str) -> Result<()> {
         let _g = self.guard();
-        let mut file: ProfileFile = read_json(&self.path)?;
+        let mut file = self.read()?;
         let p = file
             .profiles
             .iter_mut()
@@ -290,21 +300,36 @@ impl ProfileStore {
             .ok_or_else(|| CoreError::Other(format!("no connection profile `{id}`")))?;
         self.secrets.set(id, key, value)?;
         if p.stored_secrets.insert(key.into()) {
-            write_json(&self.path, &file)?;
+            self.write(&file)?;
+        }
+        Ok(())
+    }
+
+    /// Removes one secret outside a form save (e.g. a pasted token that a
+    /// sign-in replaces).
+    pub fn remove_secret(&self, id: &str, key: &str) -> Result<()> {
+        let _g = self.guard();
+        let mut file = self.read()?;
+        let Some(p) = file.profiles.iter_mut().find(|p| p.id == id) else {
+            return Ok(());
+        };
+        self.secrets.delete(id, key)?;
+        if p.stored_secrets.remove(key) {
+            self.write(&file)?;
         }
         Ok(())
     }
 
     pub fn delete(&self, id: &str) -> Result<()> {
         let _g = self.guard();
-        let mut file: ProfileFile = read_json(&self.path)?;
+        let mut file = self.read()?;
         if let Some(p) = file.profiles.iter().find(|p| p.id == id) {
             for key in &p.stored_secrets {
                 self.secrets.delete(id, key)?;
             }
         }
         file.profiles.retain(|p| p.id != id);
-        write_json(&self.path, &file)
+        self.write(&file)
     }
 }
 
@@ -337,7 +362,10 @@ mod tests {
         assert_eq!(p.id, "build-server");
         assert!(p.stored_secrets.contains("password"));
 
-        let json = std::fs::read_to_string(dir.path().join("profiles.json")).unwrap();
+        let raw = std::fs::read(dir.path().join("profiles.vault")).unwrap();
+        assert!(!String::from_utf8_lossy(&raw).contains("example.com"), "settings are sealed too");
+        let json: serde_json::Value = s.file.read(&*s.secrets).unwrap();
+        let json = json.to_string();
         assert!(!json.contains("hunter2") && !json.contains("leaked"), "{json}");
         assert_eq!(s.resolve(&p.id).unwrap().get("password"), Some("hunter2"));
     }

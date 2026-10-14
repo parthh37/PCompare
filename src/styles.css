@@ -1003,6 +1003,16 @@ kbd {
   flex-shrink: 0;
   white-space: nowrap;
 }
+.oauth-waiting {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+.ctx-menu button.danger-text {
+  color: var(--danger-text);
+}
 .uri-hint {
   max-width: 560px;
 }

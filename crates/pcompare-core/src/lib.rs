@@ -20,6 +20,7 @@ pub mod session;
 pub mod store;
 pub mod text;
 pub mod textfile;
+pub mod vault;
 pub mod vfs;
 pub mod vfs_write; // bc5:remote-write
 pub mod workspace; // bc5:app-shell
