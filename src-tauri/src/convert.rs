@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use tauri::{AppHandle, Manager};
 
-const CONFIG_FILE: &str = "file-formats.json";
+pub(crate) const CONFIG_FILE: &str = "file-formats.json";
 
 fn config_path(app: &AppHandle) -> pcompare_core::Result<PathBuf> {
     let dir = app
