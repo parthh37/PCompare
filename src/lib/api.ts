@@ -585,6 +585,29 @@ export const api = {
   },
   cancelCompareFolders: (runKey: string) => invoke<void>("compare_folders_cancel", { runKey }),
   forgetFolderScan: (scanId: string) => invoke<void>("forget_folder_scan", { scanId }),
+  /**
+   * Compares just the rows at `rels` (tree paths, right-hand names) as
+   * `compareFolders` would report them, null where it would have no such
+   * row; for refreshing rows a file operation changed. Pass the scan on
+   * screen so the folders above come from its kept tree.
+   */
+  compareFolderEntries: (
+    left: string,
+    right: string,
+    options: FolderCompareOptions,
+    rels: string[],
+    scan?: FolderScanRef,
+    expandArchives?: boolean,
+  ) =>
+    invoke<(FolderEntry | null)[]>("compare_folder_entries", {
+      left,
+      right,
+      options,
+      rels,
+      scanId: scan?.id,
+      expandArchives,
+      showFiltered: scan?.showFiltered,
+    }),
   compareFileContents: (
     left: string,
     leftSize: number,
