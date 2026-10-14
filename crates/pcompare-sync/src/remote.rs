@@ -1350,6 +1350,7 @@ mod tests {
             reason: String::new(),
             dst_before: None,
             left_rel_path: None,
+            category: None,
         };
         // Crash after staging, with a half-sent temp file lying around.
         let staged = temp_path(&remote, &p.r, "a.txt", "old").unwrap();

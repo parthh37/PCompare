@@ -241,6 +241,26 @@ export function ExecOptionsForm({ value: o, onChange }: { value: ExecOptions; on
         </label>
       </fieldset>
 
+      {/* bc5:sync-matrix — dates on copies */}
+      <fieldset>
+        <legend>Dates</legend>
+        <label className="field check">
+          <input
+            type="checkbox"
+            checked={o.preserveFolderTimes ?? true}
+            onChange={(e) => set("preserveFolderTimes", e.target.checked)}
+          />
+          Give new folders their source folder's dates
+        </label>
+        <label className="field check">
+          <input type="checkbox" checked={!!o.copyCreated} onChange={(e) => set("copyCreated", e.target.checked)} />
+          Copy creation dates
+        </label>
+        <small className="muted">
+          Files always keep their modification date. Creation dates can be set on Windows and macOS only.
+        </small>
+      </fieldset>
+
       {/* bc5:file-ops — NTFS extras (Windows only) */}
       {navigator.userAgent.includes("Windows") && (
         <fieldset>

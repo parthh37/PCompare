@@ -592,6 +592,58 @@ pub fn copy_short_name(src: &Path, dst: &Path) -> io::Result<()> {
     }
 }
 
+/// Gives `dst` the creation date ("birth time") of `src` (bc5:sync-matrix,
+/// BC's "Copy creation dates"). Windows and macOS let it be set; elsewhere
+/// this does nothing.
+pub fn copy_created(src: &Path, dst: &Path) -> io::Result<()> {
+    #[cfg(any(windows, target_os = "macos"))]
+    {
+        #[cfg(target_os = "macos")]
+        use std::os::macos::fs::FileTimesExt;
+        #[cfg(windows)]
+        use std::os::windows::fs::FileTimesExt;
+        let created = fs::metadata(src)?.created()?;
+        open_for_times(dst)?.set_times(fs::FileTimes::new().set_created(created))
+    }
+    #[cfg(not(any(windows, target_os = "macos")))]
+    {
+        let _ = (src, dst);
+        Ok(())
+    }
+}
+
+/// A handle that may change `path`'s times, for files and folders alike
+/// (read-only files included: times are attributes, not data).
+#[cfg(any(windows, target_os = "macos"))]
+pub(crate) fn open_for_times(path: &Path) -> io::Result<File> {
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        use windows_sys::Win32::Storage::FileSystem::{FILE_FLAG_BACKUP_SEMANTICS, FILE_WRITE_ATTRIBUTES};
+        fs::OpenOptions::new()
+            .access_mode(FILE_WRITE_ATTRIBUTES)
+            .custom_flags(FILE_FLAG_BACKUP_SEMANTICS)
+            .open(path)
+    }
+    #[cfg(target_os = "macos")]
+    {
+        File::open(path)
+    }
+}
+
+/// Gives the folder `dst` the access and modification times of `src` (and,
+/// with `created`, its creation date).
+pub fn copy_folder_times(src: &Path, dst: &Path, times: bool, created: bool) -> io::Result<()> {
+    if times {
+        let m = fs::metadata(src)?;
+        filetime::set_file_times(dst, FileTime::from_last_access_time(&m), FileTime::from_last_modification_time(&m))?;
+    }
+    if created {
+        copy_created(src, dst)?;
+    }
+    Ok(())
+}
+
 /// Copies whichever of ACLs and short names are asked for, after `dst` was
 /// written from `src`. Returns notes about anything that couldn't be copied;
 /// the data copy itself has succeeded either way.

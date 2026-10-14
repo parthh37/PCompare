@@ -5,6 +5,7 @@
 //! Planning reuses [`pcompare_core::folder`] so the preview agrees exactly
 //! with what a Folder Compare session shows for the same options.
 
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::time::Instant;
 
@@ -16,6 +17,7 @@ use pcompare_core::vfs::Vfs;
 use serde::{Deserialize, Serialize};
 
 use crate::baseline::{self, Baseline, Snap};
+pub use crate::matrix::{SyncAction, SyncCategory, SyncMatrix};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -36,6 +38,27 @@ pub enum SyncMode {
     /// both sides are conflicts. Without a baseline it behaves like
     /// [`SyncMode::UpdateBoth`].
     TwoWay,
+    /// The user's own [`SyncMatrix`] (`PlanOptions::matrix`). Uses the
+    /// baseline like [`SyncMode::TwoWay`], so it can tell deletions from
+    /// orphans.
+    Custom,
+}
+
+impl SyncMode {
+    /// The fixed modes, each a preset row of the [`SyncMatrix`].
+    pub const PRESETS: [SyncMode; 6] = [
+        SyncMode::UpdateLeftToRight,
+        SyncMode::UpdateRightToLeft,
+        SyncMode::UpdateBoth,
+        SyncMode::MirrorLeftToRight,
+        SyncMode::MirrorRightToLeft,
+        SyncMode::TwoWay,
+    ];
+
+    /// Whether planning consults the last sync's baseline.
+    pub fn uses_baseline(self) -> bool {
+        matches!(self, SyncMode::TwoWay | SyncMode::Custom)
+    }
 }
 
 /// How [`SyncMode::TwoWay`] settles paths that changed on both sides.
@@ -54,9 +77,52 @@ pub enum ConflictPolicy {
 /// Inputs to planning besides the comparison and its options.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct PlanOptions<'a> {
-    /// State after the last successful sync (for [`SyncMode::TwoWay`]).
+    /// State after the last successful sync (for [`SyncMode::TwoWay`] and
+    /// [`SyncMode::Custom`]; the other modes ignore it).
     pub baseline: Option<&'a Baseline>,
     pub conflicts: ConflictPolicy,
+    /// The matrix [`SyncMode::Custom`] plans with; the fixed modes use
+    /// their preset ([`SyncMatrix::for_mode`]).
+    pub matrix: SyncMatrix,
+    /// Actions the user picked in the preview, by [`FolderEntry::rel_path`].
+    /// They win over the matrix and the conflict policy. On a folder,
+    /// "delete" removes it whole, and the other actions apply to everything
+    /// inside that isn't the same on both sides (or has its own override).
+    pub overrides: Option<&'a HashMap<String, SyncAction>>,
+    /// Plan only these items and their contents ("Synchronize selection"),
+    /// by [`FolderEntry::rel_path`]; `None` plans everything.
+    pub scope: Option<&'a [String]>,
+    /// Don't create orphan folders that hold no files (empty, or emptied by
+    /// the filters) — BC's "Sync empty folders" off.
+    pub skip_empty_folders: bool,
+}
+
+/// The owned, serializable part of [`PlanOptions`] besides the baseline and
+/// conflict policy, as sessions, automation tasks and the shell pass it
+/// around (bc5:sync-matrix).
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct PlanRules {
+    /// Used by [`SyncMode::Custom`] only.
+    pub matrix: SyncMatrix,
+    pub skip_empty_folders: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub scope: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "HashMap::is_empty")]
+    pub overrides: HashMap<String, SyncAction>,
+}
+
+impl PlanRules {
+    pub fn options<'a>(&'a self, baseline: Option<&'a Baseline>, conflicts: ConflictPolicy) -> PlanOptions<'a> {
+        PlanOptions {
+            baseline,
+            conflicts,
+            matrix: self.matrix,
+            overrides: Some(&self.overrides),
+            scope: self.scope.as_deref(),
+            skip_empty_folders: self.skip_empty_folders,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -120,6 +186,9 @@ pub struct SyncOp {
     /// (bc5:file-ops — [`FolderEntry::left_rel_path`]).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub left_rel_path: Option<String>,
+    /// The category that chose this op, for the preview's per-row actions.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub category: Option<SyncCategory>,
 }
 
 impl SyncOp {
@@ -156,6 +225,13 @@ pub struct SyncSkip {
     /// ambiguous change); false for intentional skips such as "newer on the
     /// target side" in a one-way update.
     pub conflict: bool,
+    /// How the item compares; `None` for type clashes, read errors and
+    /// paths changed on both sides.
+    pub category: Option<SyncCategory>,
+    /// Which sides have the item, so the preview offers only the actions
+    /// that can apply to it.
+    pub on_left: bool,
+    pub on_right: bool,
 }
 
 #[derive(Debug, Clone, Default, Serialize)]
@@ -204,6 +280,8 @@ pub struct SyncPlan {
     pub left_root: String,
     pub right_root: String,
     pub mode: SyncMode,
+    /// The matrix the plan followed: the mode's preset, or the custom one.
+    pub matrix: SyncMatrix,
     /// Ordered: folders are created first, then files copied, then deletions.
     pub ops: Vec<SyncOp>,
     pub skipped: Vec<SyncSkip>,
@@ -276,12 +354,40 @@ struct Planner<'a> {
     deletes: Vec<SyncOp>,
     skipped: Vec<SyncSkip>,
     opts: &'a FolderCompareOptions,
+    /// Only for modes that use one ([`SyncMode::uses_baseline`]).
     baseline: Option<&'a Baseline>,
     conflicts: ConflictPolicy,
+    matrix: SyncMatrix,
+    overrides: Option<&'a HashMap<String, SyncAction>>,
+    scope: Option<Scope>,
+    skip_empty_folders: bool,
     /// Left-side relative paths of the folders being walked, innermost last,
     /// so right-only items below an aligned folder land in the left folder it
     /// was paired with (bc5:file-ops).
     left_dirs: Vec<String>,
+}
+
+/// The items "Synchronize selection" covers, and the folders above them.
+struct Scope {
+    paths: HashSet<String>,
+    ancestors: HashSet<String>,
+}
+
+impl Scope {
+    fn new(paths: &[String]) -> Self {
+        let mut ancestors = HashSet::new();
+        for p in paths {
+            let mut rest = p.as_str();
+            while let Some(i) = rest.rfind('/') {
+                rest = &rest[..i];
+                ancestors.insert(rest.to_owned());
+            }
+        }
+        Scope {
+            paths: paths.iter().cloned().collect(),
+            ancestors,
+        }
+    }
 }
 
 /// The side an operation toward `dir` overwrites or deletes.
@@ -313,6 +419,28 @@ fn side_name(side: Side) -> &'static str {
     }
 }
 
+/// An orphan on `side`: new there, or (with a baseline) deleted on the other side.
+fn orphan_category(side: Side, deleted_elsewhere: bool) -> SyncCategory {
+    match (side, deleted_elsewhere) {
+        (Side::Left, false) => SyncCategory::LeftOrphan,
+        (Side::Right, false) => SyncCategory::RightOrphan,
+        (Side::Left, true) => SyncCategory::RightDeleted,
+        (Side::Right, true) => SyncCategory::LeftDeleted,
+    }
+}
+
+/// Why a copy toward `dir` happens, given what the item's state (`why`) is.
+fn copy_reason(cat: SyncCategory, why: &str, dir: Direction) -> String {
+    use SyncCategory::*;
+    match (cat, dir) {
+        (LeftNewer, Direction::ToLeft) => "older on right".into(),
+        (RightNewer, Direction::ToRight) => "older on left".into(),
+        (LeftDeleted, Direction::ToLeft) | (RightDeleted, Direction::ToRight) => format!("{why}; restored"),
+        (Same, _) => format!("{why}; copied anyway"),
+        _ => why.into(),
+    }
+}
+
 impl Planner<'_> {
     /// `e`'s relative path on the left side (bc5:file-ops).
     fn left_rel(&self, e: &FolderEntry) -> String {
@@ -334,6 +462,11 @@ impl Planner<'_> {
         out
     }
 
+    fn override_of(&self, e: &FolderEntry) -> Option<SyncAction> {
+        self.overrides.and_then(|o| o.get(&e.rel_path).copied())
+    }
+
+    #[allow(clippy::too_many_arguments)]
     fn push(
         &mut self,
         kind: OpKind,
@@ -341,22 +474,30 @@ impl Planner<'_> {
         e: &FolderEntry,
         size: u64,
         reason: &str,
+        category: Option<SyncCategory>,
     ) {
+        let target = target_meta(e, direction);
         let dst_before = match kind {
             OpKind::Mkdir => None,
-            OpKind::Copy | OpKind::Delete => target_meta(e, direction).map(Snap::from),
+            OpKind::Copy | OpKind::Delete => target.map(Snap::from),
+        };
+        // A type clash's sides disagree; a delete removes what its side holds.
+        let is_dir = match (kind, target) {
+            (OpKind::Delete, Some(m)) => m.is_dir,
+            _ => e.is_dir,
         };
         let op = SyncOp {
             id: 0,
             kind,
             direction,
             rel_path: e.rel_path.clone(),
-            is_dir: e.is_dir,
+            is_dir,
             size,
             overwrite: kind == OpKind::Copy && e.left.is_some() && e.right.is_some(),
             reason: reason.to_owned(),
             dst_before,
             left_rel_path: Some(self.left_rel(e)).filter(|p| *p != e.rel_path),
+            category,
         };
         match kind {
             OpKind::Mkdir => self.mkdirs.push(op),
@@ -365,161 +506,246 @@ impl Planner<'_> {
         }
     }
 
-    fn skip(&mut self, e: &FolderEntry, reason: impl Into<String>, conflict: bool) {
+    fn skip(&mut self, e: &FolderEntry, category: Option<SyncCategory>, reason: impl Into<String>, conflict: bool) {
         self.skipped.push(SyncSkip {
             rel_path: e.rel_path.clone(),
             is_dir: e.is_dir,
             reason: reason.into(),
             conflict,
+            category,
+            on_left: e.left.is_some(),
+            on_right: e.right.is_some(),
         });
     }
 
-    fn copy(&mut self, e: &FolderEntry, dir: Direction, reason: &str) {
+    fn copy(&mut self, e: &FolderEntry, dir: Direction, cat: SyncCategory, reason: &str) {
         let size = source_meta(e, dir).map_or(0, |m| m.size);
-        self.push(OpKind::Copy, dir, e, size, reason)
+        self.push(OpKind::Copy, dir, e, size, reason, Some(cat))
     }
 
     /// Recreates an orphan subtree on the other side: one mkdir per folder
-    /// (parents before children) and one copy per file.
-    fn copy_orphan(&mut self, e: &FolderEntry, dir: Direction, reason: &str) {
-        if e.is_dir {
-            self.push(OpKind::Mkdir, dir, e, 0, reason);
-            self.inside(e, |p| {
-                for c in &e.children {
-                    p.copy_orphan(c, dir, reason);
-                }
-            });
-        } else {
-            self.copy(e, dir, reason);
+    /// (parents before children) and one copy per file. Items inside with
+    /// an override of their own follow it instead.
+    fn copy_orphan(&mut self, e: &FolderEntry, dir: Direction, cat: SyncCategory, reason: &str) {
+        if !e.is_dir {
+            return self.copy(e, dir, cat, reason);
         }
+        let from = match dir {
+            Direction::ToRight => Side::Left,
+            Direction::ToLeft => Side::Right,
+        };
+        if self.skip_empty_folders && count_files(&e.children, from) == 0 {
+            return self.skip(e, Some(cat), "empty folder; not created", false);
+        }
+        self.push(OpKind::Mkdir, dir, e, 0, reason, Some(cat));
+        self.inside(e, |p| {
+            for c in &e.children {
+                match p.override_of(c) {
+                    Some(a) => p.act(c, cat, a, reason),
+                    None => p.copy_orphan(c, dir, cat, reason),
+                }
+            }
+        });
     }
 
-    fn delete(&mut self, e: &FolderEntry, dir: Direction, reason: &str) {
+    fn delete(&mut self, e: &FolderEntry, dir: Direction, cat: Option<SyncCategory>, reason: &str) {
         // A folder is deleted as a whole, so its children need no ops.
-        self.push(OpKind::Delete, dir, e, tree_size(e), reason);
+        self.push(OpKind::Delete, dir, e, tree_size(e), reason, cat)
     }
 
-    fn walk(&mut self, entries: &[FolderEntry], mode: SyncMode) {
-        use Direction::{ToLeft, ToRight};
-        use SyncMode::*;
+    /// Carries out `action` on an item of category `cat`, whose state is
+    /// described by `why` ("newer on left", "deleted on right", ...).
+    fn act(&mut self, e: &FolderEntry, cat: SyncCategory, action: SyncAction, why: &str) {
+        use SyncAction::*;
+        let (l, r) = (e.left.is_some(), e.right.is_some());
+        if !action.applies(l, r) {
+            let what = match action {
+                CopyLeftToRight => "no left copy to copy",
+                CopyRightToLeft => "no right copy to copy",
+                DeleteLeft => "nothing on the left to delete",
+                _ => "nothing on the right to delete",
+            };
+            return self.skip(e, Some(cat), format!("{why}; {what}"), false);
+        }
+        match action {
+            // Identical items aren't worth a row.
+            Leave if cat == SyncCategory::Same => {}
+            Leave => {
+                let reason = match cat {
+                    SyncCategory::LeftNewer | SyncCategory::RightNewer | SyncCategory::Different => {
+                        format!("{why}; not overwritten")
+                    }
+                    _ => format!("{why}; left alone"),
+                };
+                self.skip(e, Some(cat), reason, false)
+            }
+            Prompt => {
+                let reason = match cat {
+                    SyncCategory::Different => "differs, but neither side is newer".to_owned(),
+                    _ => format!("{why}: choose what to do"),
+                };
+                self.skip(e, Some(cat), reason, true)
+            }
+            CopyLeftToRight | CopyRightToLeft => {
+                let dir = if action == CopyLeftToRight { Direction::ToRight } else { Direction::ToLeft };
+                let reason = copy_reason(cat, why, dir);
+                if l && r {
+                    self.copy(e, dir, cat, &reason)
+                } else {
+                    self.copy_orphan(e, dir, cat, &reason)
+                }
+            }
+            DeleteLeft => self.delete(e, Direction::ToLeft, Some(cat), why),
+            DeleteRight => self.delete(e, Direction::ToRight, Some(cat), why),
+        }
+    }
+
+    /// Plans `entries`. `inherited` is a folder override applying to its
+    /// contents; `in_scope` is false above the items a scope names.
+    fn walk(&mut self, entries: &[FolderEntry], inherited: Option<SyncAction>, in_scope: bool) {
         for e in entries {
-            match e.status {
-                EntryStatus::Same | EntryStatus::Similar | EntryStatus::Different if e.is_dir => {
-                    self.inside(e, |p| p.walk(&e.children, mode))
-                }
-                // Rules-based "similar" files differ only in unimportant ways.
-                EntryStatus::Same | EntryStatus::Similar => {}
-                EntryStatus::LeftOnly if mode == TwoWay => self.two_way_orphan(e, Side::Left),
-                EntryStatus::RightOnly if mode == TwoWay => self.two_way_orphan(e, Side::Right),
-                EntryStatus::LeftOnly => match mode {
-                    UpdateLeftToRight | UpdateBoth | MirrorLeftToRight | TwoWay => {
-                        self.copy_orphan(e, ToRight, "orphan")
-                    }
-                    MirrorRightToLeft => self.delete(e, ToLeft, "mirror: not in source"),
-                    UpdateRightToLeft => {}
-                },
-                EntryStatus::RightOnly => match mode {
-                    UpdateRightToLeft | UpdateBoth | MirrorRightToLeft | TwoWay => {
-                        self.copy_orphan(e, ToLeft, "orphan")
-                    }
-                    MirrorLeftToRight => self.delete(e, ToRight, "mirror: not in source"),
-                    UpdateLeftToRight => {}
-                },
-                EntryStatus::Different if mode == TwoWay => self.two_way_changed(e),
-                EntryStatus::Different => self.different_file(e, mode),
-                EntryStatus::TypeMismatch => {
-                    self.skip(e, "a file on one side and a folder on the other", true)
-                }
-                EntryStatus::Error => {
-                    let msg = e.error.as_deref().unwrap_or("cannot be compared");
-                    self.skip(e, format!("error: {msg}"), true)
-                }
+            if in_scope {
+                self.visit(e, inherited);
+                continue;
+            }
+            let Some(scope) = &self.scope else { continue };
+            if scope.paths.contains(&e.rel_path) {
+                self.visit(e, inherited);
+            } else if e.is_dir && scope.ancestors.contains(&e.rel_path) {
+                self.inside(e, |p| p.walk(&e.children, inherited, false));
             }
         }
     }
 
-    fn different_file(&mut self, e: &FolderEntry, mode: SyncMode) {
-        use Direction::{ToLeft, ToRight};
-        use SyncMode::*;
-        match (mode, e.newer) {
-            (UpdateLeftToRight | UpdateBoth | TwoWay, Some(Side::Left)) => {
-                self.copy(e, ToRight, "newer on left")
+    fn visit(&mut self, e: &FolderEntry, inherited: Option<SyncAction>) {
+        use SyncAction::*;
+        let chosen = self.override_of(e);
+        match e.status {
+            EntryStatus::Same | EntryStatus::Similar | EntryStatus::Different if e.is_dir => match chosen {
+                Some(a @ (DeleteLeft | DeleteRight)) => self.act(e, SyncCategory::Different, a, "folder"),
+                Some(a) => self.inside(e, |p| p.walk(&e.children, Some(a), true)),
+                None => self.inside(e, |p| p.walk(&e.children, inherited, true)),
+            },
+            // Rules-based "similar" files differ only in unimportant ways.
+            // A folder's action never reaches identical files inside it.
+            EntryStatus::Same | EntryStatus::Similar => {
+                let a = chosen.unwrap_or(self.matrix.same);
+                self.act(e, SyncCategory::Same, a, "same")
             }
-            (UpdateRightToLeft | UpdateBoth | TwoWay, Some(Side::Right)) => {
-                self.copy(e, ToLeft, "newer on right")
-            }
-            (UpdateLeftToRight, Some(Side::Right)) => {
-                self.skip(e, "newer on right; not overwritten", false)
-            }
-            (UpdateRightToLeft, Some(Side::Left)) => {
-                self.skip(e, "newer on left; not overwritten", false)
-            }
-            (UpdateLeftToRight | UpdateRightToLeft | UpdateBoth | TwoWay, None) => {
-                self.skip(e, "differs, but neither side is newer", true)
-            }
-            (MirrorLeftToRight, newer) => {
-                let reason = match newer {
-                    Some(Side::Left) => "newer on left",
-                    Some(Side::Right) => "mirror: older on left",
-                    None => "different",
-                };
-                self.copy(e, ToRight, reason)
-            }
-            (MirrorRightToLeft, newer) => {
-                let reason = match newer {
-                    Some(Side::Right) => "newer on right",
-                    Some(Side::Left) => "mirror: older on right",
-                    None => "different",
-                };
-                self.copy(e, ToLeft, reason)
+            EntryStatus::Different => self.changed(e, chosen.or(inherited)),
+            EntryStatus::LeftOnly => self.orphan(e, Side::Left, chosen, inherited),
+            EntryStatus::RightOnly => self.orphan(e, Side::Right, chosen, inherited),
+            EntryStatus::TypeMismatch => match chosen {
+                Some(DeleteLeft) => self.delete(e, Direction::ToLeft, None, "type clash"),
+                Some(DeleteRight) => self.delete(e, Direction::ToRight, None, "type clash"),
+                Some(Leave) => self.skip(e, None, "a file on one side and a folder on the other; left alone", false),
+                Some(_) => self.skip(
+                    e,
+                    None,
+                    "a file on one side and a folder on the other; delete one side first",
+                    true,
+                ),
+                None => self.skip(e, None, "a file on one side and a folder on the other", true),
+            },
+            EntryStatus::Error => {
+                let msg = e.error.as_deref().unwrap_or("cannot be compared");
+                let left_alone = chosen == Some(Leave);
+                let suffix = if left_alone { "; left alone" } else { "" };
+                self.skip(e, None, format!("error: {msg}{suffix}"), !left_alone)
             }
         }
     }
 
-    /// Two-way: a file present on both sides with different contents.
-    fn two_way_changed(&mut self, e: &FolderEntry) {
+    /// Whether each side changed since the baseline, for a file on both sides
+    /// that the baseline knows.
+    fn changes_since_baseline(&self, e: &FolderEntry) -> Option<(bool, bool)> {
         let (Some(l), Some(r)) = (&e.left, &e.right) else {
-            return;
+            return None;
         };
-        let Some(base) = self.baseline.and_then(|b| b.get(&e.rel_path)).filter(|b| !b.is_dir) else {
-            // Never synced before: fall back to "newer wins".
-            return self.different_file(e, SyncMode::TwoWay);
+        let base = self.baseline?.get(&e.rel_path).filter(|b| !b.is_dir)?;
+        Some((
+            baseline::side_changed(l, &base.left, self.opts),
+            baseline::side_changed(r, &base.right, self.opts),
+        ))
+    }
+
+    /// A file present on both sides with different contents. With a
+    /// baseline, the side that changed since the last sync counts as newer.
+    fn changed(&mut self, e: &FolderEntry, forced: Option<SyncAction>) {
+        let (cat, why) = match self.changes_since_baseline(e) {
+            Some((true, false)) => (SyncCategory::LeftNewer, "changed on left"),
+            Some((false, true)) => (SyncCategory::RightNewer, "changed on right"),
+            Some(_) => return self.changed_on_both(e, forced),
+            // Never synced before (or no baseline): newer wins.
+            None => match e.newer {
+                Some(Side::Left) => (SyncCategory::LeftNewer, "newer on left"),
+                Some(Side::Right) => (SyncCategory::RightNewer, "newer on right"),
+                None => (SyncCategory::Different, "different"),
+            },
         };
-        let lc = baseline::side_changed(l, &base.left, self.opts);
-        let rc = baseline::side_changed(r, &base.right, self.opts);
-        match (lc, rc) {
-            (true, false) => self.copy(e, Direction::ToRight, "changed on left"),
-            (false, true) => self.copy(e, Direction::ToLeft, "changed on right"),
-            _ => {
-                let winner = match self.conflicts {
-                    ConflictPolicy::Skip => None,
-                    ConflictPolicy::NewerWins => e.newer,
-                    ConflictPolicy::LeftWins => Some(Side::Left),
-                    ConflictPolicy::RightWins => Some(Side::Right),
-                };
-                match winner {
-                    Some(side) => self.copy(
-                        e,
-                        toward(other(side)),
-                        &format!("conflict: {} version kept", side_name(side)),
-                    ),
-                    None => self.skip(e, "changed on both sides since the last sync", true),
-                }
-            }
+        let action = forced.unwrap_or(self.matrix.get(cat));
+        self.act(e, cat, action, why)
+    }
+
+    /// Changed on both sides since the last sync: the conflict policy
+    /// decides, unless the user already did.
+    fn changed_on_both(&mut self, e: &FolderEntry, forced: Option<SyncAction>) {
+        let why = "changed on both sides since the last sync";
+        if let Some(a) = forced {
+            return self.act(e, SyncCategory::Different, a, why);
+        }
+        let winner = match self.conflicts {
+            ConflictPolicy::Skip => None,
+            ConflictPolicy::NewerWins => e.newer,
+            ConflictPolicy::LeftWins => Some(Side::Left),
+            ConflictPolicy::RightWins => Some(Side::Right),
+        };
+        match winner {
+            Some(side) => self.copy(
+                e,
+                toward(other(side)),
+                SyncCategory::Different,
+                &format!("conflict: {} version kept", side_name(side)),
+            ),
+            None => self.skip(e, None, why, true),
         }
     }
 
-    /// Two-way: an item that exists only on `side`.
-    fn two_way_orphan(&mut self, e: &FolderEntry, side: Side) {
-        let to_other = toward(other(side));
-        if self.baseline.and_then(|b| b.get(&e.rel_path)).is_none() {
-            let reason = format!("new on {}", side_name(side));
-            return self.copy_orphan(e, to_other, &reason);
-        }
-        // It was in sync last time, so the other side deleted it.
+    /// An item that exists only on `side`. `chosen` is its own override,
+    /// `inherited` its folder's.
+    fn orphan(&mut self, e: &FolderEntry, side: Side, chosen: Option<SyncAction>, inherited: Option<SyncAction>) {
+        let known = self.baseline.and_then(|b| b.get(&e.rel_path)).is_some();
         let deleted_on = side_name(other(side));
-        if self.unchanged_since_baseline(e, side) {
-            return self.delete(e, toward(side), &format!("deleted on {deleted_on}"));
+        let (cat, why) = if !known {
+            let why = match self.baseline {
+                Some(_) => format!("new on {}", side_name(side)),
+                None => format!("{} only", side_name(side)),
+            };
+            (orphan_category(side, false), why)
+        } else if self.unchanged_since_baseline(e, side) {
+            // It was in sync last time, so the other side deleted it.
+            (orphan_category(side, true), format!("deleted on {deleted_on}"))
+        } else {
+            return self.edited_and_deleted(e, side, chosen.or(inherited));
+        };
+        let action = match (chosen, inherited) {
+            (Some(a), _) => a,
+            // A folder's action applies where it can; elsewhere it leaves alone.
+            (None, Some(a)) if cat.allows(a) => a,
+            (None, Some(_)) => SyncAction::Leave,
+            (None, None) => self.matrix.get(cat),
+        };
+        self.act(e, cat, action, &why)
+    }
+
+    /// Changed on `side` since the last sync but deleted on the other.
+    fn edited_and_deleted(&mut self, e: &FolderEntry, side: Side, forced: Option<SyncAction>) {
+        let cat = orphan_category(side, true);
+        let to_other = toward(other(side));
+        let why = format!("changed on {}, deleted on {}", side_name(side), side_name(other(side)));
+        if let Some(a) = forced {
+            let a = if cat.allows(a) { a } else { SyncAction::Leave };
+            return self.act(e, cat, a, &why);
         }
         let keep_edit = match self.conflicts {
             ConflictPolicy::Skip => None,
@@ -529,13 +755,9 @@ impl Planner<'_> {
             ConflictPolicy::RightWins => Some(side == Side::Right),
         };
         match keep_edit {
-            Some(true) => self.copy_orphan(e, to_other, "conflict: edit kept over deletion"),
-            Some(false) => self.delete(e, toward(side), "conflict: deletion kept over edit"),
-            None => self.skip(
-                e,
-                format!("changed on {}, deleted on {deleted_on}", side_name(side)),
-                true,
-            ),
+            Some(true) => self.copy_orphan(e, to_other, cat, "conflict: edit kept over deletion"),
+            Some(false) => self.delete(e, toward(side), Some(cat), "conflict: deletion kept over edit"),
+            None => self.skip(e, Some(cat), why, true),
         }
     }
 
@@ -673,7 +895,8 @@ pub fn plan_from_comparison_with(
     opts: &FolderCompareOptions,
     plan_opts: &PlanOptions,
 ) -> SyncPlan {
-    let baseline = plan_opts.baseline.filter(|b| !b.is_empty());
+    let baseline = plan_opts.baseline.filter(|b| mode.uses_baseline() && !b.is_empty());
+    let matrix = SyncMatrix::for_mode(mode, &plan_opts.matrix);
     let mut p = Planner {
         mkdirs: Vec::new(),
         copies: Vec::new(),
@@ -682,9 +905,14 @@ pub fn plan_from_comparison_with(
         opts,
         baseline,
         conflicts: plan_opts.conflicts,
+        matrix,
+        overrides: plan_opts.overrides.filter(|o| !o.is_empty()),
+        scope: plan_opts.scope.map(Scope::new),
+        skip_empty_folders: plan_opts.skip_empty_folders,
         left_dirs: Vec::new(),
     };
-    p.walk(&cmp.entries, mode);
+    let everything = p.scope.is_none();
+    p.walk(&cmp.entries, None, everything);
     let mut ops = p.mkdirs;
     ops.append(&mut p.copies);
     ops.append(&mut p.deletes);
@@ -697,11 +925,12 @@ pub fn plan_from_comparison_with(
         left_root: cmp.left_root.clone(),
         right_root: cmp.right_root.clone(),
         mode,
+        matrix,
         ops,
         skipped: p.skipped,
         summary,
         warnings,
-        has_baseline: mode == SyncMode::TwoWay && baseline.is_some(),
+        has_baseline: baseline.is_some(),
         comparison: None,
         elapsed_ms: cmp.elapsed_ms,
     }
@@ -710,6 +939,7 @@ pub fn plan_from_comparison_with(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::baseline;
     use crate::exec::{self, ExecOptions, ExecReport};
     use crate::fsops::PermanentDeleter;
     use crate::journal::NullJournal;
@@ -829,9 +1059,18 @@ mod tests {
         assert_eq!(p.summary.copy_to_right, 4);
         assert_eq!(p.summary.mkdir_right, 2);
         assert_eq!(p.summary.bytes_to_copy, 3 + 2 + 1 + 7);
-        assert_eq!(p.skipped.len(), 1);
-        assert_eq!(p.skipped[0].rel_path, "newer-right.txt");
-        assert!(!p.skipped[0].conflict);
+        // Left-alone items are listed (not conflicts) so the preview can override them.
+        let skipped: Vec<_> = p.skipped.iter().map(|s| (s.rel_path.as_str(), s.reason.as_str())).collect();
+        assert_eq!(
+            skipped,
+            [
+                ("ronly-dir", "right only; left alone"),
+                ("newer-right.txt", "newer on right; not overwritten"),
+                ("ronly.txt", "right only; left alone"),
+            ]
+        );
+        assert!(p.skipped.iter().all(|s| !s.conflict));
+        assert_eq!((p.skipped[0].on_left, p.skipped[0].on_right), (false, true));
 
         let r = run(&t, &p.ops);
         assert_eq!((r.succeeded, r.failed), (6, 0));
@@ -995,6 +1234,7 @@ mod tests {
             reason: String::new(),
             dst_before: None,
             left_rel_path: None,
+            category: None,
         });
         let r = run(&t, &p.ops);
         assert_eq!(r.failed, 2);
@@ -1076,6 +1316,7 @@ mod tests {
             reason: String::new(),
             dst_before: None,
             left_rel_path: None,
+            category: None,
         }];
         assert_eq!(run(&t, &ops).succeeded, 1);
     }
@@ -1140,6 +1381,281 @@ mod tests {
         assert_eq!(fs::read_to_string(left.join(nfc).join("right-only.txt")).unwrap(), "r");
         let again = plan_sync(&left, &right, SyncMode::UpdateBoth, &opts).unwrap();
         assert!(again.ops.is_empty(), "{:?}", describe(&again));
+    }
+
+    // ---------- bc5:sync-matrix ----------
+
+    /// One item per category, with a baseline so deletions are known:
+    /// ln/rn changed on one side, lo/ro new, ld/rd deleted on one side,
+    /// df different with equal times (never synced), sm the same.
+    fn categories() -> (Trees, Baseline) {
+        let dir = tempfile::tempdir().unwrap();
+        let (left, right) = (dir.path().join("L"), dir.path().join("R"));
+        for root in [&left, &right] {
+            for f in ["ln.txt", "rn.txt", "ld.txt", "rd.txt", "sm.txt"] {
+                write(root, f, "v1", OLD);
+            }
+        }
+        let cmp = folder::compare_folders(&left, &right, &opts()).unwrap();
+        let base = baseline::update_baseline(&Baseline::default(), &cmp.entries);
+        write(&left, "ln.txt", "v2 left", NEW);
+        write(&right, "rn.txt", "v2 right", NEW);
+        write(&left, "lo.txt", "L", OLD);
+        write(&right, "ro.txt", "R", OLD);
+        fs::remove_file(left.join("ld.txt")).unwrap();
+        fs::remove_file(right.join("rd.txt")).unwrap();
+        write(&left, "df.txt", "left", OLD);
+        write(&right, "df.txt", "right!", OLD);
+        (Trees { _dir: dir, left, right }, base)
+    }
+
+    const CATEGORY_FILES: [(SyncCategory, &str); 8] = [
+        (SyncCategory::LeftNewer, "ln.txt"),
+        (SyncCategory::RightNewer, "rn.txt"),
+        (SyncCategory::LeftOrphan, "lo.txt"),
+        (SyncCategory::RightOrphan, "ro.txt"),
+        (SyncCategory::LeftDeleted, "ld.txt"),
+        (SyncCategory::RightDeleted, "rd.txt"),
+        (SyncCategory::Different, "df.txt"),
+        (SyncCategory::Same, "sm.txt"),
+    ];
+
+    fn custom(t: &Trees, base: &Baseline, matrix: SyncMatrix, rules: &PlanRules) -> SyncPlan {
+        let po = PlanOptions {
+            matrix,
+            ..rules.options(Some(base), ConflictPolicy::Skip)
+        };
+        plan_sync_local(&t.left, &t.right, SyncMode::Custom, &opts(), &po).unwrap()
+    }
+
+    /// What the plan does with one path: an op, a skip, or nothing.
+    fn outcome(p: &SyncPlan, rel: &str) -> String {
+        let ops: Vec<String> = p
+            .ops
+            .iter()
+            .filter(|o| o.rel_path == rel)
+            .map(|o| {
+                let d = if o.direction == Direction::ToRight { ">" } else { "<" };
+                format!("{:?}{d}", o.kind)
+            })
+            .collect();
+        let skips: Vec<String> = p
+            .skipped
+            .iter()
+            .filter(|s| s.rel_path == rel)
+            .map(|s| if s.conflict { "Prompt".to_owned() } else { "Leave".to_owned() })
+            .collect();
+        [ops, skips].concat().join(",")
+    }
+
+    #[test]
+    fn every_category_takes_every_action() {
+        use SyncAction::*;
+        let (t, base) = categories();
+        for (cat, file) in CATEGORY_FILES {
+            for action in SyncAction::ALL {
+                let mut matrix = SyncMatrix::default();
+                matrix.set(cat, action);
+                let p = custom(&t, &base, matrix, &PlanRules::default());
+                assert!(p.has_baseline);
+                let got = outcome(&p, file);
+                let (l, r) = cat.sides();
+                let want = match action {
+                    _ if !cat.allows(action) => "Leave",
+                    Leave if cat == SyncCategory::Same => "",
+                    Leave => "Leave",
+                    Prompt => "Prompt",
+                    CopyLeftToRight => "Copy>",
+                    CopyRightToLeft => "Copy<",
+                    DeleteLeft => "Delete<",
+                    DeleteRight => "Delete>",
+                };
+                assert_eq!(got, want, "{cat:?} × {action:?}");
+                // Rows carry their category, and skips the sides present.
+                if let Some(op) = p.ops.iter().find(|o| o.rel_path == file) {
+                    assert_eq!(op.category, Some(cat), "{cat:?} × {action:?}");
+                    assert_eq!(op.overwrite, op.kind == OpKind::Copy && l && r);
+                }
+                if let Some(s) = p.skipped.iter().find(|s| s.rel_path == file) {
+                    assert_eq!((s.category, s.on_left, s.on_right), (Some(cat), l, r), "{cat:?} × {action:?}");
+                    if !cat.allows(action) {
+                        assert!(s.reason.contains("no ") || s.reason.contains("nothing"), "{}", s.reason);
+                    }
+                }
+                // No other category is touched: everything else is set to leave.
+                assert!(
+                    p.ops.iter().all(|o| o.rel_path == file),
+                    "{cat:?} × {action:?}: {:?}",
+                    describe(&p)
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_custom_matrix_runs_and_settles() {
+        use SyncAction::*;
+        let (t, mut base) = categories();
+        // "Update right, restore deletions, and drop new right-side files."
+        let matrix = SyncMatrix {
+            left_newer: CopyLeftToRight,
+            right_newer: Leave,
+            left_orphan: CopyLeftToRight,
+            right_orphan: DeleteRight,
+            left_deleted: CopyRightToLeft,
+            right_deleted: CopyLeftToRight,
+            different: Prompt,
+            same: Leave,
+        };
+        let p = custom(&t, &base, matrix, &PlanRules::default());
+        assert_eq!(
+            describe(&p),
+            ["Copy<ld.txt", "Copy>ln.txt", "Copy>lo.txt", "Copy>rd.txt", "Delete>ro.txt"]
+        );
+        assert_eq!(p.matrix, matrix);
+        let conflicts: Vec<_> = p.skipped.iter().filter(|s| s.conflict).map(|s| s.rel_path.as_str()).collect();
+        assert_eq!(conflicts, ["df.txt"], "prompt stays unresolved");
+        let r = run(&t, &p.ops);
+        assert_eq!(r.failed, 0, "{:?}", r.results);
+        assert_eq!(fs::read_to_string(t.left.join("ld.txt")).unwrap(), "v1", "restored");
+        assert!(!t.right.join("ro.txt").exists());
+        assert_eq!(fs::read_to_string(t.right.join("rn.txt")).unwrap(), "v2 right");
+
+        let cmp = folder::compare_folders(&t.left, &t.right, &opts()).unwrap();
+        base = baseline::update_baseline(&base, &cmp.entries);
+        let again = custom(&t, &base, matrix, &PlanRules::default());
+        assert!(again.ops.is_empty(), "{:?}", describe(&again));
+    }
+
+    #[test]
+    fn presets_plan_like_their_matrix() {
+        let (t, base) = categories();
+        for mode in SyncMode::PRESETS {
+            let po = PlanOptions { baseline: Some(&base), ..Default::default() };
+            let fixed = plan_sync_local(&t.left, &t.right, mode, &opts(), &po).unwrap();
+            let rules = PlanRules::default();
+            let as_custom = PlanOptions {
+                matrix: SyncMatrix::preset(mode),
+                // Only two-way consults the baseline among the presets.
+                baseline: mode.uses_baseline().then_some(&base),
+                ..rules.options(None, ConflictPolicy::Skip)
+            };
+            let custom = plan_sync_local(&t.left, &t.right, SyncMode::Custom, &opts(), &as_custom).unwrap();
+            assert_eq!(describe(&fixed), describe(&custom), "{mode:?}");
+            assert_eq!(fixed.matrix, SyncMatrix::preset(mode));
+        }
+    }
+
+    #[test]
+    fn row_overrides_win_over_the_matrix_and_conflicts() {
+        use SyncAction::*;
+        let t = trees();
+        write(&t.left, "tie.txt", "aaaa", OLD);
+        write(&t.right, "tie.txt", "bbbbbb", OLD);
+        write(&t.left, "clash", "file", OLD);
+        write(&t.right, "clash/inner.txt", "dir", OLD);
+        let rules = PlanRules {
+            overrides: HashMap::from([
+                ("tie.txt".to_owned(), CopyRightToLeft),       // a conflict row
+                ("newer-right.txt".to_owned(), CopyLeftToRight), // a skipped row: overwrite the newer file
+                ("ronly.txt".to_owned(), DeleteRight),          // a left-alone orphan
+                ("newer-left.txt".to_owned(), Leave),           // an op row
+                ("clash".to_owned(), DeleteRight),              // type clash: the right folder goes
+                ("lonly-dir/a.txt".to_owned(), Leave),          // inside a copied orphan folder
+                ("ronly-dir".to_owned(), CopyLeftToRight),      // can't apply: nothing on the left
+            ]),
+            ..Default::default()
+        };
+        let po = rules.options(None, ConflictPolicy::Skip);
+        let p = plan_sync_local(&t.left, &t.right, SyncMode::UpdateLeftToRight, &opts(), &po).unwrap();
+        assert_eq!(outcome(&p, "tie.txt"), "Copy<");
+        assert_eq!(outcome(&p, "newer-right.txt"), "Copy>");
+        assert_eq!(outcome(&p, "ronly.txt"), "Delete>");
+        assert_eq!(outcome(&p, "newer-left.txt"), "Leave");
+        assert_eq!(outcome(&p, "lonly-dir"), "Mkdir>");
+        assert_eq!(outcome(&p, "lonly-dir/a.txt"), "Leave");
+        assert_eq!(outcome(&p, "lonly-dir/sub/b.txt"), "Copy>", "siblings keep the folder's copy");
+        assert_eq!(outcome(&p, "ronly-dir"), "Leave");
+        let clash = p.ops.iter().find(|o| o.rel_path == "clash").unwrap();
+        assert_eq!((clash.kind, clash.direction, clash.is_dir), (OpKind::Delete, Direction::ToRight, true));
+        assert_eq!(p.summary.conflicts, 0);
+
+        let r = run(&t, &p.ops);
+        assert_eq!(r.failed, 0, "{:?}", r.results);
+        assert_eq!(fs::read_to_string(t.left.join("tie.txt")).unwrap(), "bbbbbb");
+        assert_eq!(fs::read_to_string(t.right.join("newer-right.txt")).unwrap(), "left v1");
+        assert!(!t.right.join("clash").exists() && t.left.join("clash").is_file());
+        assert!(!t.right.join("lonly-dir/a.txt").exists());
+    }
+
+    #[test]
+    fn folder_overrides_reach_their_contents() {
+        use SyncAction::*;
+        let t = trees();
+        for (side, body, secs) in [(&t.left, "left", OLD), (&t.right, "right", NEW)] {
+            write(side, "shared/same.txt", "same", OLD);
+            write(side, "shared/diff.txt", body, secs);
+        }
+        write(&t.left, "shared/lnew.txt", "l", OLD);
+        write(&t.right, "shared/rnew.txt", "r", OLD);
+        let plan_with = |action| {
+            let rules = PlanRules {
+                overrides: HashMap::from([("shared".to_owned(), action)]),
+                ..Default::default()
+            };
+            let po = rules.options(None, ConflictPolicy::Skip);
+            let p = plan_sync_local(&t.left, &t.right, SyncMode::UpdateBoth, &opts(), &po).unwrap();
+            let mut inside: Vec<String> = ["shared", "shared/same.txt", "shared/diff.txt", "shared/lnew.txt", "shared/rnew.txt"]
+                .iter()
+                .map(|f| format!("{f}={}", outcome(&p, f)))
+                .collect();
+            inside.retain(|x| !x.ends_with('='));
+            inside
+        };
+        // Copy L→R overwrites the newer right file too, but never touches
+        // identical files or items only the right side has.
+        assert_eq!(
+            plan_with(CopyLeftToRight),
+            ["shared/diff.txt=Copy>", "shared/lnew.txt=Copy>", "shared/rnew.txt=Leave"]
+        );
+        assert_eq!(
+            plan_with(Leave),
+            ["shared/diff.txt=Leave", "shared/lnew.txt=Leave", "shared/rnew.txt=Leave"]
+        );
+        assert_eq!(plan_with(DeleteLeft), ["shared=Delete<"]);
+    }
+
+    #[test]
+    fn scope_limits_the_plan_to_the_selection() {
+        let t = trees();
+        let scope = vec!["lonly-dir/sub".to_owned(), "newer-right.txt".to_owned(), "ronly.txt".to_owned()];
+        let rules = PlanRules { scope: Some(scope), ..Default::default() };
+        let p = plan_sync_local(&t.left, &t.right, SyncMode::MirrorLeftToRight, &opts(), &rules.options(None, ConflictPolicy::Skip)).unwrap();
+        assert_eq!(
+            describe(&p),
+            ["Mkdir>lonly-dir/sub", "Copy>lonly-dir/sub/b.txt", "Copy>newer-right.txt", "Delete>ronly.txt"]
+        );
+        let r = run(&t, &p.ops);
+        assert_eq!(r.failed, 0, "{:?}", r.results);
+        assert!(t.right.join("lonly-dir/sub/b.txt").is_file());
+        assert!(!t.right.join("lonly-dir/a.txt").exists(), "outside the selection");
+        assert!(t.right.join("ronly-dir").exists(), "outside the selection");
+    }
+
+    #[test]
+    fn empty_folders_can_be_left_uncreated() {
+        let t = trees();
+        fs::create_dir_all(t.left.join("empty/inner")).unwrap();
+        fs::create_dir_all(t.left.join("lonly-dir/hollow")).unwrap();
+        let both = plan(&t, SyncMode::UpdateLeftToRight);
+        assert!(describe(&both).contains(&"Mkdir>empty/inner".to_owned()));
+        let rules = PlanRules { skip_empty_folders: true, ..Default::default() };
+        let p = plan_sync_local(&t.left, &t.right, SyncMode::UpdateLeftToRight, &opts(), &rules.options(None, ConflictPolicy::Skip)).unwrap();
+        let d = describe(&p);
+        assert!(!d.iter().any(|x| x.contains("empty") || x.contains("hollow")), "{d:?}");
+        assert!(d.contains(&"Mkdir>lonly-dir".to_owned()), "folders with files are still created");
+        let skip: Vec<_> = p.skipped.iter().filter(|s| s.reason.starts_with("empty folder")).map(|s| s.rel_path.as_str()).collect();
+        assert_eq!(skip, ["empty", "lonly-dir/hollow"]);
     }
 
     #[test]
