@@ -476,6 +476,7 @@ fn main() {
             folder::compare_folders_cancel,
             folder::restage_folders,
             folder::forget_folder_scan,
+            folder::compare_folder_entries,
             watch_paths,
             unwatch_paths,
             // bc5:hex — hex compare (hex.rs)

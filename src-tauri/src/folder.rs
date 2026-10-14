@@ -14,8 +14,9 @@ use std::time::{Duration, Instant};
 
 use pcompare_core::folder::{
     self, ChecksumCache, ContentMethod, ContentVerdict, FolderCompareOptions, FolderCompareResult,
-    FolderLevel, FolderScan, ScanControl, ScanProgress,
+    FolderEntry, FolderLevel, FolderScan, ScanControl, ScanProgress,
 };
+use pcompare_remote::RemoteManager;
 use serde::Serialize;
 use pcompare_core::text::TextDiffOptions;
 use tauri::ipc::Channel;
@@ -167,6 +168,28 @@ fn scans(app: &AppHandle) -> tauri::State<'_, FolderScans> {
     app.state::<FolderScans>()
 }
 
+/// The tree `id` kept, if it's of these folders.
+fn kept_session(app: &AppHandle, id: &str, left: &str, right: &str, expand: bool) -> Option<Arc<ScanSession>> {
+    scans(app)
+        .take(id)
+        .filter(|s| s.left == left && s.right == right && s.expand == expand)
+}
+
+/// Resolves both sides afresh, with nothing listed yet.
+fn new_session(r: &RemoteManager, left: &str, right: &str, expand: bool) -> pcompare_core::Result<Arc<ScanSession>> {
+    // bc5:archives — sides resolve in archive.rs: folders, archive /
+    // snapshot / svn: sides, archives in the tree optionally expanded,
+    // and a side with no folder chosen yet as empty.
+    let sides = (archive::folder_side(r, left, expand)?, archive::folder_side(r, right, expand)?);
+    Ok(Arc::new(ScanSession {
+        left: left.to_owned(),
+        right: right.to_owned(),
+        expand,
+        sides,
+        scan: FolderScan::new(),
+    }))
+}
+
 /// What a comparison command was asked for.
 struct Request {
     left: String,
@@ -270,25 +293,13 @@ async fn run(
         let outbox_lock = || outbox.lock().unwrap_or_else(|e| e.into_inner());
         let res = with_remote(&app, [left, right], |r| {
             let kept = match &req.scan_id {
-                Some(id) if restage => scans(&app)
-                    .take(id)
-                    .filter(|s| s.left == *left && s.right == *right && s.expand == expand),
+                Some(id) if restage => kept_session(&app, id, left, right, expand),
                 _ => None,
             };
             let session = match kept {
                 Some(session) => session,
                 None => {
-                    // bc5:archives — sides resolve in archive.rs: folders, archive /
-                    // snapshot / svn: sides, archives in the tree optionally expanded,
-                    // and a side with no folder chosen yet as empty.
-                    let sides = (archive::folder_side(r, left, expand)?, archive::folder_side(r, right, expand)?);
-                    let session = Arc::new(ScanSession {
-                        left: left.clone(),
-                        right: right.clone(),
-                        expand,
-                        sides,
-                        scan: FolderScan::new(),
-                    });
+                    let session = new_session(r, left, right, expand)?;
                     if let Some(id) = &req.scan_id {
                         scans(&app).put(id.clone(), session.clone());
                     }
@@ -350,6 +361,56 @@ async fn run(
         out.update.end = true;
         out.flush(&on_progress, true);
         res
+    })
+    .await
+}
+
+/// Compares just the rows at `rels` (tree paths, right-hand names) the way
+/// [`compare_folders`] would report them, each `None` where it would have
+/// no such row — the folder view's refresh after a file operation (see
+/// [`folder::compare_entries`]). With the `scan_id` of the comparison on
+/// screen, folders on the way down come from its kept tree, and filtered
+/// rows are reported as that comparison reports them.
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+pub async fn compare_folder_entries(
+    app: AppHandle,
+    left: String,
+    right: String,
+    options: FolderCompareOptions,
+    rels: Vec<String>,
+    scan_id: Option<String>,
+    expand_archives: Option<bool>,
+    show_filtered: Option<bool>,
+) -> CmdResult<Vec<Option<FolderEntry>>> {
+    let expand = expand_archives.unwrap_or(false);
+    blocking(move || {
+        with_remote(&app, [&left, &right], |r| {
+            let kept = scan_id.as_deref().and_then(|id| kept_session(&app, id, &left, &right, expand));
+            let session = match kept {
+                Some(session) => session,
+                None => new_session(r, &left, &right, expand)?,
+            };
+            let (ls, rs) = &session.sides;
+            let options = archive::options_for_sides(&options, ls, rs);
+            let cache = sync::checksum_cache(&app, [archive::cache_root(&left), archive::cache_root(&right)]);
+            let stored = archive::stored_checksums(ls, rs, cache.as_ref().map(|c| c as &dyn ChecksumCache));
+            let control = ScanControl {
+                cache: match &stored {
+                    Some(s) => Some(s as &dyn ChecksumCache), // bc5:archives
+                    None => cache.as_ref().map(|c| c as &dyn ChecksumCache),
+                },
+                scan: Some(&session.scan),
+                keep_filtered: scan_id.is_some(),
+                expand_filtered: show_filtered.unwrap_or(false),
+                ..Default::default()
+            };
+            let rows = folder::compare_entries(&*ls.fs, &ls.path, &*rs.fs, &rs.path, &rels, &options, control)?;
+            if let Some(cache) = cache {
+                let _ = cache.flush();
+            }
+            Ok(rows)
+        })
     })
     .await
 }
