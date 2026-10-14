@@ -5137,7 +5137,7 @@ dependencies = [
 
 [[package]]
 name = "pcompare"
-version = "0.3.0"
+version = "1.0.0"
 dependencies = [
  "chrono",
  "gethostname",
@@ -5178,7 +5178,7 @@ dependencies = [
 
 [[package]]
 name = "pcompare-archive"
-version = "0.3.0"
+version = "1.0.0"
 dependencies = [
  "bzip2",
  "chrono",
@@ -5197,7 +5197,7 @@ dependencies = [
 
 [[package]]
 name = "pcompare-automation"
-version = "0.3.0"
+version = "1.0.0"
 dependencies = [
  "chrono",
  "chrono-tz",
@@ -5216,7 +5216,7 @@ dependencies = [
 
 [[package]]
 name = "pcompare-convert"
-version = "0.3.0"
+version = "1.0.0"
 dependencies = [
  "cfb",
  "encoding_rs",
@@ -5230,7 +5230,7 @@ dependencies = [
 
 [[package]]
 name = "pcompare-core"
-version = "0.3.0"
+version = "1.0.0"
 dependencies = [
  "chardetng",
  "crc32fast",
@@ -5250,7 +5250,7 @@ dependencies = [
 
 [[package]]
 name = "pcompare-db"
-version = "0.3.0"
+version = "1.0.0"
 dependencies = [
  "bigdecimal",
  "chrono",
@@ -5270,7 +5270,7 @@ dependencies = [
 
 [[package]]
 name = "pcompare-import"
-version = "0.3.0"
+version = "1.0.0"
 dependencies = [
  "roxmltree",
  "serde",
@@ -5282,7 +5282,7 @@ dependencies = [
 
 [[package]]
 name = "pcompare-index"
-version = "0.3.0"
+version = "1.0.0"
 dependencies = [
  "pcompare-core",
  "pcompare-sync",
@@ -5295,7 +5295,7 @@ dependencies = [
 
 [[package]]
 name = "pcompare-merge"
-version = "0.3.0"
+version = "1.0.0"
 dependencies = [
  "pcompare-core",
  "serde",
@@ -5307,7 +5307,7 @@ dependencies = [
 
 [[package]]
 name = "pcompare-meta"
-version = "0.3.0"
+version = "1.0.0"
 dependencies = [
  "base64 0.23.1",
  "lofty",
@@ -5321,7 +5321,7 @@ dependencies = [
 
 [[package]]
 name = "pcompare-notify"
-version = "0.3.0"
+version = "1.0.0"
 dependencies = [
  "chrono",
  "hmac 0.12.1",
@@ -5338,7 +5338,7 @@ dependencies = [
 
 [[package]]
 name = "pcompare-picture"
-version = "0.3.0"
+version = "1.0.0"
 dependencies = [
  "base64 0.22.1",
  "image",
@@ -5350,7 +5350,7 @@ dependencies = [
 
 [[package]]
 name = "pcompare-remote"
-version = "0.3.0"
+version = "1.0.0"
 dependencies = [
  "base64 0.22.1",
  "keyring",
@@ -5373,7 +5373,7 @@ dependencies = [
 
 [[package]]
 name = "pcompare-report"
-version = "0.3.0"
+version = "1.0.0"
 dependencies = [
  "chrono",
  "pcompare-core",
@@ -5385,7 +5385,7 @@ dependencies = [
 
 [[package]]
 name = "pcompare-review"
-version = "0.3.0"
+version = "1.0.0"
 dependencies = [
  "pcompare-core",
  "serde",
@@ -5396,7 +5396,7 @@ dependencies = [
 
 [[package]]
 name = "pcompare-script"
-version = "0.3.0"
+version = "1.0.0"
 dependencies = [
  "chrono",
  "pcompare-core",
@@ -5407,7 +5407,7 @@ dependencies = [
 
 [[package]]
 name = "pcompare-shell"
-version = "0.3.0"
+version = "1.0.0"
 dependencies = [
  "serde",
  "tempfile",
@@ -5416,7 +5416,7 @@ dependencies = [
 
 [[package]]
 name = "pcompare-sync"
-version = "0.3.0"
+version = "1.0.0"
 dependencies = [
  "crc32fast",
  "filetime",
@@ -5435,7 +5435,7 @@ dependencies = [
 
 [[package]]
 name = "pcompare-table"
-version = "0.3.0"
+version = "1.0.0"
 dependencies = [
  "calamine",
  "csv",
