@@ -442,10 +442,12 @@ export function FolderCompare({
 
   const open = (e: FolderEntry) => {
     if (e.isDir && !cfg.flatten) return toggle(e.relPath);
-    const p = paths(e);
-    if (!p) return;
+    if (!result || e.left?.isDir || e.right?.isDir) return;
+    // An orphan (or any file while only one folder is loaded) opens with the missing side blank.
+    const p: [string, string] = [e.left ? sidePath(e, "left") : "", e.right ? sidePath(e, "right") : ""];
+    if (!p[0] && !p[1]) return;
     // bc5:converters — pairs matching an "always use" external tool open there instead.
-    openExternalIfAlways(...p)
+    (p[0] && p[1] ? openExternalIfAlways(...p) : Promise.resolve(false))
       .then((launched) => !launched && onOpenFiles(...p, engineOptions.rules))
       .catch((err) => setError(errorMessage(err)));
   };

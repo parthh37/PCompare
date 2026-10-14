@@ -647,7 +647,8 @@ export default function App() {
           <FolderCompare
             {...two}
             onOpenFiles={(left, right, rules) => {
-              const kind = sessionForFiles(left, right);
+              // An orphan has one path: route by that file's type (the viewer shows the other side blank).
+              const kind = left && right ? sessionForFiles(left, right) : sessionForFiles(left || right, left || right);
               // Text rules only mean something to a text compare.
               openTab(kind, left, right, kind === "text" ? { settings: { options: rules } } : {});
             }}
