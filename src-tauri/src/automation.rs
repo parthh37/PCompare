@@ -46,7 +46,7 @@ use pcompare_notify::{
 use pcompare_remote::profile::KeyringSecrets;
 use pcompare_sync::exec::{ExecOptions, ExecProgress};
 use pcompare_sync::sync::{
-    ConflictPolicy, Direction, OpKind, SyncMode, SyncPlan, SyncSummary, WarningKind,
+    ConflictPolicy, Direction, OpKind, SyncMatrix, SyncMode, SyncPlan, SyncSummary, WarningKind,
 };
 use serde::{Deserialize, Serialize};
 use tauri::menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem};
@@ -599,8 +599,9 @@ impl TauriRunner {
             return cancelled_before_start();
         }
 
+        let rules = task.plan_rules(); // bc5:sync-matrix
         let plan =
-            match shell_sync::plan(app, left, right, task.mode, &task.compare, task.conflicts) {
+            match shell_sync::plan(app, left, right, task.mode, &task.compare, task.conflicts, &rules) {
                 Ok(p) => p,
                 Err(e) => {
                     return RunOutcome::failed(
@@ -617,7 +618,7 @@ impl TauriRunner {
         }
         let conflicts = plan.summary.conflicts;
         if plan.ops.is_empty() {
-            if task.mode == SyncMode::TwoWay {
+            if task.mode.uses_baseline() {
                 // Without a baseline the next two-way run can't tell a
                 // deletion from a new file, so record the in-sync state now.
                 shell_sync::update_baseline(app, left, right, &plan);
@@ -691,6 +692,7 @@ impl TauriRunner {
             mode: task.mode,
             compare: &task.compare,
             conflicts: task.conflicts,
+            rules: &rules, // bc5:sync-matrix
         };
         let run = match shell_sync::execute_new_job(
             app,
@@ -1065,6 +1067,8 @@ fn default_task() -> SyncTask {
         left: String::new(),
         right: String::new(),
         mode: SyncMode::default(),
+        matrix: SyncMatrix::preset(SyncMode::default()), // bc5:sync-matrix
+        skip_empty_folders: false,
         conflicts: ConflictPolicy::default(),
         compare: FolderCompareOptions::default(),
         exec: ExecOptions::default(),

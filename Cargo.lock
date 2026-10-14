@@ -5397,9 +5397,15 @@ name = "pcompare-script"
 version = "1.4.0"
 dependencies = [
  "chrono",
+ "filetime",
+ "pcompare-archive",
+ "pcompare-convert",
  "pcompare-core",
+ "pcompare-merge",
  "pcompare-report",
  "pcompare-sync",
+ "regex",
+ "serde_json",
  "tempfile",
 ]
 
