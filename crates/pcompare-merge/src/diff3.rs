@@ -9,7 +9,7 @@
 //! [`MergeRules::conflict_scan_lines`] (e.g. with the default of 2, left
 //! editing line 2 and right editing line 3 or 4 is a conflict).
 
-use pcompare_core::text::{LineNormalizer, TextDiffOptions};
+use pcompare_core::text::{line_keys, KeySide, LineNormalizer, SideInput, TextDiffOptions};
 use serde::{Deserialize, Serialize};
 use similar::{capture_diff_slices, DiffOp};
 
@@ -187,11 +187,24 @@ fn offset(pos: usize, delta: isize) -> usize {
     pos.checked_add_signed(delta).expect("hunk deltas never move a position below zero")
 }
 
+/// Comparison keys of every line under the full Text Compare rule set
+/// (see [`line_keys`]).
+fn keys<S: AsRef<str>>(lines: &[S], norm: &LineNormalizer, opts: &TextDiffOptions, role: KeySide) -> Vec<String> {
+    let lines: Vec<&str> = lines.iter().map(AsRef::as_ref).collect();
+    let side = SideInput {
+        lines: &lines,
+        ..Default::default()
+    };
+    line_keys(&side, norm, opts, role)
+}
+
 /// Merges `left` and `right`, both derived from `base`.
 ///
-/// Lines are matched through a [`LineNormalizer`], so whitespace, case and
-/// ignore-pattern options decide what counts as a change. Where the files
-/// agree only up to those options, output takes the left file's text.
+/// Lines are matched under the Text Compare rules in `opts` (whitespace,
+/// case, ignore patterns, grammar comment/string importance, replacements,
+/// ignored columns and blocks; the grammar comes from `opts.grammar`), so
+/// they decide what counts as a change. Where the files agree only up to
+/// those rules, output takes the left file's text.
 /// `rules` decides how close left and right changes may sit before they
 /// conflict. Fails only when an ignore pattern is not a valid regex.
 pub fn merge3<S: AsRef<str>>(
@@ -202,8 +215,9 @@ pub fn merge3<S: AsRef<str>>(
     rules: &MergeRules,
 ) -> pcompare_core::Result<MergeResult> {
     let norm = LineNormalizer::new(opts)?;
-    let keys = |lines: &[S]| -> Vec<String> { lines.iter().map(|l| norm.key(l.as_ref())).collect() };
-    let (base_keys, left_keys, right_keys) = (keys(base), keys(left), keys(right));
+    let base_keys = keys(base, &norm, opts, KeySide::Base);
+    let left_keys = keys(left, &norm, opts, KeySide::Left);
+    let right_keys = keys(right, &norm, opts, KeySide::Right);
     let left_hunks = hunks(&base_keys, &left_keys, opts);
     let right_hunks = hunks(&base_keys, &right_keys, opts);
 
@@ -309,12 +323,12 @@ pub fn merge3<S: AsRef<str>>(
 /// With no base to tell which side changed, every region where the files
 /// differ becomes a [`ChunkKind::Conflict`] for the user to resolve; the
 /// regions where they agree are `Stable`. There is no base, so every chunk's
-/// `base` range is empty. Lines are matched through a [`LineNormalizer`]
-/// like [`merge3`].
+/// `base` range is empty. Lines are matched under the full rule set like
+/// [`merge3`].
 pub fn merge2<S: AsRef<str>>(left: &[S], right: &[S], opts: &TextDiffOptions) -> pcompare_core::Result<MergeResult> {
     let norm = LineNormalizer::new(opts)?;
-    let keys = |lines: &[S]| -> Vec<String> { lines.iter().map(|l| norm.key(l.as_ref())).collect() };
-    let (left_keys, right_keys) = (keys(left), keys(right));
+    let left_keys = keys(left, &norm, opts, KeySide::Left);
+    let right_keys = keys(right, &norm, opts, KeySide::Right);
     let none = LineRange::new(0, 0);
     let mut chunks = Vec::new();
     let mut stats = MergeStats::default();
@@ -440,7 +454,7 @@ pub fn merge_trailing_newline(base: bool, left: bool, right: bool) -> bool {
 mod tests {
     use super::*;
     use crate::split_lines;
-    use pcompare_core::text::WhitespaceMode;
+    use pcompare_core::text::{BlockPattern, ColumnRange, Replacement, WhitespaceMode};
 
     struct Merged {
         result: MergeResult,
@@ -727,6 +741,70 @@ mod tests {
             ..Default::default()
         };
         assert!(merge3(&["a"], &["b"], &["c"], &bad, &MergeRules::default()).is_err());
+    }
+
+    #[test]
+    fn comment_rules_apply_to_merges() {
+        // Left only edits a trailing comment; right changes the code.
+        let (base, left, right) = ("x = 1; // one\ny\n", "x = 1; // uno\ny\n", "x = 2; // one\ny\n");
+        assert_eq!(kinds(&merge(base, left, right)), vec![Conflict, Stable]);
+        let opts = TextDiffOptions {
+            grammar: Some("c".into()),
+            ignore_comments: true,
+            ..Default::default()
+        };
+        let m = merge_with(base, left, right, &opts);
+        assert_eq!(kinds(&m), vec![RightChanged, Stable]);
+        assert_eq!(m.output, lines("x = 2; // one\ny"));
+        // Strings too: only the delimiters count.
+        let opts = TextDiffOptions {
+            grammar: Some("c".into()),
+            ignore_strings: true,
+            ..Default::default()
+        };
+        let m = merge_with("s(\"a\");\nz\n", "s(\"b\");\nz\n", "s(\"a\");\nZ\n", &opts);
+        assert_eq!(m.result.stats.conflicts, 0, "{:?}", kinds(&m));
+    }
+
+    #[test]
+    fn replacements_apply_to_merges() {
+        // Right renamed foo to bar; left edited the same line's other half.
+        let (base, left, right) = ("foo(1)\nz\n", "foo(2)\nz\n", "bar(1)\nz\n");
+        assert_eq!(merge(base, left, right).result.stats.conflicts, 1);
+        let opts = TextDiffOptions {
+            replacements: vec![Replacement {
+                left: "foo".into(),
+                right: "bar".into(),
+                regex: false,
+            }],
+            ..Default::default()
+        };
+        let m = merge_with(base, left, right, &opts);
+        assert_eq!(kinds(&m), vec![LeftChanged, Stable]);
+        assert_eq!(m.result.stats.conflicts, 0);
+    }
+
+    #[test]
+    fn ignored_columns_and_blocks_apply_to_merges() {
+        // Columns 1-3 are sequence numbers that both sides renumbered.
+        let opts = TextDiffOptions {
+            ignore_columns: vec![ColumnRange { start: 1, end: Some(3) }],
+            ..Default::default()
+        };
+        let m = merge_with("001a\n002b\n", "101a\n102B\n", "201a\n202b\n", &opts);
+        assert_eq!(kinds(&m), vec![Stable, LeftChanged]);
+        // A generated block both sides regenerated differently.
+        let opts = TextDiffOptions {
+            ignore_blocks: vec![BlockPattern {
+                begin: "^// gen-begin".into(),
+                end: "^// gen-end".into(),
+            }],
+            ..Default::default()
+        };
+        let base = "// gen-begin\nold\n// gen-end\nkeep\n";
+        let m = merge_with(base, "// gen-begin\nnew-left\n// gen-end\nkeep\n", "// gen-begin\nnew-right\n// gen-end\nKEEP\n", &opts);
+        assert_eq!(m.result.stats.conflicts, 0, "{:?}", kinds(&m));
+        assert_eq!(kinds(&m), vec![Stable, RightChanged]);
     }
 
     fn merge_two(left: &str, right: &str) -> Merged {
