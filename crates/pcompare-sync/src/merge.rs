@@ -15,6 +15,7 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::io::{self, Read};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
 
 use globset::{GlobBuilder, GlobSet, GlobSetBuilder};
@@ -351,7 +352,14 @@ fn merge_text_bytes(base: &[u8], left: &[u8], right: &[u8]) -> Option<TextMerged
         return None;
     }
     let [(b, _, _), (l, encoding, has_bom), (r, _, _)] = [base, left, right].map(textfile::decode);
-    let merged = pcompare_merge::merge_text(Some(&b), &l, &r, &TextDiffOptions::default()).ok()?;
+    let merged = pcompare_merge::merge_text(
+        Some(&b),
+        &l,
+        &r,
+        &TextDiffOptions::default(),
+        &pcompare_merge::MergeRules::default(),
+    )
+    .ok()?;
     let stats = &merged.merge.stats;
     let summary = TextMergeSummary {
         changes: stats.auto_merged(),
@@ -736,6 +744,9 @@ pub struct MergeItemResult {
     pub is_dir: bool,
     pub outcome: MergeOutcome,
     pub error: Option<String>,
+    /// Where the overwritten version went (in a versioning folder). When it
+    /// couldn't be disposed of, `error` says where it was kept instead.
+    pub backup: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Serialize)]
@@ -752,6 +763,27 @@ pub struct MergeReport {
     pub failed: usize,
     pub bytes_written: u64,
     pub elapsed_ms: u128,
+    /// Stopped by the user; the remaining decisions were not applied.
+    pub cancelled: bool,
+}
+
+/// Progress of [`execute_merge_with`], sent after every decision.
+#[derive(Debug, Clone, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MergeProgress {
+    /// Decisions handled so far, out of `total`.
+    pub done: usize,
+    pub total: usize,
+    /// The item being worked on; `None` once finished.
+    pub current: Option<String>,
+    pub bytes_written: u64,
+}
+
+/// Cancellation and progress for a running folder merge.
+pub struct MergeRun<'a> {
+    /// Set to stop at the next item (or inside a large copy).
+    pub cancel: &'a AtomicBool,
+    pub on_progress: &'a mut dyn FnMut(&MergeProgress),
 }
 
 impl MergeReport {
@@ -761,6 +793,17 @@ impl MergeReport {
         is_dir: bool,
         outcome: MergeOutcome,
         error: Option<String>,
+    ) {
+        self.record_with_backup(rel_path, is_dir, outcome, error, None);
+    }
+
+    fn record_with_backup(
+        &mut self,
+        rel_path: &str,
+        is_dir: bool,
+        outcome: MergeOutcome,
+        error: Option<String>,
+        backup: Option<String>,
     ) {
         match outcome {
             MergeOutcome::Written => self.written += 1,
@@ -774,6 +817,7 @@ impl MergeReport {
             is_dir,
             outcome,
             error,
+            backup,
         });
     }
 }
@@ -826,6 +870,11 @@ type Step = (Option<MergeOutcome>, u64);
 /// items go through `deleter`; a folder whose whole subtree is deleted is
 /// removed in one step. Items marked [`MergeAction::Skip`] are left untouched
 /// and reported. Per-item failures are reported without stopping the merge.
+///
+/// Files the output already holds are never simply overwritten: the old
+/// version is moved aside and, once the new one is in place, handed to
+/// `deleter` (Trash, a versioning folder under `output/`, or gone when the
+/// user chose permanent deletion).
 pub fn execute_merge(
     base: Option<&Path>,
     left: &Path,
@@ -833,6 +882,24 @@ pub fn execute_merge(
     output: &Path,
     decisions: &[MergeDecision],
     deleter: &dyn Deleter,
+) -> Result<MergeReport> {
+    let cancel = AtomicBool::new(false);
+    let run = MergeRun {
+        cancel: &cancel,
+        on_progress: &mut |_| {},
+    };
+    execute_merge_with(base, left, right, output, decisions, deleter, run)
+}
+
+/// [`execute_merge`] with progress reports and cancellation.
+pub fn execute_merge_with(
+    base: Option<&Path>,
+    left: &Path,
+    right: &Path,
+    output: &Path,
+    decisions: &[MergeDecision],
+    deleter: &dyn Deleter,
+    run: MergeRun,
 ) -> Result<MergeReport> {
     let started = Instant::now();
     let mut inputs = vec![("left", left), ("right", right)];
@@ -870,8 +937,28 @@ pub fn execute_merge(
     let mut report = MergeReport::default();
     let mut removed: Vec<&str> = Vec::new();
     let mut prune: Vec<&MergeDecision> = Vec::new();
+    let MergeRun { cancel, on_progress } = run;
+    let mut progress = MergeProgress {
+        total: decisions.len(),
+        ..Default::default()
+    };
+    let cancelled = || cancel.load(Ordering::Relaxed);
+    let mut out = Output {
+        deleter,
+        cancel,
+        backup: None,
+        note: None,
+    };
 
     for d in decisions {
+        if cancelled() {
+            report.cancelled = true;
+            break;
+        }
+        progress.current = Some(d.rel_path.clone());
+        progress.bytes_written = report.bytes_written;
+        on_progress(&progress);
+        progress.done += 1;
         if removed.iter().any(|p| {
             d.rel_path
                 .strip_prefix(p)
@@ -898,7 +985,7 @@ pub fn execute_merge(
                 Ok((None, 0))
             }
             MergeAction::Delete => {
-                let r = delete_if_present(&dst, deleter);
+                let r = delete_if_present(&dst, out.deleter);
                 if d.is_dir && matches!(r, Ok((Some(_), _))) {
                     removed.push(&d.rel_path);
                 }
@@ -912,17 +999,23 @@ pub fn execute_merge(
                 };
                 match roots[side] {
                     Some((root, root_is_output)) => {
-                        take(root, root_is_output, label, d, &dst, deleter)
+                        take(root, root_is_output, label, d, &dst, &mut out)
                     }
                     None => Err(no_base()),
                 }
             }
-            MergeAction::MergeText => write_text_merge(&roots, d, &dst, deleter),
+            MergeAction::MergeText => write_text_merge(&roots, d, &dst, &mut out),
         };
+        let (backup, note) = (out.backup.take(), out.note.take());
         match step {
+            Err(e) if e.kind() == io::ErrorKind::Interrupted && cancelled() => {
+                // Stopped inside a copy; the old version was put back.
+                report.cancelled = true;
+                break;
+            }
             Ok((Some(outcome), bytes)) => {
                 report.bytes_written += bytes;
-                report.record(&d.rel_path, d.is_dir, outcome, None);
+                report.record_with_backup(&d.rel_path, d.is_dir, outcome, note, backup);
             }
             Ok((None, _)) => {
                 if !d.is_dir && d.action != MergeAction::Skip {
@@ -939,7 +1032,10 @@ pub fn execute_merge(
     }
 
     // Deepest first, so emptied parents can go too. Folders still holding
-    // kept or skipped items stay.
+    // kept or skipped items stay. A cancelled run leaves them be.
+    if report.cancelled {
+        prune.clear();
+    }
     for d in prune.iter().rev() {
         if let Ok(dst) = fsops::resolve(output, &d.rel_path) {
             if dst.is_dir() && fs::read_dir(&dst).is_ok_and(|mut it| it.next().is_none()) {
@@ -954,7 +1050,51 @@ pub fn execute_merge(
     }
 
     report.elapsed_ms = started.elapsed().as_millis();
+    progress.current = None;
+    progress.bytes_written = report.bytes_written;
+    on_progress(&progress);
     Ok(report)
+}
+
+/// Where a merge writes: disposal of old versions, cancellation, and the
+/// backup made by the current item.
+struct Output<'a> {
+    deleter: &'a dyn Deleter,
+    cancel: &'a AtomicBool,
+    backup: Option<String>,
+    /// A problem that didn't stop the current item.
+    note: Option<String>,
+}
+
+impl Output<'_> {
+    /// Writes `dst` with `write`, first moving an existing file aside; once
+    /// the new version is in place the old one goes to the deleter (Trash or
+    /// the versioning folder). A failed write puts the old version back.
+    fn replace(&mut self, dst: &Path, rel: &str, write: impl FnOnce(&Path) -> io::Result<u64>) -> io::Result<u64> {
+        if !fs::symlink_metadata(dst).is_ok_and(|m| m.is_file()) {
+            return write(dst);
+        }
+        let staged = fsops::stage_aside(dst)?;
+        match write(dst) {
+            Ok(bytes) => {
+                match self.deleter.retire(&staged, "output", rel) {
+                    Ok(kept) => self.backup = kept.map(|p| p.to_string_lossy().into_owned()),
+                    Err(e) => {
+                        self.note = Some(format!(
+                            "written, but the old version couldn't be disposed of ({e}); it was kept as {}",
+                            staged.display()
+                        ))
+                    }
+                }
+                Ok(bytes)
+            }
+            Err(e) => {
+                let _ = fs::remove_file(dst);
+                let _ = fs::rename(&staged, dst);
+                Err(e)
+            }
+        }
+    }
 }
 
 /// The input roots by side, each with whether it is the output folder.
@@ -969,7 +1109,7 @@ fn write_text_merge(
     roots: &Roots,
     d: &MergeDecision,
     dst: &Path,
-    deleter: &dyn Deleter,
+    out: &mut Output,
 ) -> io::Result<Step> {
     let read = |side: usize| -> io::Result<Vec<u8>> {
         let (root, _) = roots[side].ok_or_else(no_base)?;
@@ -993,23 +1133,25 @@ fn write_text_merge(
         }
     };
     match fs::symlink_metadata(dst) {
-        Ok(m) if m.is_dir() => deleter.delete(dst)?,
+        Ok(m) if m.is_dir() => out.deleter.delete(dst)?,
         Ok(_) if fs::read(dst)? == bytes => return Ok((None, 0)),
         _ => {}
     }
     if let Some(parent) = dst.parent() {
         fs::create_dir_all(parent)?;
     }
-    // Write beside the target and rename over it, so a failed write never
-    // leaves a truncated file behind.
+    // Write beside the target and rename it into place, so a failed write
+    // never leaves a truncated file behind.
     let name = dst.file_name().unwrap_or_default().to_string_lossy();
     let tmp = dst.with_file_name(format!(".{name}.pcompare-merge"));
-    let written = fs::write(&tmp, &bytes).and_then(|()| fs::rename(&tmp, dst));
+    let written = out.replace(dst, &d.rel_path, |dst| {
+        fs::write(&tmp, &bytes).and_then(|()| fs::rename(&tmp, dst))?;
+        Ok(bytes.len() as u64)
+    });
     if written.is_err() {
         let _ = fs::remove_file(&tmp);
     }
-    written?;
-    Ok((Some(MergeOutcome::Written), bytes.len() as u64))
+    Ok((Some(MergeOutcome::Written), written?))
 }
 
 fn delete_if_present(dst: &Path, deleter: &dyn Deleter) -> io::Result<Step> {
@@ -1028,7 +1170,7 @@ fn take(
     label: &str,
     d: &MergeDecision,
     dst: &Path,
-    deleter: &dyn Deleter,
+    out: &mut Output,
 ) -> io::Result<Step> {
     let src = fsops::resolve(root, &d.rel_path)?;
     let src_meta = fs::metadata(&src).map_err(|e| match e.kind() {
@@ -1050,25 +1192,34 @@ fn take(
                 return Ok((None, 0));
             }
             if dst_meta.is_some() {
-                deleter.delete(dst)?;
+                out.deleter.delete(dst)?;
             }
             fs::create_dir_all(dst)?;
             return Ok((Some(MergeOutcome::Created), 0));
         }
         // A type conflict resolved in favour of the folder: replace wholesale.
         if dst_meta.is_some() {
-            deleter.delete(dst)?;
+            out.deleter.delete(dst)?;
         }
         let bytes = fsops::copy_tree(&src, dst)?;
         return Ok((Some(MergeOutcome::Written), bytes));
     }
 
     if dst_is_dir {
-        deleter.delete(dst)?; // type conflict resolved in favour of the file
+        out.deleter.delete(dst)?; // type conflict resolved in favour of the file
     } else if fsops::same_contents(&src, dst)? {
         return Ok((None, 0));
     }
-    let bytes = fsops::copy_file(&src, dst, &mut |_| Ok(()))?;
+    let cancel = out.cancel;
+    let bytes = out.replace(dst, &d.rel_path, |dst| {
+        fsops::copy_file(&src, dst, &mut |_| {
+            if cancel.load(Ordering::Relaxed) {
+                Err(io::Error::new(io::ErrorKind::Interrupted, "cancelled"))
+            } else {
+                Ok(())
+            }
+        })
+    })?;
     Ok((Some(MergeOutcome::Written), bytes))
 }
 
@@ -1524,6 +1675,126 @@ mod tests {
             .contains("right folder has no"));
     }
 
+    fn take_right(rel: &str) -> MergeDecision {
+        MergeDecision {
+            rel_path: rel.into(),
+            is_dir: false,
+            action: MergeAction::TakeRight,
+        }
+    }
+
+    #[test]
+    fn overwritten_output_files_are_backed_up() {
+        let dir = tempfile::tempdir().unwrap();
+        let [left, right, versions] = ["left", "right", "versions"].map(|n| dir.path().join(n));
+        write(&left, "a.txt", "left a");
+        write(&left, "sub/b.txt", "left b");
+        write(&right, "a.txt", "right a");
+        write(&right, "sub/b.txt", "right b");
+        write(&right, "new.txt", "new");
+        let decisions = [take_right("a.txt"), take_right("sub/b.txt"), take_right("new.txt")];
+        // Merging in place into the left folder replaces two of its files.
+        let deleter = fsops::VersioningDeleter::new(&versions, "run1");
+        let report = execute_merge(None, &left, &right, &left, &decisions, &deleter).unwrap();
+        assert_eq!((report.written, report.failed), (3, 0), "{:?}", report.results);
+        assert_eq!(read(&left, "a.txt").as_deref(), Some("right a"));
+        assert_eq!(read(&left, "sub/b.txt").as_deref(), Some("right b"));
+        let kept = versions.join("run1").join("output");
+        assert_eq!(read(&kept, "a.txt").as_deref(), Some("left a"));
+        assert_eq!(read(&kept, "sub/b.txt").as_deref(), Some("left b"));
+        let backup = |rel: &str| report.results.iter().find(|r| r.rel_path == rel).unwrap().backup.clone();
+        assert_eq!(backup("a.txt").map(PathBuf::from), Some(kept.join("a.txt")));
+        // Nothing was there to back up.
+        assert_eq!(backup("new.txt"), None);
+        // No staged leftovers next to the replaced files.
+        let names: Vec<_> = fs::read_dir(&left).unwrap().map(|e| e.unwrap().file_name()).collect();
+        assert!(names.iter().all(|n| !n.to_string_lossy().contains(".pcompare-")), "{names:?}");
+    }
+
+    #[test]
+    fn text_merge_output_backs_up_the_old_file() {
+        let t = text_trees();
+        let res = compare_merge(Some(t.base.as_path()), &t.left, &t.right, &opts(), &FolderMergeOptions::default()).unwrap();
+        let decisions: Vec<_> = default_decisions(&res).into_iter().filter(|d| d.rel_path == "clean.txt").collect();
+        assert_eq!(decisions[0].action, MergeAction::MergeText);
+        let versions = t.dir.path().join("versions");
+        let deleter = fsops::VersioningDeleter::new(&versions, "r");
+        let report =
+            execute_merge(Some(t.base.as_path()), &t.left, &t.right, &t.left, &decisions, &deleter).unwrap();
+        assert_eq!(report.written, 1, "{:?}", report.results);
+        assert_eq!(read(&t.left, "clean.txt").as_deref(), Some("A\nb\nc\nD\n"));
+        assert_eq!(read(&versions.join("r/output"), "clean.txt").as_deref(), Some("A\nb\nc\nd\n"));
+    }
+
+    #[test]
+    fn merge_reports_progress_and_stops_when_cancelled() {
+        let dir = tempfile::tempdir().unwrap();
+        let [left, right, out] = ["left", "right", "out"].map(|n| dir.path().join(n));
+        let names = ["1.txt", "2.txt", "3.txt", "4.txt"];
+        for n in names {
+            write(&right, n, n);
+        }
+        write(&left, "keep.txt", "k");
+        let decisions: Vec<_> = names.iter().map(|n| take_right(n)).collect();
+        let cancel = AtomicBool::new(false);
+        let mut seen = Vec::new();
+        let run = MergeRun {
+            cancel: &cancel,
+            on_progress: &mut |p: &MergeProgress| {
+                seen.push((p.done, p.total, p.current.clone()));
+                // Stop once the second item has been written.
+                if p.done == 2 {
+                    cancel.store(true, Ordering::Relaxed);
+                }
+            },
+        };
+        let report = execute_merge_with(None, &left, &right, &out, &decisions, &PermanentDeleter, run).unwrap();
+        assert!(report.cancelled);
+        assert_eq!(report.written, 2);
+        assert!(out.join("2.txt").exists() && !out.join("3.txt").exists());
+        assert_eq!(seen[0], (0, 4, Some("1.txt".into())));
+        assert_eq!(seen[1], (1, 4, Some("2.txt".into())));
+        // The final report has no current item.
+        assert_eq!(seen.last().unwrap().2, None);
+
+        // Uncancelled: every item, and progress ends at total.
+        let cancel = AtomicBool::new(false);
+        let mut last = MergeProgress::default();
+        let run = MergeRun {
+            cancel: &cancel,
+            on_progress: &mut |p: &MergeProgress| last = p.clone(),
+        };
+        let out2 = dir.path().join("out2");
+        let report = execute_merge_with(None, &left, &right, &out2, &decisions, &PermanentDeleter, run).unwrap();
+        assert!(!report.cancelled);
+        assert_eq!((last.done, last.total, report.written), (4, 4, 4));
+        assert_eq!(last.bytes_written, report.bytes_written);
+    }
+
+    #[test]
+    fn cancelling_inside_a_copy_keeps_the_old_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let [left, right] = ["left", "right"].map(|n| dir.path().join(n));
+        write(&left, "big.bin", "old");
+        fs::create_dir_all(&right).unwrap();
+        fs::write(right.join("big.bin"), vec![7u8; 3 << 20]).unwrap();
+        // Cancelled while the copy runs: its first chunk sees the flag.
+        let cancel = AtomicBool::new(true);
+        let mut out = Output {
+            deleter: &PermanentDeleter,
+            cancel: &cancel,
+            backup: None,
+            note: None,
+        };
+        let dst = left.join("big.bin");
+        let err = take(&right, false, "right", &take_right("big.bin"), &dst, &mut out).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::Interrupted);
+        assert_eq!(read(&left, "big.bin").as_deref(), Some("old"));
+        assert!(out.backup.is_none());
+        let names: Vec<_> = fs::read_dir(&left).unwrap().map(|e| e.unwrap().file_name()).collect();
+        assert_eq!(names.len(), 1, "{names:?}");
+    }
+
     fn flat_map(res: &FolderMergeResult) -> HashMap<String, (MergeClass, MergeAction)> {
         let mut map = HashMap::new();
         flatten(&res.entries, &mut map);
@@ -1666,9 +1937,10 @@ mod tests {
         for (rel, b, l, r) in [
             ("clean.txt", "a\nb\nc\nd\n", "A\nb\nc\nd\n", "a\nb\nc\nD\n"),
             ("clash.txt", "a\nb\n", "left\nb\n", "right\nb\n"),
-            ("crlf.txt", "a\nb\n", "A\r\nb\r\n", "a\nB\n"),
+            // Changes two lines apart: past the default conflict scan lines.
+            ("crlf.txt", "a\nb\nc\nd\n", "A\r\nb\r\nc\r\nd\r\n", "a\nb\nc\nD\n"),
             ("bin.dat", "a\0b\nc\n", "A\0b\nc\n", "a\0b\nC\n"),
-            ("deep/t.txt", "1\n2\n3\n", "one\n2\n3\n", "1\n2\nthree\n"),
+            ("deep/t.txt", "1\n2\n3\n4\n", "one\n2\n3\n4\n", "1\n2\n3\nfour\n"),
         ] {
             for (root, body) in [(&base, b), (&left, l), (&right, r)] {
                 write(root, rel, body);
@@ -1743,9 +2015,9 @@ mod tests {
         .unwrap();
         assert_eq!(report.failed, 0, "{:?}", report.results);
         assert_eq!(read(&out, "clean.txt").as_deref(), Some("A\nb\nc\nD\n"));
-        assert_eq!(read(&out, "deep/t.txt").as_deref(), Some("one\n2\nthree\n"));
+        assert_eq!(read(&out, "deep/t.txt").as_deref(), Some("one\n2\n3\nfour\n"));
         // The left file's line endings are kept.
-        assert_eq!(read(&out, "crlf.txt").as_deref(), Some("A\r\nB\r\n"));
+        assert_eq!(read(&out, "crlf.txt").as_deref(), Some("A\r\nb\r\nc\r\nD\r\n"));
         assert!(!out.join("clash.txt").exists());
 
         // In place into left: written once, then already up to date.

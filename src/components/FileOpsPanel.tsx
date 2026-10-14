@@ -29,6 +29,7 @@ function statusLine(op: FileOp): string {
   if (r) {
     const parts = [`${r.succeeded.toLocaleString()} done`];
     if (r.skipped) parts.push(`${r.skipped.toLocaleString()} skipped`);
+    if (r.filtered) parts.push(`${r.filtered.toLocaleString()} filtered out`);
     if (r.failed) parts.push(`${r.failed.toLocaleString()} failed`);
     if (r.bytes) parts.push(formatSize(r.bytes));
     parts.push(`${(r.elapsedMs / 1000).toFixed(1)} s`);

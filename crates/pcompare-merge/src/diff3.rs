@@ -4,12 +4,13 @@
 //! lines becomes a *hunk* expressed as a base range. Hunks from the two sides
 //! that overlap in the base (or insert at the very same base position) are
 //! grouped; a group touched by one side only is that side's change, a group
-//! touched by both is either an identical change or a conflict. Changes that
-//! merely sit next to each other (e.g. left edits line 2, right edits line 3)
-//! do not conflict.
+//! touched by both is either an identical change or a conflict. Left and
+//! right changes that merely sit close to each other also conflict, per
+//! [`MergeRules::conflict_scan_lines`] (e.g. with the default of 2, left
+//! editing line 2 and right editing line 3 or 4 is a conflict).
 
-use pcompare_core::text::{LineNormalizer, TextDiffOptions};
-use serde::Serialize;
+use pcompare_core::text::{line_keys, KeySide, LineNormalizer, SideInput, TextDiffOptions};
+use serde::{Deserialize, Serialize};
 use similar::{capture_diff_slices, DiffOp};
 
 /// First line of an unresolved conflict in rendered output, followed by
@@ -33,6 +34,23 @@ pub enum ChunkKind {
     BothSame,
     /// Both files changed this region differently; needs a decision.
     Conflict,
+}
+
+/// Merge-only rules (Beyond Compare's `TTextMergeRules`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct MergeRules {
+    /// A left change and a right change separated by fewer than this many
+    /// unchanged base lines form one conflict instead of merging silently.
+    /// 0: only overlapping changes conflict; 1: adjacent ones too.
+    pub conflict_scan_lines: usize,
+}
+
+impl Default for MergeRules {
+    fn default() -> Self {
+        // Beyond Compare's default.
+        Self { conflict_scan_lines: 2 }
+    }
 }
 
 /// A 0-based, half-open range of line indices.
@@ -146,25 +164,60 @@ fn joins_group(h: &Hunk, start: usize, end: usize) -> bool {
     (h.base.start < end && start < h.base.end) || (h.base.is_empty() && start == end && h.base.start == start)
 }
 
+/// Unchanged base lines between `h` and base `[start, end)` (0 when they
+/// overlap or touch).
+fn gap(h: &Hunk, start: usize, end: usize) -> usize {
+    if h.base.start >= end {
+        h.base.start - end
+    } else {
+        start.saturating_sub(h.base.end)
+    }
+}
+
+/// Base `(start, end)` covered by one side's hunks in a group.
+type Span = (usize, usize);
+
+/// Whether `h` is close enough to the other side's changes in the group
+/// (`None` when the group has none) to conflict.
+fn near_other_side(h: &Hunk, other: Option<Span>, scan_lines: usize) -> bool {
+    other.is_some_and(|(start, end)| gap(h, start, end) < scan_lines)
+}
+
 fn offset(pos: usize, delta: isize) -> usize {
     pos.checked_add_signed(delta).expect("hunk deltas never move a position below zero")
 }
 
+/// Comparison keys of every line under the full Text Compare rule set
+/// (see [`line_keys`]).
+fn keys<S: AsRef<str>>(lines: &[S], norm: &LineNormalizer, opts: &TextDiffOptions, role: KeySide) -> Vec<String> {
+    let lines: Vec<&str> = lines.iter().map(AsRef::as_ref).collect();
+    let side = SideInput {
+        lines: &lines,
+        ..Default::default()
+    };
+    line_keys(&side, norm, opts, role)
+}
+
 /// Merges `left` and `right`, both derived from `base`.
 ///
-/// Lines are matched through a [`LineNormalizer`], so whitespace, case and
-/// ignore-pattern options decide what counts as a change. Where the files
-/// agree only up to those options, output takes the left file's text. Fails
-/// only when an ignore pattern is not a valid regex.
+/// Lines are matched under the Text Compare rules in `opts` (whitespace,
+/// case, ignore patterns, grammar comment/string importance, replacements,
+/// ignored columns and blocks; the grammar comes from `opts.grammar`), so
+/// they decide what counts as a change. Where the files agree only up to
+/// those rules, output takes the left file's text.
+/// `rules` decides how close left and right changes may sit before they
+/// conflict. Fails only when an ignore pattern is not a valid regex.
 pub fn merge3<S: AsRef<str>>(
     base: &[S],
     left: &[S],
     right: &[S],
     opts: &TextDiffOptions,
+    rules: &MergeRules,
 ) -> pcompare_core::Result<MergeResult> {
     let norm = LineNormalizer::new(opts)?;
-    let keys = |lines: &[S]| -> Vec<String> { lines.iter().map(|l| norm.key(l.as_ref())).collect() };
-    let (base_keys, left_keys, right_keys) = (keys(base), keys(left), keys(right));
+    let base_keys = keys(base, &norm, opts, KeySide::Base);
+    let left_keys = keys(left, &norm, opts, KeySide::Left);
+    let right_keys = keys(right, &norm, opts, KeySide::Right);
     let left_hunks = hunks(&base_keys, &left_keys, opts);
     let right_hunks = hunks(&base_keys, &right_keys, opts);
 
@@ -201,15 +254,29 @@ pub fn merge3<S: AsRef<str>>(
         let left_start = offset(start, left_delta);
         let right_start = offset(start, right_delta);
         let (mut took_left, mut took_right) = (false, false);
+        // Base span of each side's hunks in the group, for conflict scan lines.
+        let (mut left_span, mut right_span): (Option<Span>, Option<Span>) = (None, None);
+        let widen = |span: &mut Option<Span>, h: &Hunk| {
+            *span = Some(span.map_or((h.base.start, h.base.end), |(s, e)| (s.min(h.base.start), e.max(h.base.end))));
+        };
+        let scan = rules.conflict_scan_lines;
         loop {
-            if let Some(h) = left_hunks.get(li).filter(|h| joins_group(h, start, end)) {
+            if let Some(h) = left_hunks
+                .get(li)
+                .filter(|h| joins_group(h, start, end) || near_other_side(h, right_span, scan))
+            {
                 end = end.max(h.base.end);
                 left_delta += h.delta();
+                widen(&mut left_span, h);
                 took_left = true;
                 li += 1;
-            } else if let Some(h) = right_hunks.get(ri).filter(|h| joins_group(h, start, end)) {
+            } else if let Some(h) = right_hunks
+                .get(ri)
+                .filter(|h| joins_group(h, start, end) || near_other_side(h, left_span, scan))
+            {
                 end = end.max(h.base.end);
                 right_delta += h.delta();
+                widen(&mut right_span, h);
                 took_right = true;
                 ri += 1;
             } else {
@@ -256,12 +323,12 @@ pub fn merge3<S: AsRef<str>>(
 /// With no base to tell which side changed, every region where the files
 /// differ becomes a [`ChunkKind::Conflict`] for the user to resolve; the
 /// regions where they agree are `Stable`. There is no base, so every chunk's
-/// `base` range is empty. Lines are matched through a [`LineNormalizer`]
-/// like [`merge3`].
+/// `base` range is empty. Lines are matched under the full rule set like
+/// [`merge3`].
 pub fn merge2<S: AsRef<str>>(left: &[S], right: &[S], opts: &TextDiffOptions) -> pcompare_core::Result<MergeResult> {
     let norm = LineNormalizer::new(opts)?;
-    let keys = |lines: &[S]| -> Vec<String> { lines.iter().map(|l| norm.key(l.as_ref())).collect() };
-    let (left_keys, right_keys) = (keys(left), keys(right));
+    let left_keys = keys(left, &norm, opts, KeySide::Left);
+    let right_keys = keys(right, &norm, opts, KeySide::Right);
     let none = LineRange::new(0, 0);
     let mut chunks = Vec::new();
     let mut stats = MergeStats::default();
@@ -306,13 +373,19 @@ pub struct MergedText {
 /// Merges whole texts: [`merge3`] when `base` is given, else [`merge2`].
 /// The trailing line break is merged three-way, or taken from the left text
 /// in a two-way merge.
-pub fn merge_text(base: Option<&str>, left: &str, right: &str, opts: &TextDiffOptions) -> pcompare_core::Result<MergedText> {
+pub fn merge_text(
+    base: Option<&str>,
+    left: &str,
+    right: &str,
+    opts: &TextDiffOptions,
+    rules: &MergeRules,
+) -> pcompare_core::Result<MergedText> {
     let (l, lt) = crate::split_lines(left);
     let (r, rt) = crate::split_lines(right);
     let (merge, trailing) = match base {
         Some(base) => {
             let (b, bt) = crate::split_lines(base);
-            (merge3(&b, &l, &r, opts)?, merge_trailing_newline(bt, lt, rt))
+            (merge3(&b, &l, &r, opts, rules)?, merge_trailing_newline(bt, lt, rt))
         }
         None => (merge2(&l, &r, opts)?, lt),
     };
@@ -381,7 +454,7 @@ pub fn merge_trailing_newline(base: bool, left: bool, right: bool) -> bool {
 mod tests {
     use super::*;
     use crate::split_lines;
-    use pcompare_core::text::WhitespaceMode;
+    use pcompare_core::text::{BlockPattern, ColumnRange, Replacement, WhitespaceMode};
 
     struct Merged {
         result: MergeResult,
@@ -393,8 +466,12 @@ mod tests {
     }
 
     fn merge_with(base: &str, left: &str, right: &str, opts: &TextDiffOptions) -> Merged {
+        merge_rules(base, left, right, opts, &MergeRules::default())
+    }
+
+    fn merge_rules(base: &str, left: &str, right: &str, opts: &TextDiffOptions, rules: &MergeRules) -> Merged {
         let (b, l, r) = (lines(base), lines(left), lines(right));
-        let result = merge3(&b, &l, &r, opts).unwrap();
+        let result = merge3(&b, &l, &r, opts, rules).unwrap();
         assert_tiles(&result, &b, &l, &r);
         let output = render_output(&result, &l, &r);
         Merged { result, output }
@@ -402,6 +479,14 @@ mod tests {
 
     fn merge(base: &str, left: &str, right: &str) -> Merged {
         merge_with(base, left, right, &TextDiffOptions::default())
+    }
+
+    /// Merges with conflict scan lines `scan`.
+    fn merge_scan(base: &str, left: &str, right: &str, scan: usize) -> Merged {
+        let rules = MergeRules {
+            conflict_scan_lines: scan,
+        };
+        merge_rules(base, left, right, &TextDiffOptions::default(), &rules)
     }
 
     /// Chunks must cover every line of all three files exactly once, in order.
@@ -434,18 +519,60 @@ mod tests {
 
     #[test]
     fn non_overlapping_edits_merge_automatically() {
-        let m = merge("a\nb\nc\nd\ne\n", "a\nB\nc\nd\ne\n", "a\nb\nc\nD\ne\n");
+        // Two unchanged lines between the edits: past the default scan lines.
+        let m = merge("a\nb\nc\nd\ne\nf\n", "a\nB\nc\nd\ne\nf\n", "a\nb\nc\nd\nE\nf\n");
         assert_eq!(kinds(&m), vec![Stable, LeftChanged, Stable, RightChanged, Stable]);
-        assert_eq!(m.output, lines("a\nB\nc\nD\ne"));
+        assert_eq!(m.output, lines("a\nB\nc\nd\nE\nf"));
         assert_eq!(m.result.stats.auto_merged(), 2);
         assert_eq!(m.result.stats.conflicts, 0);
     }
 
     #[test]
-    fn adjacent_edits_do_not_conflict() {
+    fn adjacent_edits_conflict_by_default() {
         let m = merge("a\nb\nc\nd\n", "a\nB\nc\nd\n", "a\nb\nC\nd\n");
-        assert_eq!(kinds(&m), vec![Stable, LeftChanged, RightChanged, Stable]);
-        assert_eq!(m.output, lines("a\nB\nC\nd"));
+        assert_eq!(kinds(&m), vec![Stable, Conflict, Stable]);
+        let c = &m.result.chunks[1];
+        assert_eq!((c.base, c.left, c.right), (LineRange::new(1, 3), LineRange::new(1, 3), LineRange::new(1, 3)));
+        assert_eq!(
+            m.output,
+            vec!["a", "<<<<<<< Left #1", "B", "c", "=======", "b", "C", ">>>>>>> Right #1", "d"]
+        );
+    }
+
+    #[test]
+    fn conflict_scan_lines_decide_how_close_is_a_conflict() {
+        // Left edits b, right edits d: one unchanged line (c) between them.
+        let (base, left, right) = ("a\nb\nc\nd\ne\n", "a\nB\nc\nd\ne\n", "a\nb\nc\nD\ne\n");
+        assert_eq!(kinds(&merge_scan(base, left, right, 2)), vec![Stable, Conflict, Stable]);
+        assert_eq!(
+            kinds(&merge_scan(base, left, right, 1)),
+            vec![Stable, LeftChanged, Stable, RightChanged, Stable]
+        );
+        // 0: only overlapping changes conflict, adjacent ones merge.
+        let adjacent = merge_scan("a\nb\nc\nd\n", "a\nB\nc\nd\n", "a\nb\nC\nd\n", 0);
+        assert_eq!(kinds(&adjacent), vec![Stable, LeftChanged, RightChanged, Stable]);
+        assert_eq!(adjacent.output, lines("a\nB\nC\nd"));
+        assert_eq!(kinds(&merge_scan("a\nb\nc\nd\n", "a\nB\nc\nd\n", "a\nb\nC\nd\n", 1)), vec![Stable, Conflict, Stable]);
+    }
+
+    #[test]
+    fn scan_lines_ignore_changes_on_the_same_side() {
+        // Two left edits next to each other stay two plain left changes.
+        let m = merge("a\nb\nc\nd\n", "a\nB\nc\nD\n", "a\nb\nc\nd\n");
+        assert_eq!(kinds(&m), vec![Stable, LeftChanged, Stable, LeftChanged]);
+        assert_eq!(m.result.stats.conflicts, 0);
+    }
+
+    #[test]
+    fn scan_lines_chain_through_alternating_changes() {
+        // L at 1, R at 3, L at 5: each within 2 of the other side's change.
+        let base = "0\n1\n2\n3\n4\n5\n6\n7\n8\n";
+        let m = merge(base, "0\nL\n2\n3\n4\nL\n6\n7\n8\n", "0\n1\n2\nR\n4\n5\n6\n7\n8\n");
+        assert_eq!(kinds(&m), vec![Stable, Conflict, Stable]);
+        assert_eq!(m.result.chunks[1].base, LineRange::new(1, 6));
+        // A same-side change near only its own side's change is not pulled in.
+        let m = merge(base, "0\nL\n2\n3\n4\n5\n6\nL\n8\n", "0\n1\n2\nR\n4\n5\n6\n7\n8\n");
+        assert_eq!(kinds(&m), vec![Stable, Conflict, Stable, LeftChanged, Stable]);
     }
 
     #[test]
@@ -501,11 +628,14 @@ mod tests {
     }
 
     #[test]
-    fn insertion_next_to_other_sides_change_is_separate() {
-        // Right inserts X before b while left deletes b.
-        let m = merge("a\nb\nc\n", "a\nc\n", "a\nX\nb\nc\n");
+    fn insertion_next_to_other_sides_change() {
+        // Right inserts X before b while left deletes b: separate without
+        // scan lines, a conflict with them.
+        let m = merge_scan("a\nb\nc\n", "a\nc\n", "a\nX\nb\nc\n", 0);
         assert_eq!(kinds(&m), vec![Stable, RightChanged, LeftChanged, Stable]);
         assert_eq!(m.output, lines("a\nX\nc"));
+        let m = merge("a\nb\nc\n", "a\nc\n", "a\nX\nb\nc\n");
+        assert_eq!(kinds(&m), vec![Stable, Conflict, Stable]);
     }
 
     #[test]
@@ -610,7 +740,71 @@ mod tests {
             ignore_patterns: vec!["(".into()],
             ..Default::default()
         };
-        assert!(merge3(&["a"], &["b"], &["c"], &bad).is_err());
+        assert!(merge3(&["a"], &["b"], &["c"], &bad, &MergeRules::default()).is_err());
+    }
+
+    #[test]
+    fn comment_rules_apply_to_merges() {
+        // Left only edits a trailing comment; right changes the code.
+        let (base, left, right) = ("x = 1; // one\ny\n", "x = 1; // uno\ny\n", "x = 2; // one\ny\n");
+        assert_eq!(kinds(&merge(base, left, right)), vec![Conflict, Stable]);
+        let opts = TextDiffOptions {
+            grammar: Some("c".into()),
+            ignore_comments: true,
+            ..Default::default()
+        };
+        let m = merge_with(base, left, right, &opts);
+        assert_eq!(kinds(&m), vec![RightChanged, Stable]);
+        assert_eq!(m.output, lines("x = 2; // one\ny"));
+        // Strings too: only the delimiters count.
+        let opts = TextDiffOptions {
+            grammar: Some("c".into()),
+            ignore_strings: true,
+            ..Default::default()
+        };
+        let m = merge_with("s(\"a\");\nz\n", "s(\"b\");\nz\n", "s(\"a\");\nZ\n", &opts);
+        assert_eq!(m.result.stats.conflicts, 0, "{:?}", kinds(&m));
+    }
+
+    #[test]
+    fn replacements_apply_to_merges() {
+        // Right renamed foo to bar; left edited the same line's other half.
+        let (base, left, right) = ("foo(1)\nz\n", "foo(2)\nz\n", "bar(1)\nz\n");
+        assert_eq!(merge(base, left, right).result.stats.conflicts, 1);
+        let opts = TextDiffOptions {
+            replacements: vec![Replacement {
+                left: "foo".into(),
+                right: "bar".into(),
+                regex: false,
+            }],
+            ..Default::default()
+        };
+        let m = merge_with(base, left, right, &opts);
+        assert_eq!(kinds(&m), vec![LeftChanged, Stable]);
+        assert_eq!(m.result.stats.conflicts, 0);
+    }
+
+    #[test]
+    fn ignored_columns_and_blocks_apply_to_merges() {
+        // Columns 1-3 are sequence numbers that both sides renumbered.
+        let opts = TextDiffOptions {
+            ignore_columns: vec![ColumnRange { start: 1, end: Some(3) }],
+            ..Default::default()
+        };
+        let m = merge_with("001a\n002b\n", "101a\n102B\n", "201a\n202b\n", &opts);
+        assert_eq!(kinds(&m), vec![Stable, LeftChanged]);
+        // A generated block both sides regenerated differently.
+        let opts = TextDiffOptions {
+            ignore_blocks: vec![BlockPattern {
+                begin: "^// gen-begin".into(),
+                end: "^// gen-end".into(),
+            }],
+            ..Default::default()
+        };
+        let base = "// gen-begin\nold\n// gen-end\nkeep\n";
+        let m = merge_with(base, "// gen-begin\nnew-left\n// gen-end\nkeep\n", "// gen-begin\nnew-right\n// gen-end\nKEEP\n", &opts);
+        assert_eq!(m.result.stats.conflicts, 0, "{:?}", kinds(&m));
+        assert_eq!(kinds(&m), vec![Stable, RightChanged]);
     }
 
     fn merge_two(left: &str, right: &str) -> Merged {
@@ -677,14 +871,15 @@ mod tests {
     #[test]
     fn whole_text_merge() {
         let opts = TextDiffOptions::default();
-        let clean = merge_text(Some("a\nb\nc\n"), "A\nb\nc\n", "a\nb\nC", &opts).unwrap();
+        let rules = MergeRules::default();
+        let clean = merge_text(Some("a\nb\nc\nd\n"), "A\nb\nc\nd\n", "a\nb\nc\nD", &opts, &rules).unwrap();
         assert_eq!(clean.merge.stats.conflicts, 0);
         // Right dropped the final line break; that change is merged too.
-        assert_eq!(clean.text, "A\nb\nC");
-        let conflict = merge_text(Some("a\n"), "l\n", "r\n", &opts).unwrap();
+        assert_eq!(clean.text, "A\nb\nc\nD");
+        let conflict = merge_text(Some("a\n"), "l\n", "r\n", &opts, &rules).unwrap();
         assert_eq!(conflict.merge.stats.conflicts, 1);
         assert_eq!(conflict.text, "<<<<<<< Left #1\nl\n=======\nr\n>>>>>>> Right #1\n");
-        let two = merge_text(None, "x\ny\n", "x\nz", &opts).unwrap();
+        let two = merge_text(None, "x\ny\n", "x\nz", &opts, &rules).unwrap();
         assert_eq!(two.merge.stats.conflicts, 1);
         assert!(two.text.ends_with(">>>>>>> Right #1\n"), "{:?}", two.text);
     }

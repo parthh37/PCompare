@@ -39,7 +39,7 @@ import {
 import { composeRuns, type StyledRange } from "../lib/textRuns";
 import type { MergePaths, MergeProps } from "../lib/sessionProps";
 import { PathField } from "./PathField";
-import { IgnoreRulesDialog } from "./TextCompare";
+import { TextRulesDialog } from "./TextRulesDialog";
 import { VirtualList, type VirtualListHandle } from "./VirtualList";
 import "./TextMerge.css";
 import { isComposing } from "../lib/ime"; // araxis:text-view araxis:text-view end
@@ -59,7 +59,11 @@ export interface MergeSettings {
   split: number;
   /** What the output starts as: merged automatically (default) or the base only. */
   start?: StartMode;
+  /** Left and right changes with fewer unchanged lines than this between them conflict (BC's default: 2). */
+  conflictScanLines?: number;
 }
+
+const DEFAULT_SCAN_LINES = 2;
 
 type Resolution = "left" | "right" | "leftRight" | "rightLeft" | "base" | "conflict";
 const RESOLUTIONS: { id: Resolution; label: string; title: string }[] = [
@@ -435,7 +439,11 @@ export function TextMerge({
   const [start, setStart] = useState<StartMode>(settings?.start ?? "auto");
   const startRef = useRef(start);
   startRef.current = start;
-  useEffect(() => void reportSettings.current?.({ options, split, start }), [options, split, start]);
+  const [scanLines, setScanLinesState] = useState(settings?.conflictScanLines ?? DEFAULT_SCAN_LINES);
+  useEffect(
+    () => void reportSettings.current?.({ options, split, start, conflictScanLines: scanLines }),
+    [options, split, start, scanLines],
+  );
 
   const [draft, setDraft] = useState<MergePaths>({ left, base, right, output });
   useEffect(() => setDraft({ left, base, right, output }), [left, base, right, output]);
@@ -486,7 +494,7 @@ export function TextMerge({
     setLoading(true);
     setError(null);
     try {
-      const res = await mergeApi.loadMerge(left, base, right, options);
+      const res = await mergeApi.loadMerge(left, base, right, options, { conflictScanLines: scanLines });
       if (seq !== requestSeq.current) return;
       setData(res);
       // The automatic merge is a step of its own, so it can be undone right away.
@@ -509,7 +517,7 @@ export function TextMerge({
     } finally {
       if (seq === requestSeq.current) setLoading(false);
     }
-  }, [left, base, right, options]);
+  }, [left, base, right, options, scanLines]);
 
   useEffect(() => {
     load();
@@ -521,12 +529,17 @@ export function TextMerge({
   const reportDirty = useRef(onDirtyChange);
   reportDirty.current = onDirtyChange;
   // Only hand edits count: an untouched auto-merge can simply be recomputed.
-  useEffect(() => void reportDirty.current?.(edited), [edited]);
+  // Save all (closing the window or quitting) calls the latest save.
+  const saveForClose = useRef<() => unknown>(() => {});
+  useEffect(() => void reportDirty.current?.(edited, () => saveForClose.current()), [edited]);
   const confirmDiscard = (action: string) =>
     !edited || window.confirm(`The merged output has unsaved edits. Discard them and ${action}?`);
 
   const setOptions = (next: TextDiffOptions) => {
     if (confirmDiscard("merge again with the new options")) setOptionsState(next);
+  };
+  const setScanLines = (n: number) => {
+    if (Number.isFinite(n) && n >= 0 && confirmDiscard("merge again with the new options")) setScanLinesState(Math.floor(n));
   };
 
   const applyPaths = (next: MergePaths) => {
@@ -922,6 +935,8 @@ export function TextMerge({
     return () => window.removeEventListener("keydown", onKey);
   });
 
+  saveForClose.current = () => save();
+
   const onSplitterDown = (e: PointerEvent<HTMLDivElement>) => {
     const el = body.current;
     if (!el) return;
@@ -1114,7 +1129,17 @@ export function TextMerge({
   const canResolve = !!curChunk;
   const resolutions = RESOLUTIONS.filter((r) => !(twoWay && r.id === "base"));
   const lineCount = lineSel ? Math.abs(lineSel.focus - lineSel.anchor) + 1 : 0;
-  const patternCount = options.ignorePatterns.filter((p) => p.trim()).length;
+  // The Text Compare rules a merge honours (alignment-only rules don't apply).
+  const ruleCount =
+    options.ignorePatterns.filter((p) => p.trim()).length +
+    options.pageHeaderPatterns.filter((p) => p.trim()).length +
+    options.ignoreColumns.length +
+    options.replacements.length +
+    options.unimportantLines.left.length +
+    options.unimportantLines.right.length +
+    [options.ignoreComments, options.ignoreStrings].filter(Boolean).length +
+    (options.pageHeaderLines || options.pageFooterLines ? 1 : 0) +
+    (options.ignoreBlocks?.length ?? 0);
   return (
     <div className="session tm-session" ref={root}>
       <div className="toolbar">
@@ -1239,9 +1264,30 @@ export function TextMerge({
           />
           Ignore case
         </label>
-        <button onClick={() => setEditingRules(true)} title="Regexes for text that never matters">
-          <ListFilter size={14} /> Ignore rules{patternCount ? ` · ${patternCount}` : ""}
+        <button
+          onClick={() => setEditingRules(true)}
+          title="What counts as a change: comments and strings, ignored text, columns and blocks, replacements (the Text Compare rules)"
+        >
+          <ListFilter size={14} /> Rules{ruleCount ? ` · ${ruleCount}` : ""}
         </button>
+        {!twoWay && (
+          <label
+            title={
+              "Conflict scan lines: a left change and a right change with fewer unchanged lines than this " +
+              "between them are a conflict instead of merging silently. 0: only overlapping changes conflict."
+            }
+          >
+            Scan lines
+            <input
+              className="tm-scan-lines"
+              type="number"
+              min={0}
+              max={99}
+              value={scanLines}
+              onChange={(e) => setScanLines(e.target.valueAsNumber)}
+            />
+          </label>
+        )}
         <span className="spacer" />
         <button
           onClick={save}
@@ -1256,10 +1302,11 @@ export function TextMerge({
       </div>
 
       {editingRules && (
-        <IgnoreRulesDialog
-          patterns={options.ignorePatterns}
+        <TextRulesDialog
+          options={options}
+          lineCounts={data ? { left: data.left.lines.length, right: data.right.lines.length } : undefined}
           onClose={() => setEditingRules(false)}
-          onApply={(ignorePatterns) => setOptions({ ...options, ignorePatterns })}
+          onApply={setOptions}
         />
       )}
 

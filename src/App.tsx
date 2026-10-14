@@ -3,6 +3,7 @@ import { CircleQuestionMark, Globe, Layers, Plus, Save, Settings, X } from "luci
 import { useCallback, useEffect, useRef, useState } from "react";
 import { AppSettingsDialog } from "./components/AppSettingsDialog";
 import { DbCompare } from "./components/DbCompare";
+import { CloseGuardDialog } from "./components/CloseGuardDialog";
 import { CrashedView, ErrorBoundary } from "./components/ErrorBoundary";
 import { FolderCompare } from "./components/FolderCompare";
 import { FolderMerge } from "./components/FolderMerge";
@@ -25,6 +26,7 @@ import { TextMerge } from "./components/TextMerge";
 import { VersionCompare } from "./components/VersionCompare";
 import { api, errorMessage, type SavedSession } from "./lib/api";
 import { dbApi, dbPathLabel, useDbConnectionNames } from "./lib/dbApi";
+import * as closeGuard from "./lib/closeGuard";
 import { basename } from "./lib/format";
 import type { MergePaths } from "./lib/sessionProps";
 import {
@@ -117,6 +119,24 @@ export default function App() {
   const [toast, setToast] = useState<string | null>(null);
   /** Tabs whose session reported unsaved edits. */
   const dirtyTabs = useRef(new Set<number>());
+  /** How each dirty tab saves its edits, for Save all when closing or quitting. */
+  const savers = useRef(new Map<number, closeGuard.SaveTab>());
+  /** What the close guard was last told: whether any tab is dirty. */
+  const reportedUnsaved = useRef(false);
+  const reportUnsaved = useCallback(() => {
+    const any = dirtyTabs.current.size > 0;
+    if (any === reportedUnsaved.current) return;
+    reportedUnsaved.current = any;
+    closeGuard.setUnsaved(any).catch(() => {});
+  }, []);
+  const markDirty = (id: number, dirty: boolean, save?: closeGuard.SaveTab) => {
+    if (dirty) dirtyTabs.current.add(id);
+    else dirtyTabs.current.delete(id);
+    if (dirty && save) savers.current.set(id, save);
+    else savers.current.delete(id);
+    reportUnsaved();
+  };
+  const [closeAsk, setCloseAsk] = useState<closeGuard.CloseAsk | null>(null);
   const updater = useUpdater(setToast);
   const [settingsOpen, setSettingsOpen] = useState(false);
   /** Bumped to remount the sessions after one crashed while closing. */
@@ -295,7 +315,7 @@ export default function App() {
 
   const closeTab = (id: number) => {
     if (dirtyTabs.current.has(id) && !window.confirm("This tab has unsaved changes. Close it and discard them?")) return;
-    dirtyTabs.current.delete(id);
+    markDirty(id, false);
     const closing = tabs.find((t) => t.id === id); // bc5:app-shell
     if (closing) autoSaveOnClose(closing);
     if (closing?.waitToken) vcsApi.waitDone(closing.waitToken).catch((e) => setToast(errorMessage(e))); // araxis:vcs
@@ -355,6 +375,8 @@ export default function App() {
       });
     if (!restored.length) return;
     dirtyTabs.current.clear();
+    savers.current.clear();
+    reportUnsaved();
     // araxis:vcs — replaced tabs close too, as far as `--wait` launches are concerned.
     tabs.forEach((t) => t.waitToken && vcsApi.waitDone(t.waitToken).catch(() => {}));
     // araxis:vcs end
@@ -446,6 +468,27 @@ export default function App() {
     return () => unlisten?.();
   }, [openAuto]);
 
+  // Closing the window or quitting with unsaved edits: Rust stops it and asks here.
+  useEffect(() => {
+    const unlisten = closeGuard.onAsk((ask) => {
+      if (dirtyTabs.current.size) setCloseAsk(ask);
+      else void closeGuard.proceed(ask.quit);
+    });
+    return () => void unlisten.then((u) => u()).catch(() => {});
+  }, []);
+  const saveAllAndClose = async (quit: boolean) => {
+    const left = await closeGuard.saveAll(dirtyTabs.current, savers.current, setActive, () => dirtyTabs.current);
+    if (!left.length) {
+      setCloseAsk(null);
+      await closeGuard.proceed(quit);
+      return;
+    }
+    setCloseAsk(null);
+    setActive(left[0]);
+    const names = tabs.filter((t) => left.includes(t.id)).map((t) => tabTitle(t, dbNames));
+    setToast(`Not saved: ${names.join(", ")}. Save or close ${left.length === 1 ? "it" : "them"}, or choose Discard.`);
+  };
+
   const activeTab = tabs.find((t) => t.id === active);
 
   /** One dropped path fills the empty side of the active compare, or opens on its own. */
@@ -517,9 +560,8 @@ export default function App() {
       onPathsChange: (left: string, right: string) => updateTab(t.id, { left, right }),
       // Block body: sessions report this from `useEffect(() => report(dirty))`, so a
       // returned Set/boolean would become the effect's "cleanup" and crash on close.
-      onDirtyChange: (dirty: boolean) => {
-        if (dirty) dirtyTabs.current.add(t.id);
-        else dirtyTabs.current.delete(t.id);
+      onDirtyChange: (dirty: boolean, save?: closeGuard.SaveTab) => {
+        markDirty(t.id, dirty, save);
       },
     };
     const three = {
@@ -862,6 +904,20 @@ export default function App() {
               setToast(`Saved session “${s.name}”`);
               refreshSaved();
             }}
+          />
+        )}
+        {closeAsk && (
+          <CloseGuardDialog
+            quit={closeAsk.quit}
+            tabs={tabs
+              .filter((t) => dirtyTabs.current.has(t.id))
+              .map((t) => ({ id: t.id, title: tabTitle(t, dbNames), savable: savers.current.has(t.id) }))}
+            onSaveAll={() => saveAllAndClose(closeAsk.quit)}
+            onDiscard={() => {
+              setCloseAsk(null);
+              void closeGuard.proceed(closeAsk.quit);
+            }}
+            onCancel={() => setCloseAsk(null)}
           />
         )}
         {settingsOpen && <AppSettingsDialog updater={updater} onClose={() => setSettingsOpen(false)} />}

@@ -619,11 +619,15 @@ fn eol_tag(eol: LineEnding) -> &'static str {
     }
 }
 
+/// Normalizes one side. `replace` applies the replacements (they rewrite
+/// left-side text into its right-side form); `manual` are the side's
+/// manually unimportant lines.
 fn prepare(
     side: &SideInput,
     norm: &LineNormalizer,
     opts: &TextDiffOptions,
-    is_left: bool,
+    replace: bool,
+    manual: &[LineRange],
 ) -> Prepared {
     let grammar = match opts.grammar.as_deref().map(str::trim) {
         Some(id) if !id.is_empty() => grammar::by_id(id),
@@ -634,11 +638,6 @@ fn prepare(
     let tokens = match grammar {
         Some(g) if want_tokens => g.tokenize(side.lines, opts.syntax_spans),
         _ => Vec::new(),
-    };
-    let manual = if is_left {
-        &opts.unimportant_lines.left
-    } else {
-        &opts.unimportant_lines.right
     };
     let pages = page_lines(side.lines, norm, opts);
     let blocks = block_lines(side.lines, norm);
@@ -666,7 +665,7 @@ fn prepare(
                         .collect()
                 })
                 .unwrap_or_default();
-            let (key, removed) = norm.key_parts(line, &skip, is_left);
+            let (key, removed) = norm.key_parts(line, &skip, replace);
             let blank = key.chars().all(char::is_whitespace);
             (key, removed && blank)
         };
@@ -946,6 +945,35 @@ fn align(lk: &[String], rk: &[String], opts: &TextDiffOptions) -> Vec<Item> {
         .collect()
 }
 
+/// A document's role, for the rules that differ per side.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum KeySide {
+    Left,
+    Right,
+    /// A merge's common ancestor. Replacements apply to it as to the left
+    /// side, so text the right side rewrote per a replacement counts as
+    /// unchanged against both; no manually unimportant lines.
+    Base,
+}
+
+/// The comparison key of every line of `side` under the full rule set, as
+/// [`diff_sides`] compares them: grammar comment/string importance, ignored
+/// columns, regexes, page headers, blocks, replacements, whitespace and
+/// case. Lines that are wholly unimportant get an empty key. Without a
+/// `path` the grammar comes from [`TextDiffOptions::grammar`] only.
+pub fn line_keys(side: &SideInput, norm: &LineNormalizer, opts: &TextDiffOptions, role: KeySide) -> Vec<String> {
+    let opts = TextDiffOptions {
+        syntax_spans: false,
+        ..opts.clone()
+    };
+    let (replace, manual): (bool, &[LineRange]) = match role {
+        KeySide::Left => (true, &opts.unimportant_lines.left),
+        KeySide::Right => (false, &opts.unimportant_lines.right),
+        KeySide::Base => (true, &[]),
+    };
+    prepare(side, norm, &opts, replace, manual).keys
+}
+
 /// Compares two documents. This is the full engine: grammars, page headers,
 /// replacements, manual unimportant lines, line terminators and manual
 /// alignment all need whole documents (and file names), not single lines.
@@ -955,8 +983,8 @@ pub fn diff_sides(
     opts: &TextDiffOptions,
 ) -> Result<TextDiffResult> {
     let norm = LineNormalizer::new(opts)?;
-    let lp = prepare(&left, &norm, opts, true);
-    let rp = prepare(&right, &norm, opts, false);
+    let lp = prepare(&left, &norm, opts, true, &opts.unimportant_lines.left);
+    let rp = prepare(&right, &norm, opts, false, &opts.unimportant_lines.right);
     let items = align(&lp.keys, &rp.keys, opts);
     let (ltext, rtext) = (left.lines, right.lines);
 

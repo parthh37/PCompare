@@ -257,3 +257,26 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+.fm-progress {
+  display: grid;
+  justify-items: center;
+  gap: 8px;
+  max-width: 80%;
+}
+.fm-progress-path {
+  font-family: var(--mono);
+  font-size: 12px;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.fm-disposal {
+  margin: 10px 0 0;
+  display: grid;
+  gap: 4px;
+}
+.fm-disposal-folder {
+  margin-left: 22px;
+}
