@@ -250,6 +250,23 @@ export interface FolderEntry {
   leftRelPath?: string;
   /** UI only: the user marked it "ignore", so it counts as same. */
   ignored?: boolean;
+  /** UI only: a streamed pair whose contents aren't compared yet. */
+  pending?: boolean;
+}
+
+/** One folder's rows streamed by a running compare (`FolderLevel` in pcompare-core); no `children`. */
+export interface FolderLevel {
+  rel: string;
+  entries: FolderEntry[];
+  /** False: just listed, two-sided rows not compared yet. True: final rows. */
+  complete: boolean;
+}
+
+/** One message on a folder compare's channel (`ScanUpdate` in src-tauri). */
+interface ScanUpdate {
+  progress: ScanProgress | null;
+  levels: FolderLevel[];
+  end: boolean;
 }
 
 /** Progress of a running folder compare. */
@@ -458,25 +475,40 @@ export const api = {
   setLeftSelection: (path: string | null) => invoke<void>("set_left_selection", { path }),
   compareTextFiles: (left: string, right: string, options: TextDiffOptions) =>
     invoke<TextFileCompare>("compare_text_files", { left, right, options }),
-  /** `runKey` makes the run cancellable with `cancelCompareFolders`. */
-  compareFolders: (
+  /**
+   * `runKey` makes the run cancellable with `cancelCompareFolders`. With
+   * `onLevels`, rows stream in folder by folder and the result has no
+   * `entries`; it resolves once every streamed level has been delivered.
+   */
+  compareFolders: async (
     left: string,
     right: string,
     options: FolderCompareOptions,
     runKey?: string,
     onProgress?: (p: ScanProgress) => void,
     expandArchives?: boolean, // bc5:archives — list archives in the trees as folders
+    onLevels?: (levels: FolderLevel[]) => void,
   ) => {
-    const channel = new Channel<ScanProgress>();
-    if (onProgress) channel.onmessage = onProgress;
-    return invoke<FolderCompareResult>("compare_folders", {
+    const channel = new Channel<ScanUpdate>();
+    let ended = () => {};
+    const end = new Promise<void>((resolve) => (ended = resolve));
+    channel.onmessage = (m) => {
+      if (m.progress) onProgress?.(m.progress);
+      if (m.levels.length) onLevels?.(m.levels);
+      if (m.end) ended();
+    };
+    const res = await invoke<FolderCompareResult>("compare_folders", {
       left,
       right,
       options,
       runKey,
       onProgress: channel,
       expandArchives,
+      stream: !!onLevels,
     });
+    // The reply can overtake the channel's last messages.
+    if (onLevels) await end;
+    return res;
   },
   cancelCompareFolders: (runKey: string) => invoke<void>("compare_folders_cancel", { runKey }),
   compareFileContents: (

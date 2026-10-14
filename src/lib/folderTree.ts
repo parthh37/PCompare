@@ -1,7 +1,7 @@
 // Pure helpers over the folder-compare result tree: display filters, name
 // search, flattening, "ignore" marks, and re-tallying after per-file content
 // re-checks.
-import type { ContentVerdict, EntryStatus, FolderEntry, FolderStats } from "./api";
+import type { ContentVerdict, EntryStatus, FolderEntry, FolderLevel, FolderStats } from "./api";
 
 export type DisplayFilter =
   | "all"
@@ -156,6 +156,7 @@ export function applyVerdicts(
 /** Mirrors `tally` in pcompare-core so stats stay right after re-checks and ignore marks. */
 export function tally(entries: FolderEntry[], stats: FolderStats = emptyStats()): FolderStats {
   for (const e of entries) {
+    if (e.pending && !e.isDir) continue; // not compared yet
     if (!e.isDir) {
       if (e.ignored) stats.ignored = (stats.ignored ?? 0) + 1;
       switch (effectiveStatus(e)) {
@@ -324,4 +325,64 @@ export function selectMatching(
   };
   walk(entries, []);
   return { rows, expand: [...expand] };
+}
+
+// ---- Live trees: rows streamed folder by folder while a compare runs ----
+
+/**
+ * Assembles the tree from streamed {@link FolderLevel}s. Each folder arrives
+ * twice: listed (two-sided rows not compared yet, shown as pending) and then
+ * complete, which replaces its rows. A tree carried over from an earlier pass
+ * keeps its settled rows until the new pass completes their folder, so a
+ * refresh refines the view in place instead of blanking it.
+ */
+export class LiveTree {
+  /** Rows per folder relPath ("" is the root). */
+  private levels = new Map<string, FolderEntry[]>();
+  /** Folders reported by the current pass. */
+  private seen = new Set<string>();
+  private settled = new Set<string>();
+
+  /** Starts a new pass over the same folders. */
+  beginPass() {
+    this.seen.clear();
+  }
+
+  apply(levels: FolderLevel[]) {
+    for (const { rel, entries, complete } of levels) {
+      this.seen.add(rel);
+      if (complete) {
+        this.levels.set(rel, entries);
+        this.settled.add(rel);
+      } else if (!this.settled.has(rel)) {
+        // One-sided rows are already what they'll be; pairs (files and folders) await a verdict.
+        const pending = (e: FolderEntry) =>
+          e.left && e.right && e.status !== "typeMismatch" ? { ...e, pending: true } : e;
+        this.levels.set(rel, entries.map(pending));
+      }
+    }
+  }
+
+  /** Drops folders the finished pass no longer has (deleted, filtered out, now unreadable). */
+  endPass() {
+    for (const rel of this.levels.keys()) {
+      if (!this.seen.has(rel)) {
+        this.levels.delete(rel);
+        this.settled.delete(rel);
+      }
+    }
+  }
+
+  /** The tree so far. Rows are shared with the previous call, children re-linked. */
+  tree(): FolderEntry[] {
+    const link = (rel: string): FolderEntry[] => {
+      const rows = this.levels.get(rel) ?? [];
+      for (const e of rows) {
+        // An "<unreadable>" row stands in for its own folder (same relPath): no recursion.
+        if (e.isDir && e.relPath !== rel) e.children = link(e.relPath);
+      }
+      return rows;
+    };
+    return [...link("")];
+  }
 }
