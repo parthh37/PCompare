@@ -5,6 +5,9 @@ on:
     branches: [main]
   pull_request:
 
+# Rust caches are saved only from main. The repo has a 10 GB cache budget and
+# each PR used to add ~3 GB of its own, evicting main's caches (including the
+# ones releases restore from). PRs still restore main's caches.
 jobs:
   core-tests:
     strategy:
@@ -15,6 +18,8 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - run: cargo test -p pcompare-core -p pcompare-remote -p pcompare-merge -p pcompare-table -p pcompare-picture -p pcompare-sync -p pcompare-meta -p pcompare-db -p pcompare-convert -p pcompare-report -p pcompare-script -p pcompare-archive -p pcompare-review
 
   app-build:
@@ -29,6 +34,8 @@ jobs:
         with:
           components: clippy
       - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - run: npm ci
       - run: npm run build
       - run: cargo clippy --workspace --all-targets -- -D warnings
@@ -62,7 +69,9 @@ jobs:
           targets: ${{ matrix.target }}
       - uses: Swatinem/rust-cache@v2
         with:
-          key: bundle-${{ matrix.name }}
+          # Shared with release.yml's matching build jobs (see there).
+          shared-key: bundle-${{ matrix.name }}
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - run: npm ci
       - run: npx tauri build ${{ matrix.args }} --config '{"bundle":{"createUpdaterArtifacts":false}}'
         shell: bash
