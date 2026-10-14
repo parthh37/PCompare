@@ -324,6 +324,13 @@ async fn sign_in_profile(app: AppHandle, id: String) -> CmdResult<Profile> {
     .await
 }
 
+/// Stops a sign-in that is waiting for the browser; `sign_in_profile` then
+/// fails with "sign-in cancelled".
+#[tauri::command]
+fn cancel_sign_in(app: AppHandle) {
+    state(&app).remote.cancel_sign_in();
+}
+
 /// Opens the vendor's developer console (where users register an OAuth app).
 /// Takes a provider kind, not a URL, so the webview can't open arbitrary links.
 #[tauri::command]
@@ -474,6 +481,7 @@ fn main() {
             delete_profile,
             test_profile,
             sign_in_profile,
+            cancel_sign_in,
             open_provider_console,
             remote_list,
             // bc5:remote-write — remote browser writes + SSH sign-in prompts

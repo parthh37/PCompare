@@ -1,11 +1,13 @@
-//! Persisted channel list (`notify-channels.json` in the app config dir)
-//! plus their secrets in a [`SecretStore`].
+//! Persisted channel list (sealed in `notify-channels.vault` in the app
+//! config dir, see [`pcompare_core::vault`]) plus their secrets in a
+//! [`SecretStore`].
 
 use std::path::PathBuf;
 use std::sync::Mutex;
 
 use pcompare_core::secrets::SecretStore;
-use pcompare_core::store::{new_id, now_ms, read_json, write_json};
+use pcompare_core::store::{new_id, now_ms};
+use pcompare_core::vault::SealedFile;
 
 use crate::channel::{ChannelConfig, ChannelSecrets, ChannelSettings};
 use crate::{email, http, NotifyError, Result};
@@ -28,7 +30,7 @@ pub struct SecretsPresent {
 }
 
 pub struct ChannelStore {
-    path: PathBuf,
+    file: SealedFile,
     secrets: Box<dyn SecretStore>,
     /// Serialises read-modify-write of the file (the UI and the scheduler
     /// share one store).
@@ -56,7 +58,7 @@ impl SecretChange {
 impl ChannelStore {
     pub fn new(path: PathBuf, secrets: Box<dyn SecretStore>) -> Self {
         ChannelStore {
-            path,
+            file: SealedFile::new(path),
             secrets,
             lock: Mutex::new(()),
         }
@@ -73,7 +75,7 @@ impl ChannelStore {
     }
 
     fn read(&self) -> Result<Vec<ChannelConfig>> {
-        Ok(read_json(&self.path)?)
+        Ok(self.file.read(&*self.secrets)?)
     }
 
     /// Sorted by name.
@@ -194,7 +196,7 @@ impl ChannelStore {
             Some(i) => list[i] = config.clone(),
             None => list.push(config.clone()),
         }
-        if let Err(e) = write_json(&self.path, &list) {
+        if let Err(e) = self.file.write(&*self.secrets, &list) {
             if index.is_none() {
                 // Don't leave keychain entries behind for a channel that
                 // was never saved.
@@ -243,7 +245,7 @@ impl ChannelStore {
         let before = list.len();
         list.retain(|c| c.id != id);
         if list.len() != before {
-            write_json(&self.path, &list)?;
+            self.file.write(&*self.secrets, &list)?;
         }
         let profile = secret_profile(id);
         for key in [KEY_URL, KEY_PASSWORD, KEY_SIGNING] {
@@ -427,9 +429,9 @@ mod tests {
         );
         assert!(s.secrets_present(&t.id).unwrap().url);
 
-        // The file holds no secrets.
-        let file = std::fs::read_to_string(s.path.clone()).unwrap();
-        assert!(!file.contains("example.com/hook"));
+        // The file holds no secrets, even once decrypted.
+        let file: serde_json::Value = s.file.read(s.secrets()).unwrap();
+        assert!(!file.to_string().contains("example.com/hook"));
 
         s.delete(&t.id).unwrap();
         assert!(s.get(&t.id).unwrap().is_none());
@@ -618,7 +620,7 @@ mod tests {
 
     #[test]
     fn file_round_trips_as_camel_case_json() {
-        let (_d, s, _) = store();
+        let (d, s, secrets) = store();
         s.save(
             "",
             "Hook",
@@ -629,14 +631,17 @@ mod tests {
             &url("https://x.test/h"),
         )
         .unwrap();
-        let raw: serde_json::Value =
-            serde_json::from_str(&std::fs::read_to_string(&s.path).unwrap()).unwrap();
+        let raw: serde_json::Value = s.file.read(s.secrets()).unwrap();
         let c = &raw[0];
         assert_eq!(c["settings"]["kind"], "webhook");
         assert_eq!(c["settings"]["headers"], serde_json::json!([["X-A", "1"]]));
         assert!(c["createdMs"].is_i64() && c["updatedMs"].is_i64());
-        let reopened = ChannelStore::new(s.path.clone(), Box::new(MemorySecrets::default()));
+        let path = d.path().join("notify-channels.json");
+        let reopened = ChannelStore::new(path.clone(), Box::new(Shared(Arc::clone(&secrets))));
         assert_eq!(reopened.list().unwrap(), s.list().unwrap());
+        // Another machine's keychain can't read it.
+        let stolen = ChannelStore::new(path, Box::new(MemorySecrets::default()));
+        assert!(stolen.list().unwrap().is_empty());
     }
 
     #[test]

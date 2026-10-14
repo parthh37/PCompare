@@ -44,13 +44,19 @@ fn oauth_err(message: impl std::fmt::Display) -> CoreError {
     CoreError::Other(format!("sign-in failed: {message}"))
 }
 
+/// The error a cancelled sign-in ends with; the UI matches on it.
+pub const CANCELLED: &str = "sign-in cancelled";
+
 /// Runs the interactive sign-in. `open_browser` is called with the
-/// authorization URL; the future resolves once the browser redirects back.
+/// authorization URL; the future resolves once the browser redirects back,
+/// or fails with [`CANCELLED`] as soon as `cancel` completes (which also
+/// frees the redirect port for the next attempt).
 pub async fn authorize(
     spec: &OAuthSpec,
     client_id: &str,
     client_secret: Option<&str>,
     open_browser: impl FnOnce(&str) -> Result<()>,
+    cancel: impl std::future::Future<Output = ()>,
 ) -> Result<Tokens> {
     let verifier = random_token(64);
     let state = random_token(24);
@@ -73,9 +79,13 @@ pub async fn authorize(
         .map_err(|e| oauth_err(format!("port {REDIRECT_PORT} is busy ({e}); close other sign-in windows")))?;
     open_browser(url.as_str())?;
 
-    let code = tokio::time::timeout(SIGN_IN_TIMEOUT, wait_for_code(&listener, &state))
-        .await
-        .map_err(|_| oauth_err("timed out waiting for the browser"))??;
+    let code = tokio::select! {
+        waited = tokio::time::timeout(SIGN_IN_TIMEOUT, wait_for_code(&listener, &state)) => {
+            waited.map_err(|_| oauth_err("timed out waiting for the browser"))??
+        }
+        () = cancel => return Err(CoreError::Other(CANCELLED.into())),
+    };
+    drop(listener);
 
     let mut form = vec![
         ("grant_type", "authorization_code"),
@@ -166,6 +176,26 @@ mod tests {
             pkce_challenge("dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk"),
             "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM"
         );
+    }
+
+    #[test]
+    fn cancelling_stops_waiting_and_frees_the_port() {
+        let spec = crate::provider::spec(crate::provider::ProviderKind::Dropbox).oauth.unwrap();
+        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        rt.block_on(async {
+            let (tx, rx) = tokio::sync::oneshot::channel::<()>();
+            let run = authorize(&spec, "id", None, |_| Ok(()), async {
+                let _ = rx.await;
+            });
+            let cancel = async {
+                tokio::time::sleep(Duration::from_millis(50)).await;
+                let _ = tx.send(());
+            };
+            let (result, ()) = tokio::join!(run, cancel);
+            assert_eq!(result.unwrap_err().to_string(), CANCELLED);
+            // The next attempt can bind the redirect port again.
+            TcpListener::bind(("127.0.0.1", REDIRECT_PORT)).await.unwrap();
+        });
     }
 
     #[test]

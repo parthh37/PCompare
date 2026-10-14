@@ -22,6 +22,8 @@ memchr = "2" # bc5:hex
 # bc5:folder-engine — exe/dll version compare (pure Rust, no mmap) and NFC/NFD name alignment
 pelite = { version = "0.10.0", default-features = false, features = ["std"] }
 unicode-normalization = "0.1"
+# Sealed config files (vault.rs). Pure Rust, so the crate stays C-free.
+aes-gcm = { version = "0.11", features = ["zeroize"] }
 
 [dev-dependencies]
 tempfile = "3"
