@@ -11,7 +11,37 @@ export type SyncMode =
   | "mirrorLeftToRight"
   | "mirrorRightToLeft"
   /** True two-way sync against the state of the last sync (deletions propagate). */
-  | "twoWay";
+  | "twoWay"
+  /** bc5:sync-matrix — the user's own action per category (`SyncMatrix`). */
+  | "custom";
+
+// ----- bc5:sync-matrix — mirrors crates/pcompare-sync/src/matrix.rs -----
+/** What to do with one category of items (Beyond Compare's TDirSyncOp). */
+export type SyncAction = "leave" | "copyLeftToRight" | "copyRightToLeft" | "deleteLeft" | "deleteRight" | "prompt";
+/** How an item compares, for choosing its action. */
+export type SyncCategory =
+  | "leftNewer"
+  | "rightNewer"
+  | "leftOrphan"
+  | "rightOrphan"
+  | "leftDeleted"
+  | "rightDeleted"
+  | "different"
+  | "same";
+/** One action per category; the fixed modes are preset rows of it. */
+export type SyncMatrix = Record<SyncCategory, SyncAction>;
+
+/** Planning inputs besides the mode, compare options and conflict policy. */
+export interface PlanRules {
+  /** Used in `custom` mode only. */
+  matrix?: SyncMatrix;
+  /** Don't create orphan folders that hold no files. */
+  skipEmptyFolders?: boolean;
+  /** Plan only these items and their contents (Folder Compare's "Synchronize selection"). */
+  scope?: string[];
+  /** Actions picked in the preview, by relPath; on a folder they reach its contents. */
+  overrides?: Record<string, SyncAction>;
+}
 
 /** How two-way sync settles paths changed on both sides. */
 export type ConflictPolicy = "skip" | "newerWins" | "leftWins" | "rightWins";
@@ -41,14 +71,20 @@ export interface SyncOp {
   dstBefore: Snap | null;
   /** bc5:file-ops — the left side's own path when alignment paired differently named items. */
   leftRelPath?: string;
+  /** bc5:sync-matrix — the category that chose this op. */
+  category?: SyncCategory;
 }
 
 export interface SyncSkip {
   relPath: string;
   isDir: boolean;
   reason: string;
-  /** Needs the user's attention (type clash, error, ambiguous change). */
+  /** Needs the user's attention (type clash, error, ambiguous change, a "prompt" category). */
   conflict: boolean;
+  /** bc5:sync-matrix — null for type clashes, errors and paths changed on both sides. */
+  category: SyncCategory | null;
+  onLeft: boolean;
+  onRight: boolean;
 }
 
 export interface SyncSummary {
@@ -75,6 +111,8 @@ export interface SyncPlan {
   leftRoot: string;
   rightRoot: string;
   mode: SyncMode;
+  /** bc5:sync-matrix — the matrix the plan followed (the mode's preset, or the custom one). */
+  matrix: SyncMatrix;
   ops: SyncOp[];
   skipped: SyncSkip[];
   summary: SyncSummary;
@@ -108,6 +146,10 @@ export interface ExecOptions {
   copyAcls?: boolean;
   /** bc5:file-ops — Windows: carry DOS 8.3 short names over (needs administrator rights). */
   copyShortNames?: boolean;
+  /** bc5:sync-matrix — Windows/macOS: give copies the source's creation date too. */
+  copyCreated?: boolean;
+  /** bc5:sync-matrix — folders the sync creates get their source folder's dates. */
+  preserveFolderTimes?: boolean;
 }
 
 export const DEFAULT_EXEC_OPTIONS: ExecOptions = {
@@ -119,6 +161,8 @@ export const DEFAULT_EXEC_OPTIONS: ExecOptions = {
   verify: false,
   checkDrift: true,
   disposal: { kind: "trash" },
+  copyCreated: false,
+  preserveFolderTimes: true,
 };
 
 export interface PreflightIssue {
@@ -393,8 +437,19 @@ export interface MergeReport {
 }
 
 export const syncApi = {
-  plan: (left: string, right: string, mode: SyncMode, options: FolderCompareOptions, conflicts: ConflictPolicy) =>
-    invoke<SyncPlan>("sync_plan", { left, right, mode, options, conflicts }),
+  /**
+   * `reuse` re-plans from the comparison behind the last preview of the same folders and options
+   * (when there is one) instead of rescanning: for changed row actions (bc5:sync-matrix).
+   */
+  plan: (
+    left: string,
+    right: string,
+    mode: SyncMode,
+    options: FolderCompareOptions,
+    conflicts: ConflictPolicy,
+    rules: PlanRules = {},
+    reuse = false,
+  ) => invoke<SyncPlan>("sync_plan", { left, right, mode, options, conflicts, rules, reuse }),
   /** Checks folders, write access, free space and (with `exec`) the versioning folder. */
   preflight: (left: string, right: string, ops: SyncOp[], exec?: ExecOptions) =>
     invoke<PreflightIssue[]>("sync_preflight", { left, right, ops, exec: exec ?? null }),
@@ -411,6 +466,7 @@ export const syncApi = {
     exec: ExecOptions;
     compare: FolderCompareOptions;
     conflicts: ConflictPolicy;
+    rules?: PlanRules;
     runKey: string;
     onProgress: (p: SyncProgress) => void;
   }) => {
@@ -430,6 +486,7 @@ export const syncApi = {
     jobId: string;
     compare: FolderCompareOptions;
     conflicts: ConflictPolicy;
+    rules?: PlanRules;
     runKey: string;
     onProgress: (p: SyncProgress) => void;
   }) => {

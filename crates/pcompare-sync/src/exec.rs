@@ -76,6 +76,13 @@ pub struct ExecOptions {
     pub copy_acls: bool,
     /// Carry DOS 8.3 short names over (Windows; needs administrator rights).
     pub copy_short_names: bool,
+    /// Give copies the source's creation date as well (Windows and macOS;
+    /// BC's "Copy creation dates") (bc5:sync-matrix).
+    pub copy_created: bool,
+    /// Give folders the run creates their source folder's dates once
+    /// everything inside them is copied (copying into a folder changes its
+    /// modification time) (bc5:sync-matrix).
+    pub preserve_folder_times: bool,
 }
 
 /// What happens to deleted items and to the old versions of replaced files.
@@ -117,6 +124,8 @@ impl Default for ExecOptions {
             disposal: Disposal::Trash,
             copy_acls: false,
             copy_short_names: false,
+            copy_created: false,
+            preserve_folder_times: true,
         }
     }
 }
@@ -442,7 +451,13 @@ impl<'a> Runner<'a> {
     /// Copies ACLs / short names onto a local `dst` as configured, noting
     /// what couldn't be copied (bc5:file-ops).
     fn with_extras(&self, src: &Path, dst: &Path, mut done: Done) -> Done {
-        let notes = fsops::copy_extras(src, dst, self.opts.copy_acls, self.opts.copy_short_names);
+        let mut notes = fsops::copy_extras(src, dst, self.opts.copy_acls, self.opts.copy_short_names);
+        // Folders get theirs after the run (settle_folder_times), when nothing changes them any more.
+        if self.opts.copy_created && !dst.is_dir() {
+            if let Err(e) = fsops::copy_created(src, dst) {
+                notes.push(format!("creation date not copied: {e}"));
+            }
+        }
         if !notes.is_empty() {
             let mut all: Vec<String> = done.note.take().into_iter().collect();
             all.extend(notes);
@@ -559,6 +574,40 @@ impl<'a> Runner<'a> {
             backup,
             written: fsops::snap(dst).ok().flatten(),
             note,
+        }
+    }
+
+    /// Gives the folders this run created their source folder's dates,
+    /// deepest first so setting a folder's doesn't disturb its parent's
+    /// (bc5:sync-matrix). Local sides only; what can't be set is noted on
+    /// the folder's result.
+    fn settle_folder_times(&self, ops: &[SyncOp], report: &mut ExecReport) {
+        let (times, created) = (self.opts.preserve_folder_times, self.opts.copy_created);
+        if !times && !created {
+            return;
+        }
+        let made: HashMap<u32, &SyncOp> = ops.iter().filter(|o| o.kind == OpKind::Mkdir).map(|o| (o.id, o)).collect();
+        let mut done: Vec<(usize, &SyncOp)> = report
+            .results
+            .iter()
+            .enumerate()
+            .filter(|(_, r)| r.ok && r.kind == OpKind::Mkdir)
+            .filter_map(|(i, r)| made.get(&r.id).map(|op| (i, *op)))
+            .collect();
+        done.sort_by_key(|(_, op)| std::cmp::Reverse(op.dst_rel().matches('/').count()));
+        for (i, op) in done {
+            let (Root::Local(src_root), Root::Local(dst_root)) = self.roots(op.direction) else {
+                continue;
+            };
+            let paths = fsops::resolve(src_root, op.src_rel()).and_then(|s| Ok((s, fsops::resolve(dst_root, op.dst_rel())?)));
+            if let Err(e) = paths.and_then(|(src, dst)| fsops::copy_folder_times(&src, &dst, times, created)) {
+                let note = format!("folder dates not kept: {e}");
+                let r = &mut report.results[i];
+                r.error = Some(match r.error.take() {
+                    Some(prev) => format!("{prev}; {note}"),
+                    None => note,
+                });
+            }
         }
     }
 
@@ -743,6 +792,7 @@ pub fn execute_ctl(
         r.record(&mut report, op, outcome, first_attempts + attempts, true);
     }
 
+    r.settle_folder_times(ops, &mut report);
     report.not_run = ops[next..].iter().map(|o| o.id).collect();
     report.cancelled = r.cancelled() && (!report.not_run.is_empty() || report.results.iter().any(|x| x.failure == Some(FailureKind::Cancelled)));
     r.journal.flush();
@@ -1041,7 +1091,7 @@ mod tests {
         }
 
         fn plan(&self, mode: SyncMode, conflicts: ConflictPolicy) -> SyncPlan {
-            let po = PlanOptions { baseline: Some(&self.base), conflicts };
+            let po = PlanOptions { baseline: Some(&self.base), conflicts, ..Default::default() };
             plan_sync_local(&self.left, &self.right, mode, &Self::opts(), &po).unwrap()
         }
 
@@ -1080,6 +1130,66 @@ mod tests {
         }
         p.snapshot();
         p
+    }
+
+    fn mtime_secs(p: &Path) -> i64 {
+        FileTime::from_last_modification_time(&fs::metadata(p).unwrap()).unix_seconds()
+    }
+
+    #[test]
+    fn created_folders_keep_their_source_dates() {
+        let p = Pair::new();
+        write(&p.left, "deep/inner/f.txt", "x", OLD);
+        write(&p.left, "deep/g.txt", "y", OLD);
+        filetime::set_file_mtime(p.left.join("deep/inner"), FileTime::from_unix_time(OLD + 10, 0)).unwrap();
+        filetime::set_file_mtime(p.left.join("deep"), FileTime::from_unix_time(OLD + 20, 0)).unwrap();
+        let plan = p.plan(SyncMode::UpdateLeftToRight, ConflictPolicy::Skip);
+        let r = p.run(&plan.ops, &fast(), &PermanentDeleter);
+        assert_eq!(r.failed, 0, "{:?}", r.results);
+        assert!(r.results.iter().all(|x| x.error.is_none()), "{:?}", r.results);
+        assert_eq!(mtime_secs(&p.right.join("deep")), OLD + 20, "set after its files were copied in");
+        assert_eq!(mtime_secs(&p.right.join("deep/inner")), OLD + 10);
+
+        // Turned off, the folders keep the time they were made.
+        let q = Pair::new();
+        write(&q.left, "deep/f.txt", "x", OLD);
+        filetime::set_file_mtime(q.left.join("deep"), FileTime::from_unix_time(OLD, 0)).unwrap();
+        let plan = q.plan(SyncMode::UpdateLeftToRight, ConflictPolicy::Skip);
+        let off = ExecOptions { preserve_folder_times: false, ..fast() };
+        q.run(&plan.ops, &off, &PermanentDeleter);
+        assert_ne!(mtime_secs(&q.right.join("deep")), OLD);
+    }
+
+    #[cfg(any(windows, target_os = "macos"))]
+    #[test]
+    fn creation_dates_are_copied_when_asked() {
+        #[cfg(target_os = "macos")]
+        use std::os::macos::fs::FileTimesExt;
+        #[cfg(windows)]
+        use std::os::windows::fs::FileTimesExt;
+        use std::time::{Duration, UNIX_EPOCH};
+        let p = Pair::new();
+        write(&p.left, "dir/f.txt", "x", OLD);
+        let born = UNIX_EPOCH + Duration::from_secs(OLD as u64 - 3600);
+        for rel in ["dir/f.txt", "dir"] {
+            let f = fsops::open_for_times(&p.left.join(rel)).unwrap();
+            f.set_times(fs::FileTimes::new().set_created(born)).unwrap();
+        }
+        let created = |path: PathBuf| fs::metadata(path).unwrap().created().unwrap();
+        assert_eq!(created(p.left.join("dir/f.txt")), born);
+
+        let plan = p.plan(SyncMode::UpdateLeftToRight, ConflictPolicy::Skip);
+        let r = p.run(&plan.ops, &fast(), &PermanentDeleter);
+        assert_eq!(r.failed, 0);
+        assert_ne!(created(p.right.join("dir/f.txt")), born, "off by default");
+
+        fs::remove_dir_all(p.right.join("dir")).unwrap();
+        let on = ExecOptions { copy_created: true, ..fast() };
+        let r = p.run(&plan.ops, &on, &PermanentDeleter);
+        assert!(r.results.iter().all(|x| x.ok && x.error.is_none()), "{:?}", r.results);
+        assert_eq!(created(p.right.join("dir/f.txt")), born);
+        assert_eq!(created(p.right.join("dir")), born);
+        assert_eq!(mtime_secs(&p.right.join("dir/f.txt")), OLD, "modification time kept too");
     }
 
     #[test]
@@ -1335,6 +1445,7 @@ mod tests {
             reason: String::new(),
             dst_before: None,
             left_rel_path: None,
+            category: None,
         };
         // Crash after staging, before the new file was renamed in.
         let dst = p.right.join("a.txt");
@@ -1367,6 +1478,7 @@ mod tests {
             reason: String::new(),
             dst_before: None,
             left_rel_path: None,
+            category: None,
         };
         assert!(preflight(&p.left, &p.right, std::slice::from_ref(&copy)).is_empty());
         let nested = p.left.join("docs");

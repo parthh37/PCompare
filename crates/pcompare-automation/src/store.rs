@@ -12,12 +12,15 @@ use std::sync::{Mutex, MutexGuard};
 use pcompare_core::store::{new_id, now_ms};
 use serde::{Deserialize, Serialize};
 
-use crate::task::{validate_task, SyncTask, TaskIssue};
+use crate::task::{migrate_task, normalize_task, validate_task, SyncTask, TaskIssue};
 use crate::{AutomationError, Result};
 
 /// The file format this build writes. A file with a higher version came
 /// from a newer PCompare and is neither read nor overwritten.
-pub const FILE_VERSION: u32 = 1;
+///
+/// 2: tasks carry a sync `matrix` (bc5:sync-matrix); format 1 tasks get
+/// their mode's preset when read.
+pub const FILE_VERSION: u32 = 2;
 /// `max_parallel` is kept within this range.
 pub const MAX_PARALLEL_LIMIT: u32 = 16;
 
@@ -115,6 +118,7 @@ impl TaskStore {
         task.name = task.name.trim().to_owned();
         task.left = task.left.trim().to_owned();
         task.right = task.right.trim().to_owned();
+        normalize_task(&mut task);
         let others: Vec<String> = file
             .tasks
             .iter()
@@ -227,6 +231,9 @@ impl TaskStore {
         }
         match serde_json::from_str::<AutomationFile>(&text) {
             Ok(mut file) => {
+                for task in &mut file.tasks {
+                    migrate_task(task, file.version);
+                }
                 file.version = FILE_VERSION;
                 Ok(file)
             }
@@ -410,7 +417,7 @@ mod tests {
         store.save_task(sample()).unwrap();
         assert!(store.settings().unwrap().paused);
         let text = fs::read_to_string(store.path()).unwrap();
-        assert!(text.contains("\"version\": 1") && text.contains("\"maxParallel\""));
+        assert!(text.contains("\"version\": 2") && text.contains("\"maxParallel\""));
         assert!(!dir_has(store.path(), ".tmp"));
     }
 
@@ -464,5 +471,44 @@ mod tests {
                 .contains("a new shape"),
             "untouched"
         );
+    }
+
+    #[test]
+    fn format_1_tasks_get_their_mode_s_matrix() {
+        use pcompare_sync::sync::{SyncAction, SyncMatrix, SyncMode};
+        let (_dir, store) = store();
+        fs::create_dir_all(store.path().parent().unwrap()).unwrap();
+        fs::write(
+            store.path(),
+            r#"{"version": 1, "tasks": [
+                {"id": "a", "name": "Mirror", "enabled": true, "left": "/l", "right": "/r", "mode": "mirrorLeftToRight"},
+                {"id": "b", "name": "Two-way", "enabled": true, "left": "/l2", "right": "/r2", "mode": "twoWay"}
+            ]}"#,
+        )
+        .unwrap();
+        let tasks = store.tasks().unwrap();
+        assert_eq!(tasks[0].matrix, SyncMatrix::preset(SyncMode::MirrorLeftToRight));
+        assert_eq!(tasks[0].matrix.right_orphan, SyncAction::DeleteRight);
+        assert_eq!(tasks[1].matrix.left_deleted, SyncAction::DeleteRight);
+        assert!(!tasks[0].skip_empty_folders);
+
+        // A custom matrix survives a save; a fixed mode's is reset to its preset.
+        let mut custom = tasks[0].clone();
+        custom.mode = SyncMode::Custom;
+        custom.matrix.right_orphan = SyncAction::Prompt;
+        custom.skip_empty_folders = true;
+        let (saved, _) = store.save_task(custom).unwrap();
+        assert_eq!(saved.matrix.right_orphan, SyncAction::Prompt);
+        let mut fixed = tasks[1].clone();
+        fixed.matrix.left_deleted = SyncAction::Leave;
+        let (saved, _) = store.save_task(fixed).unwrap();
+        assert_eq!(saved.matrix, SyncMatrix::preset(SyncMode::TwoWay));
+
+        let text = fs::read_to_string(store.path()).unwrap();
+        assert!(text.contains("\"version\": 2") && text.contains("\"rightOrphan\": \"prompt\""), "{text}");
+        let again = store.tasks().unwrap();
+        assert_eq!(again[0].mode, SyncMode::Custom);
+        assert_eq!(again[0].matrix.right_orphan, SyncAction::Prompt, "format 2 isn't migrated again");
+        assert!(again[0].skip_empty_folders);
     }
 }

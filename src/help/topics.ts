@@ -215,11 +215,15 @@ Copies, mirrors or two-way syncs folders with a preview of every operation befor
 
 ## Modes
 - **Update** or **Mirror** left→right or right→left, **Update both**, or **Two-way with history** (deletions propagate; edits on both sides are conflicts settled by the conflict policy).
+- **Custom…** picks the action for each kind of item yourself (**Matrix…**): newer on left/right, only on left/right, deleted on left/right (known from the last sync), different with neither newer, and same. Each can be left alone, copied either way, deleted on either side, or set to **Prompt**, which lists the item as a conflict for you to decide in the preview. Every fixed mode is one row of presets in this table; *Start from* loads one.
+- **Empty folders** off skips creating folders that hold no files (or only filtered-out ones).
+- In Folder Compare, right-click → **Synchronize selection…** opens Folder Sync for just the selected items.
 
 ## Preview and run
 - Every copy, delete and new folder is listed with a checkbox; include or exclude everything shown at once.
+- Items left alone and conflicts are listed too. Select rows (Ctrl/⌘+click, Shift+click) and set their action from the action buttons or the right-click menu: **Leave alone**, **Copy left → right**, **Copy right → left**, **Delete left** or **Delete right** — conflicts included. On a folder, delete removes it whole and the other actions apply to everything inside that differs. Only those rows are re-planned (no rescan); **✎** marks them, and **Reset to plan** undoes it. **Preview** rescans and starts from the mode again.
 - **Synchronize** runs pre-flight checks (free space, write access), then executes with retries and locked-file handling. **Pause** holds a running sync between files (and inside large copies); **Resume** continues where it stopped.
-- **Sync options** set safety rules such as versioning replaced files into a folder, and on Windows whether NTFS permissions (ACLs) and short 8.3 names are copied.
+- **Sync options** set safety rules such as versioning replaced files into a folder, whether new folders get their source folder's dates (on by default) and creation dates are copied (Windows and macOS), and on Windows whether NTFS permissions (ACLs) and short 8.3 names are copied.
 - **History** lists past syncs; a finished sync can be **rolled back**, and an interrupted one resumed or repaired.
 - **Rebuild preview** re-scans both folders.
 `,
@@ -330,7 +334,7 @@ Saved folder syncs that run by themselves: on a schedule, when files change, or 
 - **Interval**: every N minutes, counted from the end of the previous run.
 - **Daily / weekly**: fixed times on chosen weekdays (local time).
 - **Cron**: five fields (\`minute hour day month weekday\`) or six with seconds first, e.g. \`0 */2 * * *\` every two hours, \`30 8 * * 1-5\` weekdays at 08:30; \`@hourly\`, \`@daily\`, \`@weekly\`, \`@monthly\` too.
-- **Real-time**: watches the source folder(s) — left for left→right modes, right for right→left, both for two-way and update-both — and syncs once changes have been quiet for a few seconds (or after the maximum delay under constant change). Remote folders and some network shares can't be watched; a periodic **rescan** covers them, and catches anything the system didn't report. The eye icon shows watching is active; a crossed-out eye explains why it isn't.
+- **Real-time**: watches the source folder(s) — left for left→right modes, right for right→left, both for two-way and update-both, and for Custom the side(s) its matrix copies from — and syncs once changes have been quiet for a few seconds (or after the maximum delay under constant change). Remote folders and some network shares can't be watched; a periodic **rescan** covers them, and catches anything the system didn't report. The eye icon shows watching is active; a crossed-out eye explains why it isn't.
 - **At startup**: once, a little after PCompare starts.
 - **Catch up missed runs**: if PCompare was closed or the computer slept through a scheduled time, run once as soon as possible.
 The editor's **Next runs** list shows exactly when the schedule fires.

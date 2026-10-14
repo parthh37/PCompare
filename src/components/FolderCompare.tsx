@@ -98,8 +98,8 @@ interface Props {
   /** Opens a text compare; `rules` carries this session's text rules over. */
   onOpenFiles: (left: string, right: string, rules: TextDiffOptions) => void;
   onOpenHex: (left: string, right: string) => void;
-  /** Opens a Folder Sync session on the same two folders. */
-  onOpenSync: (left: string, right: string) => void;
+  /** Opens a Folder Sync session on the same two folders (bc5:sync-matrix: `scope` limits it to those items). */
+  onOpenSync: (left: string, right: string, scope?: string[]) => void;
   /** bc5:editor-patch — opens one side's file in Text Edit. */
   onEditFile?: (path: string) => void;
   settings?: Record<string, unknown>;
@@ -591,6 +591,12 @@ export function FolderCompare({
       ...review.menuItems(entry), // araxis:text-review
       SEPARATOR,
       ...fops.menuItems(), // bc5:file-ops
+      // bc5:sync-matrix — Folder Sync limited to the selection
+      {
+        label: list.length > 1 ? `Synchronize ${list.length} items…` : "Synchronize selection…",
+        disabled: !left || !right,
+        onClick: () => onOpenSync(left, right, list.map((e) => e.relPath)),
+      },
       SEPARATOR,
       {
         label: `Compare contents${list.length > 1 || entry.isDir ? ` (${files.length} files)` : ""}`,
