@@ -12,6 +12,24 @@ export interface CompareProps<S = Record<string, unknown>> {
   onSettingsChange?: (s: S) => void;
   /** Report whether the session holds unsaved edits, so closing it can confirm. */
   onDirtyChange?: (dirty: boolean) => void;
+  /** bc5:reports-script — sides opened read-only from the command line (`/ro`, `/lro`, `/rro`). */
+  readOnlySides?: ReadOnlySides;
+}
+
+export interface ReadOnlySides {
+  left: boolean;
+  right: boolean;
+}
+
+/** Shown where an edit is refused because of `/ro`, `/lro` or `/rro`. */
+export const LAUNCH_READ_ONLY_HINT = "Opened read-only from the command line (/ro, /lro, /rro)";
+
+/** Command-line labels for the panes (`/title1=` … `/title4=`), shown instead of the paths. */
+export interface PaneTitles {
+  left?: string;
+  right?: string;
+  base?: string;
+  output?: string;
 }
 
 export interface MergePaths {
@@ -27,4 +45,8 @@ export interface MergeProps<S = Record<string, unknown>> extends MergePaths {
   settings?: Partial<S>;
   onSettingsChange?: (s: S) => void;
   onDirtyChange?: (dirty: boolean) => void;
+  /** bc5:reports-script — `/ro`, `/lro`, `/rro`: the merge never writes over a read-only side. */
+  readOnlySides?: ReadOnlySides;
+  /** bc5:reports-script — `/title1=` … `/title4=`. */
+  titles?: PaneTitles;
 }

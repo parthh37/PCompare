@@ -196,12 +196,17 @@ Switches take Beyond Compare's spelling (`/name=value`, case-insensitive) or a G
 | Switch | What it does |
 |---|---|
 | `/fv=<viewer>`, `--viewer <kind>` | Open as a specific session: `text`, `hex`, `table`, `picture`, `folder`, `sync`, `merge`, `folderMerge`, `registry`, `version`, `mp3`, `database` (BC names such as `"Text Compare"` or `"Data Compare"` work too) |
-| `/title1=<text>`, `/title2=<text>`, `--title-left`, `--title-right` | Tab labels instead of the file names (handy for git's temporary files); `/title3=`, `/title4=` (`/centertitle=`, `/outputtitle=`) label a merge's base and output, and `/vcs1=`…`/vcs4=` stand in for missing titles |
-| `/readonly` (`/ro`), `/lro` (`/ro1`), `/rro` (`/ro2`), `--readonly[-left\|-right]` | Open sides read-only in Text Compare |
+| `/title1=<text>`, `/title2=<text>`, `--title-left`, `--title-right` | Labels for the sides instead of the file names (handy for git's temporary files), on the tab and above each pane of Text Compare and Text Merge; `/title3=`, `/title4=` (`/centertitle=`, `/outputtitle=`, `--title-base`, `--title-output`) label a merge's base and output panes, and `/vcs1=`…`/vcs4=` stand in for missing titles |
+| `/readonly` (`/ro`), `/lro` (`/ro1`), `/rro` (`/ro2`), `--readonly[-left\|-right]` | Open sides read-only, in every viewer: no editing or saving in Text Compare, Text Edit, Hex and Registry Compare; Folder Compare's file operations, Folder Sync's operations and Database Compare's sync scripts never write a read-only side; Text Merge and Folder Merge won't save their output over one (`/ro` covers the merge base too) |
 | `/mergeoutput=<path>`, `--merge-output <path>` | Where a 3-way merge writes its result (implies `--wait`) |
 | `/center=<path>` | The merge base, instead of the third path |
 | `/automerge` | Merge without a window and write the output — unless there are conflicts: then `/force` writes them with `<<<<<<<` markers, `/reviewconflicts` opens the merge in PCompare (and waits for it), and otherwise the output is left alone. `/iu` makes whitespace-only changes merge cleanly, taken from `/favorleft` / `/favorright` or else from the base |
-| `/filters=<masks>`, `/expandall`, `/savetarget=<path>`, `/sync`, `/edit` | Accepted with Beyond Compare's meaning (`/sync` and `/edit` pick the viewer); `/solo`, `/nobackups` and `/closescript` are accepted and ignored |
+| `/filters=<masks>`, `--filters` | The name filter for the folder comparison the launch opens, in BC's mask syntax: `*.c;*.h;-*.o;-obj\` (`-` excludes, a trailing `\` or `/` means a folder) fills Folder Compare's include files / exclude files / exclude folders |
+| `/expandall`, `--expand-all` | That folder comparison opens with every folder expanded |
+| `/savetarget=<path>`, `--save-target` | Save in Text Compare (and Text Edit) writes here instead of over the original file: the right side's edits, or the left's when only the left is editable |
+| `/sync`, `/edit` | Open Folder Sync / Text Edit; `/solo`, `/nobackups` and `/closescript` are accepted and ignored |
+| `-` as a path | Read standard input into a temporary file and compare that (`dir \| pcompare - listing.txt`); `.bin` if it looks binary, so it opens in the hex viewer |
+| `<name>` (a single argument) | Beyond Compare's "Named Session" / "Named Workspace": when it isn't an existing file or folder, it opens the saved session of that name, or else the saved workspace |
 | `/wait`, `--wait` | Don't return until the comparison's tab is closed — also when PCompare is already running. Exit code `0`, or `1` for a merge whose output was never saved <!-- araxis:vcs --> |
 | `--base-first` | Merge paths come as `<base> <theirs> <yours> <merged>` (P4MERGE, svn `merge-tool-cmd`) <!-- araxis:vcs --> |
 | `-L <label>` | Labels the next side, as `svn diff --diff-cmd` passes them <!-- araxis:vcs --> |

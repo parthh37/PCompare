@@ -37,7 +37,7 @@ import {
   type TextDocument,
 } from "../lib/mergeApi";
 import { composeRuns, type StyledRange } from "../lib/textRuns";
-import type { MergePaths, MergeProps } from "../lib/sessionProps";
+import { LAUNCH_READ_ONLY_HINT, type MergePaths, type MergeProps } from "../lib/sessionProps";
 import { PathField } from "./PathField";
 import { IgnoreRulesDialog } from "./TextCompare";
 import { VirtualList, type VirtualListHandle } from "./VirtualList";
@@ -403,10 +403,13 @@ function lineOffset(lines: string[], i: number): number {
   return off;
 }
 
-function DocInfo({ label, doc }: { label: string; doc: TextDocument | undefined }) {
+function DocInfo({ label, title, doc }: { label: string; title?: string; doc: TextDocument | undefined }) {
   return (
     <div className="tm-colhead">
-      <span className="tm-colname">{label}</span>
+      {/* bc5:reports-script — a command-line title (`/title1=`…) stands in for the pane name. */}
+      <span className="tm-colname" title={title ? `${label}: ${doc?.info.path ?? title}` : undefined}>
+        {title || label}
+      </span>
       {doc && (
         <span className="fileinfo">
           {doc.info.encoding}
@@ -426,6 +429,8 @@ export function TextMerge({
   settings,
   onSettingsChange,
   onDirtyChange,
+  readOnlySides, // bc5:reports-script
+  titles,
 }: MergeProps<MergeSettings>) {
   const [options, setOptionsState] = useState<TextDiffOptions>({ ...DEFAULT_TEXT_OPTIONS, ...settings?.options });
   const [editingRules, setEditingRules] = useState(false);
@@ -853,6 +858,19 @@ export function TextMerge({
     line >= Math.min(lineSel.anchor, lineSel.focus) &&
     line <= Math.max(lineSel.anchor, lineSel.focus);
 
+  // bc5:reports-script — `/lro`, `/rro` (`/ro` covers the base too): the output
+  // is the only thing a merge writes, so it must not be a read-only input.
+  const lockedInput = (target: string) => {
+    const norm = (p: string) => p.replace(/[\\/]+$/, "").toLowerCase();
+    const both = !!readOnlySides?.left && !!readOnlySides?.right;
+    const inputs = [
+      ["left", left, !!readOnlySides?.left],
+      ["right", right, !!readOnlySides?.right],
+      ["base", base, both],
+    ] as const;
+    return inputs.find(([, p, ro]) => ro && p && norm(p) === norm(target))?.[0];
+  };
+
   const save = async () => {
     if (!data || saving) return;
     if (
@@ -865,13 +883,19 @@ export function TextMerge({
       return;
     let target = output;
     if (!target) {
-      const picked = await saveDialog({ title: "Save merged output", defaultPath: isRemote(left) ? undefined : left });
+      const suggested = isRemote(left) || readOnlySides?.left ? undefined : left;
+      const picked = await saveDialog({ title: "Save merged output", defaultPath: suggested });
       if (typeof picked !== "string") return;
       target = picked;
       onPathsChange({ left, base, right, output: picked });
     }
     if (isRemote(target)) {
       setError("The merged output must be saved to a local file.");
+      return;
+    }
+    const locked = lockedInput(target);
+    if (locked) {
+      setError(`The output is the ${locked} file. ${LAUNCH_READ_ONLY_HINT}`);
       return;
     }
     const written = text;
@@ -1311,9 +1335,9 @@ export function TextMerge({
           <>
             <div className={`tm-inputs${twoWay ? " tm-two" : ""}`} style={{ flexBasis: `${split * 100}%` }}>
               <div className="tm-heads">
-                <DocInfo label="Left" doc={data.left} />
-                {data.base && <DocInfo label="Base" doc={data.base} />}
-                <DocInfo label="Right" doc={data.right} />
+                <DocInfo label="Left" title={titles?.left} doc={data.left} />
+                {data.base && <DocInfo label="Base" title={titles?.base} doc={data.base} />}
+                <DocInfo label="Right" title={titles?.right} doc={data.right} />
               </div>
               <VirtualList
                 ref={list}
@@ -1333,7 +1357,9 @@ export function TextMerge({
             />
             <div className="tm-outpane">
               <div className="tm-colhead tm-outhead">
-                <span className="tm-colname">Output</span>
+                <span className="tm-colname" title={titles?.output ? `Output: ${output || "not saved yet"}` : undefined}>
+                  {titles?.output || "Output"}
+                </span>
                 <span className="fileinfo">{output || "not saved yet"}</span>
                 {unsaved && (
                   <span className="tm-dirty" title="The merged output has not been saved (Ctrl+S)">

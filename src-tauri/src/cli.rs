@@ -40,8 +40,10 @@ pub struct LaunchOptions {
     /// Merge pane labels (`/title3=` center, `/title4=` output).
     pub title_base: Option<String>,
     pub title_output: Option<String>,
-    /// `/filters=`: the name filter for the first folder comparison.
+    /// `/filters=`: the name filter for the first folder comparison, as
+    /// typed and split into the Folder Compare settings' glob lists.
     pub filters: Option<String>,
+    pub name_filter: Option<NameFilter>,
     /// `/expandall`: expand every folder of the first folder comparison.
     pub expand_all: bool,
     /// `/savetarget=`: Save writes here instead of over the original.
@@ -65,6 +67,34 @@ pub struct LaunchOptions {
     #[serde(skip)]
     pub base_first: bool,
     // araxis:vcs end
+    /// Index in the arguments of a `-` path: main.rs reads stdin into a
+    /// file and puts its path there ([`replace_stdin`]).
+    #[serde(skip)]
+    pub stdin_arg: Option<usize>,
+    /// A single argument naming a saved session or workspace instead of a
+    /// path (Beyond Compare's "Named Session" / "Named Workspace"), by id.
+    pub session_id: Option<String>,
+    pub workspace_id: Option<String>,
+}
+
+/// `/filters=*.c;-obj\` as Folder Compare's include / exclude globs.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NameFilter {
+    pub include_files: Vec<String>,
+    pub exclude_files: Vec<String>,
+    pub exclude_folders: Vec<String>,
+}
+
+impl NameFilter {
+    pub fn parse(masks: &str) -> Self {
+        let f = pcompare_script::parse::parse_name_filter(&[masks]);
+        NameFilter {
+            include_files: f.include_files,
+            exclude_files: f.exclude_files,
+            exclude_folders: f.exclude_folders,
+        }
+    }
 }
 
 /// A parsed command line.
@@ -99,6 +129,8 @@ PCompare — compare files and folders
 Usage:
   pcompare [options] <left> [<right>]                 compare two files or folders
   pcompare [options] <left> <right> <base> [<output>]  3-way merge (git mergetool order)
+  pcompare <name>                                     open a saved session or workspace by name
+  pcompare [options] - <right>                        compare standard input (`-`) with a file
   pcompare @<script> [<param>…] [/silent] [--dry-run] run a Beyond Compare script without a window
   pcompare /qc[=<method>] <left> <right>               quick compare without a window
   pcompare <left> <right> <base> <output> /automerge   merge without a window (git mergetool)
@@ -112,7 +144,7 @@ Options (Beyond Compare spellings in brackets):
   --title-right <text>   [/title2=<text>, /righttitle=] label for the right side
   --title-base <text>    [/title3=<text>, /centertitle=] label for the merge base
   --title-output <text>  [/title4=<text>, /outputtitle=] label for the merge output
-  --readonly             [/readonly, /ro] open both sides read-only
+  --readonly             [/readonly, /ro] open both sides read-only (every viewer)
   --readonly-left        [/lro]  --readonly-right [/rro]
   --merge-output <path>  [/mergeoutput=<path>] where a merge writes its result
   --center <path>        [/center=<path>] the merge base (instead of the 3rd path)
@@ -126,7 +158,8 @@ Options (Beyond Compare spellings in brackets):
                          changes from that side instead of the base
   --filters <masks>      [/filters=<masks>] name filter for a folder comparison
   --expand-all           [/expandall] expand every folder of a folder comparison
-  --save-target <path>   [/savetarget=<path>] Save writes here instead
+  --save-target <path>   [/savetarget=<path>] Save in Text Compare / Text Edit writes
+                         here instead of over the (right, else only editable) file
   --dry-run              scripts: list file operations instead of performing them
   --wait                 [/wait] don't return until the comparison's tab is closed
                          (implied by --merge-output); for git difftool / mergetool
@@ -299,6 +332,9 @@ pub fn parse(args: &[String]) -> Result<Invocation, String> {
             continue;
         }
         let Some(sw) = switch(arg) else {
+            if arg == "-" && opts.stdin_arg.is_none() {
+                opts.stdin_arg = Some(i);
+            }
             opts.paths.push(arg.clone());
             i += 1;
             continue;
@@ -338,7 +374,11 @@ pub fn parse(args: &[String]) -> Result<Invocation, String> {
             "iu" | "ignoreunimportant" | "ignore-unimportant" => iu = true,
             "favorleft" | "favor-left" => favor = Favor::Left,
             "favorright" | "favor-right" => favor = Favor::Right,
-            "filters" => opts.filters = Some(take(&mut i, &sw, "file masks")?),
+            "filters" => {
+                let masks = take(&mut i, &sw, "file masks")?;
+                opts.name_filter = Some(NameFilter::parse(&masks));
+                opts.filters = Some(masks);
+            }
             "expandall" | "expand-all" => opts.expand_all = true,
             "savetarget" | "save-target" => opts.save_target = Some(take(&mut i, &sw, "a path")?),
             // Beyond Compare's `/sync` and `/edit` open those viewers.
@@ -469,6 +509,83 @@ pub fn gui_options(args: &[String]) -> LaunchOptions {
         Ok(Invocation::AutoMerge { gui, .. }) => gui,
         _ => LaunchOptions::default(),
     }
+}
+
+/// `pcompare -` (Beyond Compare: "Opens stdin in the appropriate view"):
+/// `args` with the `-` path replaced by the file `save` writes stdin to, or
+/// `None` when no path is `-`.
+pub fn replace_stdin(
+    args: &[String],
+    save: impl FnOnce() -> std::io::Result<PathBuf>,
+) -> std::io::Result<Option<Vec<String>>> {
+    let Some(i) = gui_options(args).stdin_arg else {
+        return Ok(None);
+    };
+    let file = save()?;
+    let mut out = args.to_vec();
+    out[i] = file.to_string_lossy().into_owned();
+    Ok(Some(out))
+}
+
+/// Copies `input` into a new file under `dir`: `.bin` when it looks binary
+/// (a NUL in the first 8 KB, as the hex viewer would decide), else `.txt`,
+/// so the comparison opens in the matching viewer.
+pub fn save_stdin(mut input: impl std::io::Read, dir: &Path) -> std::io::Result<PathBuf> {
+    let mut data = Vec::new();
+    input.read_to_end(&mut data)?;
+    let binary = data.iter().take(8192).any(|&b| b == 0);
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_nanos());
+    let ext = if binary { "bin" } else { "txt" };
+    let file = dir.join(format!("pcompare-stdin-{}-{nanos:x}.{ext}", std::process::id()));
+    std::fs::write(&file, data)?;
+    Ok(file)
+}
+
+/// Beyond Compare's "Named Session" / "Named Workspace": a single argument
+/// that is not an existing path (`exists`) or URL but names a saved session,
+/// or else a saved workspace (case-insensitively), opens that instead.
+pub fn resolve_named(
+    opts: &mut LaunchOptions,
+    sessions: &[SavedSession],
+    workspaces: &[pcompare_core::workspace::Workspace],
+    exists: impl Fn(&str) -> bool,
+) {
+    let [name] = opts.paths.as_slice() else {
+        return;
+    };
+    let name = name.trim();
+    if name.is_empty()
+        || name.contains("://")
+        || pcompare_remote::is_container_path(name)
+        || pcompare_archive::vcs::is_vcs(name)
+        || exists(name)
+    {
+        return;
+    }
+    if let Some(s) = sessions.iter().find(|s| s.name.trim().eq_ignore_ascii_case(name)) {
+        opts.session_id = Some(s.id.clone());
+    } else if let Some(w) = workspaces.iter().find(|w| w.name.trim().eq_ignore_ascii_case(name)) {
+        opts.workspace_id = Some(w.id.clone());
+    } else {
+        return;
+    }
+    opts.paths.clear();
+}
+
+/// [`resolve_named`] against the sessions and workspaces saved in `config`
+/// (the app's settings folder), with relative paths checked from `cwd`.
+pub fn open_named(opts: &mut LaunchOptions, config: Option<&Path>, cwd: &Path) {
+    if opts.paths.len() != 1 {
+        return;
+    }
+    let Some(config) = config else { return };
+    let sessions = SessionStore::new(config.join("sessions.json")).list().unwrap_or_default();
+    let workspaces = pcompare_core::workspace::WorkspaceStore::new(config.join("workspaces.json"))
+        .list()
+        .unwrap_or_default();
+    resolve_named(opts, &sessions, &workspaces, |p| cwd.join(p).exists());
 }
 
 /// Applies `--compare-to`: pairs its path with the remembered left side (or
@@ -603,7 +720,7 @@ const APP_IDENTIFIER: &str = "com.parthh37.pcompare";
 
 /// The app's settings folder without a running app (Tauri's
 /// `app_config_dir`): sessions, connection profiles and file formats.
-fn config_dir() -> Option<PathBuf> {
+pub fn config_dir() -> Option<PathBuf> {
     let env = |k: &str| std::env::var_os(k).filter(|v| !v.is_empty()).map(PathBuf::from);
     let base = if cfg!(windows) {
         env("APPDATA")
@@ -1037,6 +1154,134 @@ mod tests {
         assert_eq!(o.save_target.as_deref(), Some("out.c"));
         assert_eq!(gui(&["/sync", "a", "b"]).viewer.as_deref(), Some("sync"));
         assert_eq!(gui(&["/edit", "a"]).viewer.as_deref(), Some("edit"));
+    }
+
+    /// The window reads these camelCase names (src/lib/cliApi.ts).
+    #[test]
+    fn gui_switches_reach_the_window_under_the_frontends_names() {
+        let o = gui(&[
+            "--title-left", "Theirs", "--title-right=Mine", "--title-base", "Base",
+            "--title-output", "Merged", "--filters", "*.rs;-target\\", "--expand-all",
+            "--save-target", "/tmp/out.c", "--readonly-right", "l", "r",
+        ]);
+        let json = serde_json::to_value(&o).unwrap();
+        assert_eq!(json["titleLeft"], "Theirs");
+        assert_eq!(json["titleRight"], "Mine");
+        assert_eq!(json["titleBase"], "Base");
+        assert_eq!(json["titleOutput"], "Merged");
+        assert_eq!(json["filters"], "*.rs;-target\\");
+        assert_eq!(json["nameFilter"]["includeFiles"], serde_json::json!(["*.rs"]));
+        assert_eq!(json["nameFilter"]["excludeFolders"], serde_json::json!(["target"]));
+        assert_eq!(json["expandAll"], true);
+        assert_eq!(json["saveTarget"], "/tmp/out.c");
+        assert_eq!((json["readOnlyLeft"].as_bool(), json["readOnlyRight"].as_bool()), (Some(false), Some(true)));
+        assert!(json["sessionId"].is_null() && json["workspaceId"].is_null());
+        // Internal to the launching process.
+        assert!(json.get("stdinArg").is_none());
+        let both = gui(&["/ro", "l", "r"]);
+        assert!(both.read_only_left && both.read_only_right);
+    }
+
+    #[test]
+    fn filters_become_folder_compare_globs() {
+        let f = |m: &str| gui(&[&format!("/filters={m}"), "a", "b"]).name_filter.unwrap();
+        assert_eq!(
+            f("*.c;*.h;-*.o;-obj\\"),
+            NameFilter {
+                include_files: vec!["*.c".into(), "*.h".into()],
+                exclude_files: vec!["*.o".into()],
+                exclude_folders: vec!["obj".into()],
+            }
+        );
+        // `*.*` doesn't restrict; an included folder limits files to inside it.
+        assert_eq!(f("*.*;-.git\\").include_files, Vec::<String>::new());
+        assert_eq!(f("src\\").include_files, ["src/**/*", "**/src/**/*"]);
+        assert!(gui(&["a", "b"]).name_filter.is_none());
+    }
+
+    #[test]
+    fn a_dash_path_is_replaced_by_the_saved_stdin() {
+        let file = PathBuf::from("/tmp/pcompare-stdin-1.txt");
+        let got = replace_stdin(&args(&["/title1=Listing", "-", "b.txt"]), || Ok(file.clone())).unwrap();
+        assert_eq!(got, Some(args(&["/title1=Listing", "/tmp/pcompare-stdin-1.txt", "b.txt"])));
+        assert_eq!(gui(&["a", "-"]).stdin_arg, Some(1));
+        // A `-` switch value is a title, not stdin; and stdin isn't read without `-`.
+        let untouched = |a: &[&str]| replace_stdin(&args(a), || panic!("read stdin")).unwrap();
+        assert_eq!(untouched(&["--title-left", "-", "a", "b"]), None);
+        assert_eq!(untouched(&["a", "b"]), None);
+    }
+
+    #[test]
+    fn stdin_is_saved_with_an_extension_for_its_viewer() {
+        let d = temp_dir();
+        let text = save_stdin(&b"dir listing\n"[..], &d.0).unwrap();
+        assert_eq!(text.extension().unwrap(), "txt");
+        assert_eq!(std::fs::read(&text).unwrap(), b"dir listing\n");
+        let bin = save_stdin(&b"MZ\0\x01"[..], &d.0).unwrap();
+        assert_eq!(bin.extension().unwrap(), "bin");
+    }
+
+    #[test]
+    fn a_single_name_opens_a_saved_session_or_workspace() {
+        let session = SavedSession {
+            id: "s1".into(),
+            name: "Nightly Build".into(),
+            kind: "folder".into(),
+            left: "/a".into(),
+            right: "/b".into(),
+            base: None,
+            output: None,
+            settings: serde_json::Value::Null,
+            created_ms: 0,
+            modified_ms: 0,
+        };
+        let workspace = pcompare_core::workspace::Workspace {
+            id: "w1".into(),
+            name: "Release Review".into(),
+            tabs: vec![],
+            active: 0,
+            created_ms: 0,
+            modified_ms: 0,
+        };
+        let named = |a: &[&str], exists: bool| {
+            let mut o = gui(a);
+            resolve_named(&mut o, std::slice::from_ref(&session), std::slice::from_ref(&workspace), |_| exists);
+            o
+        };
+        let o = named(&["nightly build"], false);
+        assert_eq!((o.session_id.as_deref(), o.paths.len()), (Some("s1"), 0));
+        let o = named(&["/fv=Text Compare", "Release Review"], false);
+        assert_eq!((o.workspace_id.as_deref(), o.paths.len()), (Some("w1"), 0));
+        // An existing file of that name, two paths, unknown names and URLs stay paths.
+        for (a, exists) in [
+            (&["Nightly Build"][..], true),
+            (&["Nightly Build", "Release Review"][..], false),
+            (&["Other"][..], false),
+            (&["remote://Nightly Build"][..], false),
+        ] {
+            let o = named(a, exists);
+            assert!(o.session_id.is_none() && o.workspace_id.is_none(), "{a:?}");
+            assert_eq!(o.paths.len(), a.len());
+        }
+    }
+
+    #[test]
+    fn named_launches_read_the_settings_folder() {
+        let d = temp_dir();
+        let store = SessionStore::new(d.0.join("sessions.json"));
+        let saved = store
+            .save(serde_json::from_value(serde_json::json!({
+                "name": "Docs", "kind": "text", "left": "/a", "right": "/b"
+            })).unwrap())
+            .unwrap();
+        let mut o = gui(&["Docs"]);
+        open_named(&mut o, Some(&d.0), &d.0);
+        assert_eq!(o.session_id, Some(saved.id));
+        // A file called `Docs` next to the launch wins.
+        std::fs::write(d.0.join("Docs"), "x").unwrap();
+        let mut o = gui(&["Docs"]);
+        open_named(&mut o, Some(&d.0), &d.0);
+        assert!(o.session_id.is_none());
     }
 
     #[test]

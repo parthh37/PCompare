@@ -85,6 +85,7 @@ import { embedFocused } from "../lib/embeddedPane";
 import { matches, shortcutLabel } from "../lib/keymap";
 import { getPrefs, setPrefs, usePref } from "../lib/prefs";
 import { sessionForFiles } from "../lib/sessions";
+import type { ReadOnlySides } from "../lib/sessionProps"; // bc5:reports-script
 import { FolderSelectDialog, type SelectRequest } from "./FolderSelectDialog";
 import { FolderSplitPane, type SplitPair } from "./FolderSplitPane";
 import "./FolderCompare.css";
@@ -106,6 +107,10 @@ interface Props {
   onSettingsChange?: (s: FolderSettings) => void;
   /** The split view's embedded file comparison holds unsaved edits. */
   onDirtyChange?: (dirty: boolean) => void;
+  /** bc5:reports-script — `/ro`, `/lro`, `/rro`: no file operation writes that side. */
+  readOnlySides?: ReadOnlySides;
+  /** bc5:reports-script — `/expandall`: expand every folder once the first compare finishes. */
+  expandAll?: boolean;
 }
 
 const STATUS_ICON: Record<EntryStatus, LucideIcon> = {
@@ -212,6 +217,8 @@ export function FolderCompare({
   settings,
   onSettingsChange,
   onDirtyChange,
+  readOnlySides, // bc5:reports-script
+  expandAll,
 }: Props) {
   const [cfg, setCfg] = useState<FolderSettings>(() => loadFolderSettings(settings));
   const update = (patch: Partial<FolderSettings>) => setCfg((c) => ({ ...c, ...patch }));
@@ -248,6 +255,13 @@ export function FolderCompare({
   const hasResult = useRef(false);
   hasResult.current = !!result;
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  // bc5:reports-script — `/expandall`, once: the user may collapse folders afterwards.
+  const expandPending = useRef(!!expandAll);
+  useEffect(() => {
+    if (!expandPending.current || phase || !result) return;
+    expandPending.current = false;
+    setExpanded(allDirs(result.entries));
+  }, [phase, result]);
   const root = useRef<HTMLDivElement>(null);
   const shell = useShell();
 
@@ -504,6 +518,7 @@ export function FolderCompare({
     onOpen: (list) => (list.length === 1 ? open(list[0]) : list.filter((e) => !e.isDir).slice(0, 10).forEach(open)),
     onRefresh: () => run(true),
     onError: setError,
+    readOnly: readOnlySides, // bc5:reports-script
   });
 
   // Split view: the focused row's file pair (orphans show their one file; folders nothing).
@@ -925,6 +940,7 @@ export function FolderCompare({
               pair={splitPair}
               hint={splitHint}
               rules={engineOptions.rules}
+              readOnlySides={readOnlySides} // bc5:reports-script
               style={{ flexGrow: 1 - splitRatio }}
               onOpenInTab={openPairInTab}
               onDirtyChange={(d) => {

@@ -33,7 +33,7 @@ use pcompare_remote::profile::{KeyringSecrets, Profile, ProfileInput};
 use pcompare_remote::provider::{self, ProviderKind, ProviderSpec};
 use pcompare_remote::RemoteManager;
 use serde::Serialize;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
 use tauri::{AppHandle, Manager};
 use tauri_plugin_opener::OpenerExt;
@@ -136,14 +136,55 @@ fn resolve_launch_args(args: &[String], left_selection: Option<String>) -> cli::
 /// window exists (so the webview never sees a half-consumed selection).
 static LAUNCH_OPTIONS: std::sync::OnceLock<cli::LaunchOptions> = std::sync::OnceLock::new();
 
-fn resolve_launch_paths(args: &[String]) -> cli::LaunchOptions {
-    if !args.iter().any(|a| a == "--compare-to") {
-        return resolve_launch_args(args, None);
-    }
-    let launch = resolve_launch_args(args, read_left_selection());
-    let _ = std::fs::remove_file(left_selection_file());
-    pcompare_shell::menu::set_left(None);
+/// `cwd` anchors relative paths, and `config` (the settings folder) holds the
+/// saved sessions and workspaces a single name argument may open.
+fn resolve_launch_paths(args: &[String], config: Option<&Path>, cwd: &Path) -> cli::LaunchOptions {
+    let mut launch = if args.iter().any(|a| a == "--compare-to") {
+        let launch = resolve_launch_args(args, read_left_selection());
+        let _ = std::fs::remove_file(left_selection_file());
+        pcompare_shell::menu::set_left(None);
+        launch
+    } else {
+        resolve_launch_args(args, None)
+    };
+    cli::open_named(&mut launch, config, cwd);
     launch
+}
+
+/// `pcompare -`: stdin goes into a temporary file, then PCompare runs again
+/// with that file's path. Relaunching is what lets the path reach a window
+/// that's already open: a second launch hands over its original arguments.
+/// Returns the arguments to carry on with (`--wait` relaunches with them
+/// itself), or exits after the relaunch.
+fn read_stdin_arg(args: Vec<String>) -> Vec<String> {
+    let replaced = cli::replace_stdin(&args, || cli::save_stdin(std::io::stdin().lock(), &std::env::temp_dir()));
+    let rewritten = match replaced {
+        Ok(Some(a)) => a,
+        Ok(None) => return args,
+        Err(e) => {
+            pcompare_script::console::attach_parent();
+            eprintln!("pcompare -: could not read stdin: {e}");
+            std::process::exit(100);
+        }
+    };
+    let opts = cli::gui_options(&rewritten);
+    if opts.wait || opts.merge_output.is_some() {
+        return rewritten;
+    }
+    let relaunch = std::env::current_exe().and_then(|exe| {
+        std::process::Command::new(exe)
+            .args(&rewritten)
+            .stdin(std::process::Stdio::null())
+            .spawn()
+    });
+    match relaunch {
+        Ok(_) => std::process::exit(0),
+        Err(e) => {
+            pcompare_script::console::attach_parent();
+            eprintln!("pcompare -: {e}");
+            std::process::exit(100);
+        }
+    }
 }
 
 /// The command line, e.g. `pcompare.exe left right` plus any viewer, title,
@@ -387,12 +428,14 @@ fn main() {
     if let Some(code) = cli::run_headless(args.get(1..).unwrap_or_default()) {
         std::process::exit(code);
     }
+    let args = read_stdin_arg(args.get(1..).unwrap_or_default().to_vec());
     // araxis:vcs — `--wait` (git difftool / mergetool) blocks here until the tab closes.
-    if let Some(code) = vcs::run_wait_mode(args.get(1..).unwrap_or_default()) {
+    if let Some(code) = vcs::run_wait_mode(&args) {
         std::process::exit(code);
     }
     // araxis:vcs end
-    let _ = LAUNCH_OPTIONS.set(resolve_launch_paths(args.get(1..).unwrap_or_default()));
+    let cwd = std::env::current_dir().unwrap_or_default();
+    let _ = LAUNCH_OPTIONS.set(resolve_launch_paths(&args, cli::config_dir().as_deref(), &cwd));
     // araxis:vcs
     if let Some(token) = LAUNCH_OPTIONS.get().and_then(|o| o.wait_token.as_deref()) {
         vcs::register(token);

@@ -19,7 +19,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { errorMessage, isRemote, type EntryMeta } from "../lib/api";
 import { COMPARE_PRESETS, DEFAULT_FOLDER_SETTINGS, toEngineOptions, type ComparePreset } from "../lib/folderSettings";
 import { formatSize, formatTime, joinPath } from "../lib/format";
-import type { MergePaths, MergeProps } from "../lib/sessionProps";
+import { LAUNCH_READ_ONLY_HINT, type MergePaths, type MergeProps } from "../lib/sessionProps";
 import {
   CONFLICT_CLASSES,
   syncApi,
@@ -206,6 +206,7 @@ export function FolderMerge({
   onSettingsChange,
   onOpenTextMerge,
   onOpenFiles,
+  readOnlySides, // bc5:reports-script
 }: Props) {
   const [cfg, setCfg] = useState<FolderMergeSettings>(() => ({
     ...DEFAULTS,
@@ -554,6 +555,8 @@ export function FolderMerge({
       ] as const).find(([, p]) => p && norm(p) === norm(output))?.[0]
     : undefined;
   const remote = [left, base, right, output].some((p) => p && isRemote(p));
+  // bc5:reports-script — `/lro`, `/rro`: never merge into a read-only side.
+  const intoLocked = (inPlace === "left" || inPlace === "right") && !!readOnlySides?.[inPlace];
 
   const execute = async () => {
     setConfirming(false);
@@ -572,7 +575,7 @@ export function FolderMerge({
   const counts = result?.counts ?? {};
   const n = (...classes: MergeClass[]) => classes.reduce((sum, c) => sum + (counts[c] ?? 0), 0);
   const ready = !!left && !!right;
-  const mergeBlocked = !result || !output || remote || loading || merging;
+  const mergeBlocked = !result || !output || remote || intoLocked || loading || merging;
 
   return (
     <div className={`session folder-merge${twoWay ? " fm-two" : ""}`} ref={root}>
@@ -668,7 +671,9 @@ export function FolderMerge({
           title={
             remote
               ? "Merging remote folders isn't supported yet"
-              : !output
+              : intoLocked
+                ? `The output is the ${inPlace} folder. ${LAUNCH_READ_ONLY_HINT}`
+                : !output
                 ? "Choose an output folder first"
                 : "Write the merged result to the output folder"
           }
@@ -712,10 +717,18 @@ export function FolderMerge({
             placeholder="Folder that receives the merged result"
           />
           <span className="muted">Merge into</span>
-          <button onClick={() => commit({ output: draft.left })} disabled={!draft.left} title="Write the result into the left folder">
+          <button
+            onClick={() => commit({ output: draft.left })}
+            disabled={!draft.left || !!readOnlySides?.left}
+            title={readOnlySides?.left ? LAUNCH_READ_ONLY_HINT : "Write the result into the left folder"}
+          >
             Left
           </button>
-          <button onClick={() => commit({ output: draft.right })} disabled={!draft.right} title="Write the result into the right folder">
+          <button
+            onClick={() => commit({ output: draft.right })}
+            disabled={!draft.right || !!readOnlySides?.right}
+            title={readOnlySides?.right ? LAUNCH_READ_ONLY_HINT : "Write the result into the right folder"}
+          >
             Right
           </button>
         </div>

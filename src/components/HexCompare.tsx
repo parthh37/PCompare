@@ -19,7 +19,7 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState, type MouseEv
 import { errorMessage, isRemote, type HexRow, type HexRowFilter, type HexState, type HexView } from "../lib/api";
 import { formatSize, hex } from "../lib/format";
 import { encodePattern, hexApi, type FindEncoding, type HexSide } from "../lib/hexApi";
-import type { CompareProps } from "../lib/sessionProps";
+import { LAUNCH_READ_ONLY_HINT, type CompareProps } from "../lib/sessionProps";
 import { autoRefreshTitle, useAutoRefresh } from "../lib/useAutoRefresh";
 import { PathBar } from "./PathBar";
 import "./HexCompare.css";
@@ -106,6 +106,7 @@ export function HexCompare({
   settings,
   onSettingsChange,
   onDirtyChange,
+  readOnlySides, // bc5:reports-script
 }: CompareProps<HexSettings>) {
   const [prefs, setPrefs] = useState<HexSettings>({ ...DEFAULT_SETTINGS, ...settings });
   const reportSettings = useRef(onSettingsChange);
@@ -166,7 +167,11 @@ export function HexCompare({
   const [viewport, setViewport] = useState({ width: 800, height: 600, charWidth: 7.5 });
   const [scrollTop, setScrollTop] = useState(0);
 
-  const readOnly: [boolean, boolean] = [isRemote(left), isRemote(right)];
+  const remote: [boolean, boolean] = [isRemote(left), isRemote(right)];
+  // bc5:reports-script — `/ro`, `/lro`, `/rro` lock a side like a remote one.
+  const launchLocked: [boolean, boolean] = [!!readOnlySides?.left, !!readOnlySides?.right];
+  const readOnly: [boolean, boolean] = [remote[0] || launchLocked[0], remote[1] || launchLocked[1]];
+  const readOnlyHint = (side: HexSide) => (launchLocked[side] ? LAUNCH_READ_ONLY_HINT : READ_ONLY_HINT);
 
   const offWidth = Math.max(8, Math.max(state?.sizes[0] ?? 0, state?.sizes[1] ?? 0).toString(16).length);
   // Row geometry (see HexCompare.css): per side an offset column, 3ch per hex
@@ -450,7 +455,7 @@ export function HexCompare({
   const onDiskChange = async () => {
     const st = stateRef.current;
     if (!st) return;
-    if (readOnly[0] || readOnly[1]) {
+    if (remote[0] || remote[1]) {
       // Remote sides are polled; reload unless that would lose edits.
       if (!st.dirty[0] && !st.dirty[1]) open(true);
       return;
@@ -471,7 +476,7 @@ export function HexCompare({
 
   const blockedEdit = (side: HexSide) => {
     if (!readOnly[side]) return false;
-    setMessage(READ_ONLY_HINT);
+    setMessage(readOnlyHint(side));
     return true;
   };
 
@@ -985,7 +990,7 @@ export function HexCompare({
         <button
           onClick={save}
           disabled={!canSave}
-          title={readOnly[0] && readOnly[1] ? READ_ONLY_HINT : "Save modified files (Ctrl+S)"}
+          title={readOnly[0] && readOnly[1] ? readOnlyHint(0) : "Save modified files (Ctrl+S)"}
         >
           <Save size={14} /> Save
         </button>
@@ -1152,14 +1157,14 @@ export function HexCompare({
               <button
                 onClick={replaceOne}
                 disabled={readOnly[find.side]}
-                title={readOnly[find.side] ? READ_ONLY_HINT : "Replace the selected match and find the next"}
+                title={readOnly[find.side] ? readOnlyHint(find.side) : "Replace the selected match and find the next"}
               >
                 <Replace size={14} /> Replace
               </button>
               <button
                 onClick={replaceAll}
                 disabled={readOnly[find.side]}
-                title={readOnly[find.side] ? READ_ONLY_HINT : "Replace every match on this side (one undo step)"}
+                title={readOnly[find.side] ? readOnlyHint(find.side) : "Replace every match on this side (one undo step)"}
               >
                 <ReplaceAll size={14} /> Replace all
               </button>
