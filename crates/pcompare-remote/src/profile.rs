@@ -8,7 +8,7 @@
 //! stored so it can show "saved" placeholders.
 
 use crate::provider::{spec, FieldKind, ProviderKind, REFRESH_TOKEN};
-pub use pcompare_core::secrets::{MemorySecrets, SecretStore};
+pub use pcompare_core::secrets::{ChunkedSecrets, MemorySecrets, SecretStore};
 use pcompare_core::store::now_ms;
 use pcompare_core::vault::SealedFile;
 use pcompare_core::{CoreError, Result};
@@ -46,7 +46,8 @@ pub struct ProfileInput {
     pub secrets: BTreeMap<String, String>,
 }
 
-/// The platform keychain.
+/// The platform keychain. Values too long for one Windows Credential
+/// Manager entry are split across several (see [`ChunkedSecrets`]).
 pub struct KeyringSecrets;
 
 const KEYRING_SERVICE: &str = "PCompare";
@@ -56,7 +57,10 @@ fn keyring_entry(profile: &str, key: &str) -> Result<keyring::Entry> {
         .map_err(|e| CoreError::Other(format!("keychain: {e}")))
 }
 
-impl SecretStore for KeyringSecrets {
+/// One keychain entry per key, with the platform's size limit.
+struct RawKeyring;
+
+impl SecretStore for RawKeyring {
     fn get(&self, profile: &str, key: &str) -> Result<Option<String>> {
         match keyring_entry(profile, key)?.get_password() {
             Ok(v) => Ok(Some(v)),
@@ -74,6 +78,18 @@ impl SecretStore for KeyringSecrets {
             Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
             Err(e) => Err(CoreError::Other(format!("keychain: {e}"))),
         }
+    }
+}
+
+impl SecretStore for KeyringSecrets {
+    fn get(&self, profile: &str, key: &str) -> Result<Option<String>> {
+        ChunkedSecrets::new(RawKeyring).get(profile, key)
+    }
+    fn set(&self, profile: &str, key: &str, value: &str) -> Result<()> {
+        ChunkedSecrets::new(RawKeyring).set(profile, key, value)
+    }
+    fn delete(&self, profile: &str, key: &str) -> Result<()> {
+        ChunkedSecrets::new(RawKeyring).delete(profile, key)
     }
 }
 
