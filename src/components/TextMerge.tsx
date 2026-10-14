@@ -59,7 +59,11 @@ export interface MergeSettings {
   split: number;
   /** What the output starts as: merged automatically (default) or the base only. */
   start?: StartMode;
+  /** Left and right changes with fewer unchanged lines than this between them conflict (BC's default: 2). */
+  conflictScanLines?: number;
 }
+
+const DEFAULT_SCAN_LINES = 2;
 
 type Resolution = "left" | "right" | "leftRight" | "rightLeft" | "base" | "conflict";
 const RESOLUTIONS: { id: Resolution; label: string; title: string }[] = [
@@ -435,7 +439,11 @@ export function TextMerge({
   const [start, setStart] = useState<StartMode>(settings?.start ?? "auto");
   const startRef = useRef(start);
   startRef.current = start;
-  useEffect(() => void reportSettings.current?.({ options, split, start }), [options, split, start]);
+  const [scanLines, setScanLinesState] = useState(settings?.conflictScanLines ?? DEFAULT_SCAN_LINES);
+  useEffect(
+    () => void reportSettings.current?.({ options, split, start, conflictScanLines: scanLines }),
+    [options, split, start, scanLines],
+  );
 
   const [draft, setDraft] = useState<MergePaths>({ left, base, right, output });
   useEffect(() => setDraft({ left, base, right, output }), [left, base, right, output]);
@@ -486,7 +494,7 @@ export function TextMerge({
     setLoading(true);
     setError(null);
     try {
-      const res = await mergeApi.loadMerge(left, base, right, options);
+      const res = await mergeApi.loadMerge(left, base, right, options, { conflictScanLines: scanLines });
       if (seq !== requestSeq.current) return;
       setData(res);
       // The automatic merge is a step of its own, so it can be undone right away.
@@ -509,7 +517,7 @@ export function TextMerge({
     } finally {
       if (seq === requestSeq.current) setLoading(false);
     }
-  }, [left, base, right, options]);
+  }, [left, base, right, options, scanLines]);
 
   useEffect(() => {
     load();
@@ -529,6 +537,9 @@ export function TextMerge({
 
   const setOptions = (next: TextDiffOptions) => {
     if (confirmDiscard("merge again with the new options")) setOptionsState(next);
+  };
+  const setScanLines = (n: number) => {
+    if (Number.isFinite(n) && n >= 0 && confirmDiscard("merge again with the new options")) setScanLinesState(Math.floor(n));
   };
 
   const applyPaths = (next: MergePaths) => {
@@ -1246,6 +1257,24 @@ export function TextMerge({
         <button onClick={() => setEditingRules(true)} title="Regexes for text that never matters">
           <ListFilter size={14} /> Ignore rules{patternCount ? ` · ${patternCount}` : ""}
         </button>
+        {!twoWay && (
+          <label
+            title={
+              "Conflict scan lines: a left change and a right change with fewer unchanged lines than this " +
+              "between them are a conflict instead of merging silently. 0: only overlapping changes conflict."
+            }
+          >
+            Scan lines
+            <input
+              className="tm-scan-lines"
+              type="number"
+              min={0}
+              max={99}
+              value={scanLines}
+              onChange={(e) => setScanLines(e.target.valueAsNumber)}
+            />
+          </label>
+        )}
         <span className="spacer" />
         <button
           onClick={save}
