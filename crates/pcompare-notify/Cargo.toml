@@ -1,0 +1,33 @@
+[package]
+name = "pcompare-notify"
+description = "Sync failure notifications for PCompare: Microsoft Teams, email (SMTP), Slack and webhooks"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+pcompare-core = { path = "../pcompare-core" }
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+# Same TLS stack as pcompare-remote (rustls + aws-lc-rs + the platform
+# verifier, so corporate roots in the Windows store are trusted).
+# `system-proxy` honours the Windows/macOS proxy settings, which matters for
+# Teams/Slack webhooks sent from inside corporate networks.
+reqwest = { version = "0.13", default-features = false, features = ["rustls", "json", "blocking", "system-proxy"] }
+lettre = { version = "0.11", default-features = false, features = [
+    "smtp-transport",
+    "builder",
+    "rustls",
+    "aws-lc-rs",
+    "rustls-platform-verifier",
+] }
+hmac = "0.12"
+sha2 = "0.10"
+chrono = { version = "0.4", default-features = false, features = ["std", "clock"] }
+
+[dev-dependencies]
+tempfile = "3"
+# Only to prove `send` works from `spawn_blocking` (what the app does).
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }

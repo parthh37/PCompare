@@ -1,5 +1,5 @@
 import { X } from "lucide-react";
-import { useEffect, type ReactNode } from "react";
+import { useEffect, useRef, type ReactNode } from "react";
 
 interface Props {
   title: string;
@@ -7,13 +7,25 @@ interface Props {
   children: ReactNode;
   footer?: ReactNode;
   wide?: boolean;
+  /** automation:ui — extra class on the dialog box (custom sizes). */
+  className?: string;
 }
 
+// automation:ui — open dialogs, innermost last: Escape closes only the innermost one
+// (a dialog opened from another one, e.g. "Manage channels…" in the task editor).
+const openModals: object[] = [];
+
 /** A centered dialog over a dimmed backdrop; Escape or a backdrop click closes it. */
-export function Modal({ title, onClose, children, footer, wide }: Props) {
+export function Modal({ title, onClose, children, footer, wide, className }: Props) {
+  const self = useRef({});
+  useEffect(() => {
+    const me = self.current;
+    openModals.push(me);
+    return () => void openModals.splice(openModals.indexOf(me), 1);
+  }, []);
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") {
+      if (e.key === "Escape" && openModals[openModals.length - 1] === self.current) {
         e.stopPropagation();
         onClose();
       }
@@ -24,7 +36,7 @@ export function Modal({ title, onClose, children, footer, wide }: Props) {
 
   return (
     <div className="modal-backdrop" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
-      <div className={`modal${wide ? " wide" : ""}`} role="dialog" aria-label={title}>
+      <div className={`modal${wide ? " wide" : ""}${className ? ` ${className}` : ""}`} role="dialog" aria-label={title}>
         <header className="modal-head">
           <span>{title}</span>
           <button className="tab-close" onClick={onClose} aria-label="Close">

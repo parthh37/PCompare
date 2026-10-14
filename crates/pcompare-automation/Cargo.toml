@@ -1,0 +1,24 @@
+[package]
+name = "pcompare-automation"
+description = "Automated folder sync for PCompare: saved tasks, schedules, real-time triggers and failure notifications"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+pcompare-core = { path = "../pcompare-core" }
+pcompare-sync = { path = "../pcompare-sync" }
+pcompare-index = { path = "../pcompare-index" }
+pcompare-notify = { path = "../pcompare-notify" }
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+chrono = { version = "0.4", default-features = false, features = ["std", "clock", "serde"] }
+croner = "4"
+globset = "0.4"
+notify = "8"
+
+[dev-dependencies]
+tempfile = "3"
+chrono-tz = "0.10"

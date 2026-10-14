@@ -13,6 +13,7 @@
     "windows": [
       {
         "title": "PCompare",
+        "visible": false,
         "width": 1440,
         "height": 900,
         "minWidth": 960,
@@ -39,6 +40,10 @@
       "nsis": {
         "installMode": "currentUser",
         "installerHooks": "windows/hooks.nsh"
+      },
+      "wix": {
+        "fragmentPaths": ["windows/shell-menu.wxs"],
+        "componentRefs": ["PCompareShellMenu"]
       }
     },
     "createUpdaterArtifacts": true,

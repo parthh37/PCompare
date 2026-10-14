@@ -2,6 +2,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod archive; // bc5:archives
+mod automation; // automation:shell
 mod convert; // bc5:converters
 mod db;
 mod fileops; // bc5:file-ops
@@ -21,6 +22,8 @@ mod cli; // bc5:reports-script
 mod report; // bc5:reports-script
 mod review; // araxis:text-review
 mod vcs; // araxis:vcs
+mod explorer;
+mod import;
 
 use pcompare_core::session::{SavedSession, SessionInput, SessionStore};
 use pcompare_core::text::{self, TextDiffOptions, TextDiffResult};
@@ -139,6 +142,7 @@ fn resolve_launch_paths(args: &[String]) -> cli::LaunchOptions {
     }
     let launch = resolve_launch_args(args, read_left_selection());
     let _ = std::fs::remove_file(left_selection_file());
+    pcompare_shell::menu::set_left(None);
     launch
 }
 
@@ -159,6 +163,7 @@ fn get_left_selection() -> Option<String> {
 #[tauri::command]
 fn set_left_selection(path: Option<String>) -> CmdResult<()> {
     let file = left_selection_file();
+    pcompare_shell::menu::set_left(path.as_deref());
     match path {
         Some(p) => std::fs::write(file, p).map_err(|e| e.to_string()),
         None => match std::fs::remove_file(file) {
@@ -346,14 +351,11 @@ async fn remote_list(app: AppHandle, path: String) -> CmdResult<Vec<RemoteEntry>
 }
 
 fn main() {
-    // Explorer's "Select Left Side for Compare" just records the path and
-    // exits without opening a window, like Beyond Compare's shell extension.
+    // Explorer menu verbs ("Select Left Side", multi-select "Compare with
+    // PCompare") and installer hooks run without a window.
     let args: Vec<String> = std::env::args().collect();
-    if let Some(i) = args.iter().position(|a| a == "--select-left") {
-        if let Some(path) = args.get(i + 1) {
-            let _ = std::fs::write(left_selection_file(), path);
-        }
-        return;
+    if let Some(code) = explorer::run_early(args.get(1..).unwrap_or_default()) {
+        std::process::exit(code);
     }
     // bc5:reports-script — `@script`, `/qc` and `--help` run without a window.
     if let Some(code) = cli::run_headless(args.get(1..).unwrap_or_default()) {
@@ -383,6 +385,14 @@ fn main() {
         .plugin(tauri_plugin_process::init())
         // bc5:text-ui — clipboard text as a Text Compare side.
         .plugin(tauri_plugin_clipboard_manager::init())
+        // automation:shell — desktop notifications and start at login (hidden, in the tray).
+        .plugin(tauri_plugin_notification::init())
+        .plugin(tauri_plugin_autostart::init(
+            tauri_plugin_autostart::MacosLauncher::LaunchAgent,
+            Some(vec![automation::BACKGROUND_ARG]),
+        ))
+        .on_window_event(automation::on_window_event)
+        // automation:shell end
         .setup(|app| {
             let config_dir = app.path().app_config_dir()?;
             let data_dir = app.path().app_data_dir()?;
@@ -402,6 +412,11 @@ fn main() {
             });
             app.manage(workspace::ShellState::new(&config_dir)); // bc5:app-shell
             remote::install_prompter(app.handle()); // bc5:remote-write
+            explorer::ensure_on_startup();
+            // automation:shell — after AppState: the scheduler uses its scan database.
+            // Also shows the main window (created hidden for `--background`).
+            automation::setup(app)?;
+            // automation:shell end
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -409,6 +424,11 @@ fn main() {
             launch_args,
             get_left_selection,
             set_left_selection,
+            explorer::shell_menu_status,
+            explorer::shell_menu_set,
+            import::import_discover,
+            import::import_read,
+            import::import_commit,
             compare_text_files,
             folder::compare_folders, // bc5:folder-engine (moved to folder.rs)
             folder::compare_file_contents,
@@ -568,9 +588,35 @@ fn main() {
             vcs::vcs_detect,
             vcs::vcs_revisions,
             // araxis:vcs end
+            // automation:shell — sync automation + notification channels (automation.rs)
+            automation::automation_tasks,
+            automation::automation_new_task,
+            automation::automation_validate,
+            automation::automation_save,
+            automation::automation_delete,
+            automation::automation_set_enabled,
+            automation::automation_duplicate,
+            automation::automation_run_now,
+            automation::automation_cancel,
+            automation::automation_statuses,
+            automation::automation_runs,
+            automation::automation_upcoming,
+            automation::automation_describe_trigger,
+            automation::automation_settings,
+            automation::automation_save_settings,
+            automation::automation_export,
+            automation::automation_import,
+            automation::notify_channels,
+            automation::notify_save_channel,
+            automation::notify_delete_channel,
+            automation::notify_test_channel,
+            // automation:shell end
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running PCompare");
+        // automation:shell — with an event handler, so quitting stops running syncs at a safe point.
+        .build(tauri::generate_context!())
+        .expect("error while running PCompare")
+        .run(automation::on_run_event);
+        // automation:shell end
 }
 
 #[cfg(test)]
