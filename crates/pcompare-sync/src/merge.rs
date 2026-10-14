@@ -351,7 +351,14 @@ fn merge_text_bytes(base: &[u8], left: &[u8], right: &[u8]) -> Option<TextMerged
         return None;
     }
     let [(b, _, _), (l, encoding, has_bom), (r, _, _)] = [base, left, right].map(textfile::decode);
-    let merged = pcompare_merge::merge_text(Some(&b), &l, &r, &TextDiffOptions::default()).ok()?;
+    let merged = pcompare_merge::merge_text(
+        Some(&b),
+        &l,
+        &r,
+        &TextDiffOptions::default(),
+        &pcompare_merge::MergeRules::default(),
+    )
+    .ok()?;
     let stats = &merged.merge.stats;
     let summary = TextMergeSummary {
         changes: stats.auto_merged(),
@@ -1666,9 +1673,10 @@ mod tests {
         for (rel, b, l, r) in [
             ("clean.txt", "a\nb\nc\nd\n", "A\nb\nc\nd\n", "a\nb\nc\nD\n"),
             ("clash.txt", "a\nb\n", "left\nb\n", "right\nb\n"),
-            ("crlf.txt", "a\nb\n", "A\r\nb\r\n", "a\nB\n"),
+            // Changes two lines apart: past the default conflict scan lines.
+            ("crlf.txt", "a\nb\nc\nd\n", "A\r\nb\r\nc\r\nd\r\n", "a\nb\nc\nD\n"),
             ("bin.dat", "a\0b\nc\n", "A\0b\nc\n", "a\0b\nC\n"),
-            ("deep/t.txt", "1\n2\n3\n", "one\n2\n3\n", "1\n2\nthree\n"),
+            ("deep/t.txt", "1\n2\n3\n4\n", "one\n2\n3\n4\n", "1\n2\n3\nfour\n"),
         ] {
             for (root, body) in [(&base, b), (&left, l), (&right, r)] {
                 write(root, rel, body);
@@ -1743,9 +1751,9 @@ mod tests {
         .unwrap();
         assert_eq!(report.failed, 0, "{:?}", report.results);
         assert_eq!(read(&out, "clean.txt").as_deref(), Some("A\nb\nc\nD\n"));
-        assert_eq!(read(&out, "deep/t.txt").as_deref(), Some("one\n2\nthree\n"));
+        assert_eq!(read(&out, "deep/t.txt").as_deref(), Some("one\n2\n3\nfour\n"));
         // The left file's line endings are kept.
-        assert_eq!(read(&out, "crlf.txt").as_deref(), Some("A\r\nB\r\n"));
+        assert_eq!(read(&out, "crlf.txt").as_deref(), Some("A\r\nb\r\nc\r\nD\r\n"));
         assert!(!out.join("clash.txt").exists());
 
         // In place into left: written once, then already up to date.

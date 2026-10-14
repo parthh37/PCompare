@@ -15,7 +15,7 @@ pub mod diff3;
 pub mod lines;
 
 pub use diff3::{
-    conflict_end_marker, conflict_start_marker, merge2, merge3, merge_text, merge_trailing_newline, render_output, ChunkKind, LineRange, MergeChunk, MergeResult, MergeStats, MergedText,
+    conflict_end_marker, conflict_start_marker, merge2, merge3, merge_text, merge_trailing_newline, render_output, ChunkKind, LineRange, MergeChunk, MergeResult, MergeRules, MergeStats, MergedText,
     CONFLICT_END, CONFLICT_SEPARATOR, CONFLICT_START,
 };
 pub use lines::{join_lines, split_lines};

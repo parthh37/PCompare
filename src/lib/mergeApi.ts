@@ -61,6 +61,12 @@ export interface MergeLoad {
   outputFormat: TextFormat;
 }
 
+/** Merge-only rules (pcompare-merge `MergeRules`). */
+export interface MergeRules {
+  /** Left and right changes with fewer unchanged base lines than this between them conflict. */
+  conflictScanLines: number;
+}
+
 export const mergeApi = {
   loadTextPair: (left: string, right: string) => invoke<TextPair>("load_text_pair", { left, right }),
   diffTexts: (left: string[], right: string[], options: TextDiffOptions) =>
@@ -68,8 +74,8 @@ export const mergeApi = {
   saveTextFile: (path: string, text: string, format: TextFormat) =>
     invoke<TextFileInfo>("save_text_file", { path, text, format }),
   /** An empty `base` runs a two-way merge. */
-  loadMerge: (left: string, base: string, right: string, options: TextDiffOptions) =>
-    invoke<MergeLoad>("load_merge", { left, base, right, options }),
+  loadMerge: (left: string, base: string, right: string, options: TextDiffOptions, rules?: MergeRules) =>
+    invoke<MergeLoad>("load_merge", { left, base, right, options, rules: rules ?? null }),
 };
 
 /** Lines joined back into file text (the backend normalizes line breaks on save). */

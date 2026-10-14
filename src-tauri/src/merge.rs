@@ -5,7 +5,7 @@ use crate::CmdResult;
 use pcompare_core::text::{self, TextDiffOptions, TextDiffResult};
 use pcompare_core::textfile::{self, LineEnding, TextFileInfo, TextFormat};
 use pcompare_core::CoreError;
-use pcompare_merge::MergeResult;
+use pcompare_merge::{MergeResult, MergeRules};
 use serde::Serialize;
 use std::path::Path;
 use tauri::AppHandle;
@@ -126,7 +126,8 @@ pub struct MergeLoad {
 }
 
 /// Loads the inputs of a Text Merge session and merges them: three-way
-/// against `base`, or two-way when `base` is empty.
+/// against `base`, or two-way when `base` is empty. `rules` defaults to
+/// Beyond Compare's (2 conflict scan lines).
 #[tauri::command]
 pub async fn load_merge(
     app: AppHandle,
@@ -134,7 +135,9 @@ pub async fn load_merge(
     base: String,
     right: String,
     options: TextDiffOptions,
+    rules: Option<MergeRules>,
 ) -> CmdResult<MergeLoad> {
+    let rules = rules.unwrap_or_default();
     crate::blocking(move || {
         let (lp, rp) = crate::with_remote(&app, [&left, &right], |r| {
             Ok((r.local_copy(&left, true)?, r.local_copy(&right, true)?))
@@ -156,7 +159,7 @@ pub async fn load_merge(
         // bc5:folder-merge — without a base every difference is a conflict to resolve.
         let (merge, trailing) = match &base {
             Some(base) => (
-                pcompare_merge::merge3(&base.lines, &left.lines, &right.lines, &options)?,
+                pcompare_merge::merge3(&base.lines, &left.lines, &right.lines, &options, &rules)?,
                 pcompare_merge::merge_trailing_newline(
                     base.trailing_newline,
                     left.trailing_newline,
