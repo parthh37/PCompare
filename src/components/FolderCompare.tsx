@@ -33,6 +33,7 @@ import {
   type FolderCompareOptions,
   type FolderCompareResult,
   type FolderEntry,
+  type FolderLevel,
   type ScanProgress,
   type Side,
   type TextDiffOptions,
@@ -53,6 +54,7 @@ import {
   applyVerdicts,
   DISPLAY_FILTERS,
   effectiveStatus,
+  LiveTree,
   nameMatcher,
   pairedFiles,
   selectMatching,
@@ -185,6 +187,7 @@ const FILTER_ICON: Partial<Record<DisplayFilter, ToolIconName>> = {
 };
 
 function rowTitle(e: FolderEntry): string {
+  if (e.pending) return "Not compared yet";
   const parts = e.ignored ? [`Ignored (marked as same; really ${STATUS_LABEL[e.status].toLowerCase()})`] : [STATUS_LABEL[e.status]];
   if (e.leftRelPath) parts.push(`aligned with ${e.leftRelPath} on the left`);
   if (attributesDiffer(e)) parts.push(`attributes ${formatAttributes(e.left)} ↔ ${formatAttributes(e.right)}`);
@@ -255,11 +258,15 @@ export function FolderCompare({
   const optionsKey = JSON.stringify(engineOptions);
   const requestSeq = useRef(0);
   const shownPaths = useRef("");
+  /** Rows streamed for the folders on screen; refreshes refine it in place. */
+  const live = useRef<LiveTree | null>(null);
 
   /**
-   * Compares live: a quick size/timestamp pass fills the list straight away,
-   * then the content pass (CRC, binary, rules) refines it in place. `quiet`
-   * refreshes (auto-refresh) skip the quick pass so settled rows don't flicker.
+   * Compares live: rows stream in folder by folder as they're listed, a quick
+   * size/timestamp pass settles them, then the content pass (CRC, binary,
+   * rules) refines them in place. `quiet` refreshes (auto-refresh) skip the
+   * quick pass; their rows replace settled ones only when final, so nothing
+   * flickers.
    */
   const expandArchives = !!cfg.expandArchives; // bc5:archives
   const run = useCallback(
@@ -269,20 +276,42 @@ export function FolderCompare({
       const seq = ++requestSeq.current;
       const stale = () => seq !== requestSeq.current; // a newer compare superseded this one
       const options: FolderCompareOptions = JSON.parse(optionsKey);
+      // New folders: don't leave the previous pair's rows up while scanning.
+      const pathsKey = `${left}\n${right}`;
+      if (shownPaths.current !== pathsKey || !live.current) {
+        shownPaths.current = pathsKey;
+        live.current = new LiveTree();
+        setResult(null);
+      }
+      const tree = live.current;
       let shown = false;
-      const show = (res: FolderCompareResult, quick = false) => {
+      let painted = false;
+      let streamed = 0;
+      let timer: number | undefined;
+      const paint = () => {
+        timer = undefined;
+        if (stale()) return;
+        painted = true;
+        const entries = tree.tree();
+        setResult({ leftRoot: left, rightRoot: right, entries, stats: tally(entries), elapsedMs: 0 });
+      };
+      const onLevels = (levels: FolderLevel[]) => {
+        if (stale()) return;
+        tree.apply(levels);
+        for (const l of levels) streamed += l.entries.length;
+        // Each repaint walks the whole tree, so big trees repaint less often.
+        timer ??= window.setTimeout(paint, Math.min(1000, 150 + streamed / 1000));
+      };
+      const finish = (res: FolderCompareResult, quick = false) => {
+        window.clearTimeout(timer);
+        timer = undefined;
+        tree.endPass();
         shown = true;
         setQuickOnly(quick);
-        setResult(res);
+        setResult({ ...res, entries: tree.tree() });
         setVerdicts(new Map());
         setError(null);
       };
-      // New folders: don't leave the previous pair's rows up while scanning.
-      const pathsKey = `${left}\n${right}`;
-      if (shownPaths.current !== pathsKey) {
-        shownPaths.current = pathsKey;
-        setResult(null);
-      }
       // A superseded compare would only burn CPU: stop it. Each pass gets its
       // own run key so Esc / Cancel stops whichever one is in flight.
       const pass = (opts: FolderCompareOptions) => {
@@ -290,7 +319,8 @@ export function FolderCompare({
         const key = `folder-${crypto.randomUUID()}`;
         runKey.current = key;
         if (!quiet) setProgress(null);
-        return api.compareFolders(left, right, opts, key, (p) => !stale() && setProgress(p), expandArchives);
+        tree.beginPass();
+        return api.compareFolders(left, right, opts, key, (p) => !stale() && setProgress(p), expandArchives, onLevels);
       };
       const twoPass = !quiet && options.content !== "off";
       try {
@@ -298,19 +328,25 @@ export function FolderCompare({
           setPhase("scanning");
           const quick = await pass({ ...options, content: "off" });
           if (stale()) return;
-          show(quick, true);
+          finish(quick, true);
         }
         if (!quiet) setPhase(twoPass ? "contents" : "scanning");
         const res = await pass(options);
         if (stale()) return;
-        show(res);
+        finish(res);
       } catch (e) {
+        window.clearTimeout(timer);
         if (stale()) return;
         const msg = errorMessage(e);
-        // A cancelled pass keeps showing whatever was already on screen.
-        const kept = shown || hasResult.current;
-        setError(msg === CANCELLED ? `Comparison cancelled${kept ? " — showing the previous results." : "."}` : msg);
-        if (!quiet && msg !== CANCELLED && !shown) setResult(null);
+        if (msg === CANCELLED) {
+          // Whatever streamed in before the stop stays up.
+          if (timer !== undefined) paint();
+          const kept = shown || painted || hasResult.current;
+          setError(`Comparison cancelled${kept ? " — showing what was compared so far." : "."}`);
+        } else {
+          setError(msg);
+          if (!quiet && !shown) setResult(null);
+        }
       } finally {
         if (!stale()) {
           setPhase(null);
@@ -637,7 +673,7 @@ export function FolderCompare({
     const StatusIcon = e.ignored ? EyeOff : STATUS_ICON[e.status];
     return (
       <div
-        className={`frow s-${effectiveStatus(e)}${e.ignored ? " ignored" : ""}${fops.rowClass(e.relPath)}${review.rowClass(e.relPath) /* araxis:text-review */}`}
+        className={`frow s-${e.pending ? "pending" : effectiveStatus(e)}${e.ignored ? " ignored" : ""}${fops.rowClass(e.relPath)}${review.rowClass(e.relPath) /* araxis:text-review */}`}
         onClick={(ev) => fops.onRowClick(ev, e)}
         onDoubleClick={() => open(e)}
         onContextMenu={(ev) => {
@@ -651,7 +687,13 @@ export function FolderCompare({
         title={review.title(e.relPath, rowTitle(e)) /* araxis:text-review */}
       >
         {renderSide(e, "left", depth)}
-        <div className={`fcell status${checked ? " checked" : ""}`}>{!oneSided && <StatusIcon size={13} />}</div>
+        <div className={`fcell status${checked ? " checked" : ""}`}>
+          {oneSided ? null : e.pending ? (
+            phase ? <span className="spinner" /> : <span className="muted">…</span>
+          ) : (
+            <StatusIcon size={13} />
+          )}
+        </div>
         {renderSide(e, "right", depth)}
       </div>
     );

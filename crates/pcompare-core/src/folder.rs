@@ -295,6 +295,23 @@ pub struct ScanProgress {
     pub current: String,
 }
 
+/// One folder's rows, streamed while a comparison runs so a view can fill in
+/// before the whole tree is done. A folder present on both sides is reported
+/// twice: `complete: false` straight after listing (pairs found, statuses of
+/// two-sided rows not known yet), then `complete: true` with its final rows
+/// once everything below it is compared. A one-sided folder's rows are final
+/// when listed, so it reports once, complete, before its subfolders. Entries
+/// carry no `children`: those arrive as their own levels, keyed by the
+/// folder's `rel_path`.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FolderLevel {
+    /// The folder's relative path (right-hand names); `""` is the root.
+    pub rel: String,
+    pub entries: Vec<FolderEntry>,
+    pub complete: bool,
+}
+
 /// The error message of a comparison stopped through [`ScanControl::cancel`].
 pub const CANCELLED: &str = "Folder comparison cancelled";
 
@@ -308,6 +325,9 @@ pub struct ScanControl<'a> {
     /// Called from worker threads after every listed folder; throttle in
     /// the callback if forwarding is expensive.
     pub progress: Option<&'a (dyn Fn(&ScanProgress) + Sync)>,
+    /// Called from worker threads with every folder's rows (see
+    /// [`FolderLevel`]); batch in the callback if forwarding is expensive.
+    pub levels: Option<&'a (dyn Fn(FolderLevel) + Sync)>,
 }
 
 struct Ctx<'a> {
@@ -322,6 +342,8 @@ struct Ctx<'a> {
     left: &'a dyn Vfs,
     right: &'a dyn Vfs,
     control: ScanControl<'a>,
+    /// Canonical paths of the compared folders, when links are followed.
+    roots: [Option<String>; 2],
     reused: AtomicUsize,
     scanned: AtomicUsize,
     folders: AtomicUsize,
@@ -341,6 +363,39 @@ impl Ctx<'_> {
             Some(flag) if flag.load(Ordering::Relaxed) => Err(CoreError::Other(CANCELLED.into())),
             _ => Ok(()),
         }
+    }
+
+    /// Reports a folder's rows to [`ScanControl::levels`], without children.
+    fn level<'e>(&self, rel: &str, entries: impl IntoIterator<Item = &'e FolderEntry>, complete: bool) {
+        if let Some(report) = self.control.levels {
+            let entries = entries
+                .into_iter()
+                .map(|e| FolderEntry {
+                    children: Vec::new(),
+                    ..e.clone()
+                })
+                .collect();
+            report(FolderLevel {
+                rel: rel.to_owned(),
+                entries,
+                complete,
+            });
+        }
+    }
+
+    /// For a linked folder that resolves inside its own side's compared
+    /// folder, the target relative to that folder. Its contents already
+    /// show at the real location, so walking it again would only repeat
+    /// them (pnpm `node_modules` and app bundles link like this thousands of
+    /// times, multiplying a scan many times over).
+    fn link_inside_root(&self, side: Side, item: &Listed, canonical: &Option<String>) -> Option<String> {
+        item.meta.link_target.as_ref()?;
+        let root = self.roots[Chain::index(side)].as_deref()?;
+        let rest = canonical.as_deref()?.strip_prefix(root)?;
+        let rest = rest
+            .strip_prefix(['/', '\\'])
+            .or_else(|| root.ends_with(['/', '\\']).then_some(rest))?;
+        Some(rest.replace('\\', "/"))
     }
 
     fn listed(&self, rel: &str, count: usize) {
@@ -939,6 +994,16 @@ impl Chain<'_> {
 
 const LOOP_MESSAGE: &str = "Not expanded: a link here points back to a folder that contains it";
 
+fn inside_message(target: &str) -> String {
+    format!("Not expanded: a link to {target}, which is listed at its own place in this comparison")
+}
+
+/// A one-sided subfolder still to walk: its path and canonical path.
+struct Descend {
+    path: String,
+    canonical: Option<String>,
+}
+
 /// Lists an orphaned folder so its contents are visible in the tree. `rel`
 /// is the tree's relative path, `side_rel` the side's own.
 fn orphan_tree(
@@ -952,57 +1017,76 @@ fn orphan_tree(
     let fs = ctx.fs(side);
     let listed = match list_dir(fs, side, dir, side_rel, ctx) {
         Ok(l) => l,
-        Err(e) => return vec![error_entry("<unreadable>".into(), rel.into(), false, e)],
+        Err(e) => {
+            let entries = vec![error_entry("<unreadable>".into(), rel.into(), false, e)];
+            ctx.level(rel, &entries, true);
+            return entries;
+        }
     };
     let passes = |m: &EntryMeta| match side {
         Side::Left => pair_passes(Some(m), None, &ctx.opts.filters),
         Side::Right => pair_passes(None, Some(m), &ctx.opts.filters),
     };
-    listed
+    let orphan = |item: &Listed| {
+        let rel_path = join_rel(rel, &item.name);
+        let own_rel = join_rel(side_rel, &item.name);
+        let (left, right, status) = match side {
+            Side::Left => (Some(item.meta.clone()), None, EntryStatus::LeftOnly),
+            Side::Right => (None, Some(item.meta.clone()), EntryStatus::RightOnly),
+        };
+        FolderEntry {
+            is_dir: item.meta.is_dir,
+            name: item.name.clone(),
+            left_rel_path: (side == Side::Left && own_rel != rel_path).then_some(own_rel),
+            rel_path,
+            status,
+            newer: None,
+            left,
+            right,
+            children: Vec::new(),
+            error: None,
+            content_checked: None,
+            crc: None,
+        }
+    };
+    // One-sided rows are final as soon as they're listed, so the folder
+    // reports complete before its subfolders are walked.
+    let rows: Vec<(FolderEntry, Option<Descend>)> = listed
         .into_par_iter()
         .filter(|(_, item)| {
             item.meta.is_dir
                 || (passes(&item.meta) && content_passes(ctx, side, &fs.join(dir, &item.name)))
         })
         .map(|(_, item)| {
-            let rel_path = join_rel(rel, &item.name);
-            let own_rel = join_rel(side_rel, &item.name);
-            let mut error = None;
-            let children = if item.meta.is_dir && ctx.opts.recursive {
+            let mut entry = orphan(&item);
+            let mut descend = None;
+            if item.meta.is_dir && ctx.opts.recursive {
                 let path = fs.join(dir, &item.name);
                 let canonical = chain.child(ctx, side, &path, &item);
                 if chain.loops(side, &item, &canonical) {
-                    error = Some(LOOP_MESSAGE.to_owned());
-                    Vec::new()
+                    entry.error = Some(LOOP_MESSAGE.to_owned());
+                } else if let Some(target) = ctx.link_inside_root(side, &item, &canonical) {
+                    entry.error = Some(inside_message(&target));
                 } else {
-                    let mut sub = Chain {
-                        canonical: [None, None],
-                        parent: Some(chain),
-                    };
-                    sub.canonical[Chain::index(side)] = canonical;
-                    orphan_tree(&path, &rel_path, &own_rel, side, &sub, ctx)
+                    descend = Some(Descend { path, canonical });
                 }
-            } else {
-                Vec::new()
-            };
-            let (left, right, status) = match side {
-                Side::Left => (Some(item.meta.clone()), None, EntryStatus::LeftOnly),
-                Side::Right => (None, Some(item.meta.clone()), EntryStatus::RightOnly),
-            };
-            FolderEntry {
-                is_dir: item.meta.is_dir,
-                name: item.name,
-                left_rel_path: (side == Side::Left && own_rel != rel_path).then_some(own_rel),
-                rel_path,
-                status,
-                newer: None,
-                left,
-                right,
-                children,
-                error,
-                content_checked: None,
-                crc: None,
             }
+            (entry, descend)
+        })
+        .collect();
+    ctx.level(rel, rows.iter().map(|(e, _)| e), true);
+    rows.into_par_iter()
+        .map(|(mut entry, descend)| {
+            if let Some(Descend { path, canonical }) = descend {
+                let mut sub = Chain {
+                    canonical: [None, None],
+                    parent: Some(chain),
+                };
+                sub.canonical[Chain::index(side)] = canonical;
+                let own_rel = entry.left_rel_path.clone().unwrap_or_else(|| entry.rel_path.clone());
+                entry.children = orphan_tree(&path, &entry.rel_path, &own_rel, side, &sub, ctx);
+            }
+            entry
         })
         .collect()
 }
@@ -1035,6 +1119,13 @@ fn compare_dirs(at: &DirPair, chain: &Chain, ctx: &Ctx) -> Result<Vec<FolderEntr
             )
     });
 
+    if ctx.control.levels.is_some() {
+        let shallow: Vec<_> = pairs
+            .iter()
+            .map(|(l, r)| pair_entry(at, l.as_ref(), r.as_ref()))
+            .collect();
+        ctx.level(at.rel, &shallow, false);
+    }
     let filter_contents = ctx.include_containing.is_some() || ctx.exclude_containing.is_some();
     let mut entries: Vec<FolderEntry> = pairs
         .into_par_iter()
@@ -1058,7 +1149,38 @@ fn compare_dirs(at: &DirPair, chain: &Chain, ctx: &Ctx) -> Result<Vec<FolderEntr
             .cmp(&a.is_dir)
             .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
     });
+    ctx.level(at.rel, &entries, true);
     Ok(entries)
+}
+
+/// A pair's row before anything below it is compared: one-sided rows and
+/// type mismatches are final, two-sided ones still read `Same`.
+fn pair_entry(at: &DirPair, l: Option<&Listed>, r: Option<&Listed>) -> FolderEntry {
+    let name = r.or(l).map(|x| x.name.clone()).unwrap_or_default();
+    let rel_path = join_rel(at.rel, &name);
+    let (status, is_dir) = match (l, r) {
+        (Some(l), None) => (EntryStatus::LeftOnly, l.meta.is_dir),
+        (None, Some(r)) => (EntryStatus::RightOnly, r.meta.is_dir),
+        (Some(l), Some(r)) if l.meta.is_dir != r.meta.is_dir => (EntryStatus::TypeMismatch, false),
+        (Some(l), _) => (EntryStatus::Same, l.meta.is_dir),
+        (None, None) => unreachable!("pairs always have at least one side"),
+    };
+    FolderEntry {
+        left_rel_path: l
+            .map(|x| join_rel(at.lrel, &x.name))
+            .filter(|p| *p != rel_path),
+        name,
+        rel_path,
+        is_dir,
+        status,
+        newer: None,
+        left: l.map(|x| x.meta.clone()),
+        right: r.map(|x| x.meta.clone()),
+        children: Vec::new(),
+        error: None,
+        content_checked: None,
+        crc: None,
+    }
 }
 
 fn compare_pair(
@@ -1068,38 +1190,22 @@ fn compare_pair(
     ctx: &Ctx,
 ) -> FolderEntry {
     let (l, r) = pair;
-    let name = r
+    let mut entry = pair_entry(at, l.as_ref(), r.as_ref());
+    let rel_path = entry.rel_path.clone();
+    let left_rel = l
         .as_ref()
-        .or(l.as_ref())
-        .map(|x| x.name.clone())
+        .map(|x| join_rel(at.lrel, &x.name))
         .unwrap_or_default();
-    let rel_path = join_rel(at.rel, &name);
-    let left_rel = l.as_ref().map(|x| join_rel(at.lrel, &x.name));
-    let mut entry = FolderEntry {
-        name: name.clone(),
-        rel_path: rel_path.clone(),
-        is_dir: false,
-        status: EntryStatus::Same,
-        newer: None,
-        left: l.as_ref().map(|x| x.meta.clone()),
-        right: r.as_ref().map(|x| x.meta.clone()),
-        children: Vec::new(),
-        error: None,
-        content_checked: None,
-        crc: None,
-        left_rel_path: left_rel.clone().filter(|p| *p != rel_path),
-    };
-    let left_rel = left_rel.unwrap_or_default();
 
     match (&l, &r) {
         (Some(l), None) => {
-            entry.status = EntryStatus::LeftOnly;
-            entry.is_dir = l.meta.is_dir;
             if l.meta.is_dir && ctx.opts.recursive {
                 let path = ctx.left.join(at.ldir, &l.name);
                 let canonical = chain.child(ctx, Side::Left, &path, l);
                 if chain.loops(Side::Left, l, &canonical) {
                     entry.error = Some(LOOP_MESSAGE.into());
+                } else if let Some(target) = ctx.link_inside_root(Side::Left, l, &canonical) {
+                    entry.error = Some(inside_message(&target));
                 } else {
                     let sub = Chain {
                         canonical: [canonical, None],
@@ -1111,13 +1217,13 @@ fn compare_pair(
             }
         }
         (None, Some(r)) => {
-            entry.status = EntryStatus::RightOnly;
-            entry.is_dir = r.meta.is_dir;
             if r.meta.is_dir && ctx.opts.recursive {
                 let path = ctx.right.join(at.rdir, &r.name);
                 let canonical = chain.child(ctx, Side::Right, &path, r);
                 if chain.loops(Side::Right, r, &canonical) {
                     entry.error = Some(LOOP_MESSAGE.into());
+                } else if let Some(target) = ctx.link_inside_root(Side::Right, r, &canonical) {
+                    entry.error = Some(inside_message(&target));
                 } else {
                     let sub = Chain {
                         canonical: [None, canonical],
@@ -1128,11 +1234,8 @@ fn compare_pair(
                 }
             }
         }
-        (Some(l), Some(r)) if l.meta.is_dir != r.meta.is_dir => {
-            entry.status = EntryStatus::TypeMismatch;
-        }
+        (Some(l), Some(r)) if l.meta.is_dir != r.meta.is_dir => {}
         (Some(l), Some(r)) if l.meta.is_dir => {
-            entry.is_dir = true;
             if ctx.opts.recursive {
                 let (ld, rd) = (
                     ctx.left.join(at.ldir, &l.name),
@@ -1152,6 +1255,20 @@ fn compare_pair(
                         EntryStatus::Error
                     };
                     entry.error = Some(LOOP_MESSAGE.into());
+                    return entry;
+                }
+                // Both sides link inside their own trees: the targets are
+                // compared where they really are, so only where they point counts.
+                if let (Some(lt), Some(rt)) = (
+                    ctx.link_inside_root(Side::Left, l, &lc),
+                    ctx.link_inside_root(Side::Right, r, &rc),
+                ) {
+                    entry.status = if lt == rt {
+                        EntryStatus::Same
+                    } else {
+                        EntryStatus::Different
+                    };
+                    entry.error = Some(inside_message(&rt));
                     return entry;
                 }
                 let sub = Chain {
@@ -1316,17 +1433,18 @@ pub fn compare_folders_controlled(
         left: left_fs,
         right: right_fs,
         control,
+        roots: if opts.follow_links {
+            [left_fs.canonical(left), right_fs.canonical(right)]
+        } else {
+            [None, None]
+        },
         reused: AtomicUsize::new(0),
         scanned: AtomicUsize::new(0),
         folders: AtomicUsize::new(0),
         compared: AtomicUsize::new(0),
     };
     let root = Chain {
-        canonical: if opts.follow_links {
-            [left_fs.canonical(left), right_fs.canonical(right)]
-        } else {
-            [None, None]
-        },
+        canonical: ctx.roots.clone(),
         parent: None,
     };
     let at = DirPair {
@@ -1864,8 +1982,14 @@ mod feature_tests {
         symlink("target-2.txt", p.r.join("file-link")).unwrap();
 
         let res = run(&p, &opts());
-        // The linked folder is descended into once; the loop back up is cut.
-        assert_eq!(status(&res, "alias/a.txt"), EntryStatus::Same);
+        // A link to a folder already in the tree isn't walked twice; both
+        // sides pointing at the same place makes it the same.
+        let alias = find(&res.entries, "alias").unwrap();
+        assert!(alias.is_dir && alias.children.is_empty());
+        assert_eq!(alias.status, EntryStatus::Same);
+        assert!(alias.error.as_deref().is_some_and(|e| e.contains("real")));
+        assert_eq!(status(&res, "real/a.txt"), EntryStatus::Same);
+        // The loop back up is cut.
         let up = find(&res.entries, "real/up").unwrap();
         assert!(up.is_dir && up.children.is_empty());
         assert_eq!(up.status, EntryStatus::Same);
@@ -1909,6 +2033,79 @@ mod feature_tests {
         fs::create_dir(p.r.join("d/back")).unwrap();
         let res = run(&p, &opts());
         assert_eq!(status(&res, "d/back"), EntryStatus::Error);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn links_inside_the_tree_expand_only_against_a_real_folder() {
+        use std::os::unix::fs::symlink;
+        let p = pair();
+        for root in [&p.l, &p.r] {
+            write(root, "real/a.txt", b"a");
+            write(root, "other/b.txt", b"b");
+        }
+        // Left links to a sibling, right has a real folder of that name.
+        symlink("real", p.l.join("mixed")).unwrap();
+        write(&p.r, "mixed/a.txt", b"a");
+        // Both link, to different places.
+        symlink("real", p.l.join("moved")).unwrap();
+        symlink("other", p.r.join("moved")).unwrap();
+        // An orphan link is listed, not walked.
+        symlink("other", p.l.join("lonely")).unwrap();
+
+        let res = run(&p, &opts());
+        assert_eq!(status(&res, "mixed/a.txt"), EntryStatus::Same);
+        assert_eq!(status(&res, "moved"), EntryStatus::Different);
+        let lonely = find(&res.entries, "lonely").unwrap();
+        assert!(lonely.children.is_empty() && lonely.error.is_some());
+        assert_eq!(lonely.status, EntryStatus::LeftOnly);
+    }
+
+    #[test]
+    fn levels_stream_every_folder_listed_then_complete() {
+        let p = pair();
+        write(&p.l, "sub/same.txt", b"x");
+        write(&p.r, "sub/same.txt", b"x");
+        write(&p.l, "sub/diff.txt", b"x");
+        write(&p.r, "sub/diff.txt", b"yy");
+        write(&p.l, "gone/deep/f.txt", b"x");
+        write(&p.r, "new.txt", b"x");
+        let (ls, rs) = (p.l.to_string_lossy(), p.r.to_string_lossy());
+        let seen = std::sync::Mutex::new(Vec::new());
+        let report = |l: FolderLevel| seen.lock().unwrap().push(l);
+        let control = ScanControl {
+            levels: Some(&report),
+            ..Default::default()
+        };
+        let res =
+            compare_folders_controlled(&LocalFs, &ls, &LocalFs, &rs, &opts(), control).unwrap();
+        let seen = seen.into_inner().unwrap();
+        // Two-sided folders: listed, then completed.
+        for rel in ["", "sub"] {
+            let at = |complete| {
+                seen.iter()
+                    .position(|l| l.rel == rel && l.complete == complete)
+                    .unwrap_or_else(|| panic!("{rel:?} complete={complete} missing"))
+            };
+            assert!(at(false) < at(true), "{rel:?} completed before it was listed");
+        }
+        // One-sided folders: complete straight away, before what's inside.
+        assert_eq!(seen.len(), 6);
+        assert!(seen.iter().filter(|l| l.rel.starts_with("gone")).all(|l| l.complete));
+        // Levels carry no children; a two-sided parent completes after its
+        // folders, a one-sided one before them.
+        assert!(seen.iter().all(|l| l.entries.iter().all(|e| e.children.is_empty())));
+        let done = |rel: &str| seen.iter().position(|l| l.rel == rel && l.complete).unwrap();
+        assert!(done("sub") < done("") && done("gone") < done("gone/deep"));
+        // The completed levels add up to the returned tree.
+        let sub = seen.iter().find(|l| l.rel == "sub" && l.complete).unwrap();
+        let statuses: Vec<_> = sub.entries.iter().map(|e| (e.name.as_str(), e.status)).collect();
+        assert_eq!(
+            statuses,
+            [("diff.txt", EntryStatus::Different), ("same.txt", EntryStatus::Same)]
+        );
+        assert_eq!(res.stats.left_only, 1);
+        assert_eq!(res.stats.right_only, 1);
     }
 
     #[test]
