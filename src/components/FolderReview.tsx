@@ -2,10 +2,11 @@
 // view only places what it returns: toolbar buttons (Comments, Statistics,
 // Archive), the Bookmarks & comments panel, the dialogs, row marks and
 // context-menu items. Rows are bookmarked by relative path.
-import { ChartColumn, MessageSquare, MessageSquarePlus, Package } from "lucide-react";
+import { ChartColumn, MessageSquare, Package } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from "react";
 import type { EntryStatus, FolderCompareResult, FolderEntry, FolderStats, Side } from "../lib/api";
 import { basename } from "../lib/format";
+import type { MenuItems } from "../lib/nativeMenu";
 import {
   archiveTitle,
   ensureFolderBookmark,
@@ -212,15 +213,12 @@ export function useFolderReview(a: Args) {
       return c && side === (e.left ? "left" : "right") ? <CommentMark comment={c} /> : null;
     },
     /** Context-menu entries for a row. */
-    menuItems: (e: FolderEntry, close: () => void) => (
-      <>
-        <button className="ctx-icon" onClick={() => (close(), comment(e.relPath))}>
-          <MessageSquarePlus size={16} /> {marks.get(e.relPath)?.comment ? "Edit comment…" : "Comment…"}
-        </button>
-        <button className="ctx-icon" onClick={() => (close(), a.onBookmarks(toggleFolderBookmark(a.bookmarks, e.relPath)))}>
-          <MessageSquare size={16} /> {marks.has(e.relPath) ? "Remove bookmark" : "Bookmark"}
-        </button>
-      </>
-    ),
+    menuItems: (e: FolderEntry): MenuItems => [
+      { label: marks.get(e.relPath)?.comment ? "Edit comment…" : "Comment…", onClick: () => comment(e.relPath) },
+      {
+        label: marks.has(e.relPath) ? "Remove bookmark" : "Bookmark",
+        onClick: () => a.onBookmarks(toggleFolderBookmark(a.bookmarks, e.relPath)),
+      },
+    ],
   };
 }

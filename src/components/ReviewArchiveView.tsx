@@ -40,6 +40,8 @@ import {
 } from "../lib/reviewApi";
 import type { Bookmark } from "../lib/textEdit";
 import { CommentMark, CommentsPanel } from "./CommentsPanel";
+import { SEPARATOR, type MenuItems } from "../lib/nativeMenu";
+import { useContextMenu } from "./ContextMenu";
 import { FileIcon } from "./icons";
 import { StatsDialog } from "./StatsDialog";
 import { TextCompare, type TextSettings } from "./TextCompare";
@@ -291,7 +293,6 @@ function FolderReviewPane({
   );
   const [expanded, setExpanded] = useState<Set<string>>(() => allDirs(entries));
   const [selected, setSelected] = useState<string | null>(null);
-  const [menu, setMenu] = useState<{ x: number; y: number; entry: FolderEntry } | null>(null);
   const [panel, setPanel] = useState(marks.length > 0);
   const [focusKey, setFocusKey] = useState<string | null>(null);
   const [stats, setStats] = useState(false);
@@ -324,16 +325,15 @@ function FolderReviewPane({
     return out;
   }, [entries, visible, expanded]);
 
-  useEffect(() => {
-    if (!menu) return;
-    const close = () => setMenu(null);
-    window.addEventListener("click", close);
-    window.addEventListener("blur", close);
-    return () => {
-      window.removeEventListener("click", close);
-      window.removeEventListener("blur", close);
-    };
-  }, [menu]);
+  const menu = useContextMenu((e: FolderEntry): MenuItems => [
+    embedded.has(e.relPath) && { label: "Compare stored contents", onClick: () => void openFile(e) },
+    SEPARATOR,
+    {
+      label: markMap.has(e.relPath) ? "Remove bookmark" : "Bookmark",
+      onClick: () => onMarks(toggleFolderBookmark(marks, e.relPath)),
+    },
+    { label: markMap.get(e.relPath)?.comment ? "Edit comment…" : "Comment…", onClick: () => comment(e.relPath) },
+  ]);
 
   const toggle = (rel: string) =>
     setExpanded((prev) => {
@@ -462,7 +462,7 @@ function FolderReviewPane({
         onContextMenu={(ev) => {
           ev.preventDefault();
           setSelected(e.relPath);
-          setMenu({ x: ev.clientX, y: ev.clientY, entry: e });
+          menu.open(ev, e);
         }}
         title={[STATUS_LABEL[e.status], mark?.comment].filter(Boolean).join(" · ")}
       >
@@ -549,22 +549,7 @@ function FolderReviewPane({
           {review.embedded.length} file{review.embedded.length === 1 ? "" : "s"} with contents · double-click one to compare
         </span>
       </div>
-      {menu && (
-        <div className="ctx-menu" style={{ left: menu.x, top: menu.y }} onClick={(ev) => ev.stopPropagation()}>
-          {embedded.has(menu.entry.relPath) && (
-            <>
-              <button onClick={() => (setMenu(null), openFile(menu.entry))}>Compare stored contents</button>
-              <hr />
-            </>
-          )}
-          <button onClick={() => (setMenu(null), onMarks(toggleFolderBookmark(marks, menu.entry.relPath)))}>
-            {markMap.has(menu.entry.relPath) ? "Remove bookmark" : "Bookmark"}
-          </button>
-          <button onClick={() => (setMenu(null), comment(menu.entry.relPath))}>
-            {markMap.get(menu.entry.relPath)?.comment ? "Edit comment…" : "Comment…"}
-          </button>
-        </div>
-      )}
+      {menu.element}
       {stats && (
         <StatsDialog
           source={{ kind: "folder", entries, leftRoot: review.leftRoot, rightRoot: review.rightRoot }}

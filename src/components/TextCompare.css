@@ -246,12 +246,6 @@
   justify-content: center;
 }
 
-.tc-menu .tc-menu-key {
-  float: right;
-  margin-left: 24px;
-  color: var(--muted);
-  font-size: 11px;
-}
 .statusbar .tc-notice {
   color: var(--ok);
 }
