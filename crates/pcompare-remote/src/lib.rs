@@ -7,6 +7,7 @@
 //! text and hex engines.
 
 mod containers; // bc5:archives
+mod dropbox;
 mod github_fs;
 mod graph_fs;
 mod opendal_fs;
@@ -324,6 +325,24 @@ impl RemoteManager {
         let fs = self.connect(&resolved, false)?;
         let n = fs.read_dir("")?.len();
         Ok(format!("Connected — {n} item{} in the root folder.", if n == 1 { "" } else { "s" }))
+    }
+
+    /// Lists the folders in `dir` with unsaved form values, ignoring the
+    /// profile's Root folder, so the user can pick one. `dir` is relative
+    /// to the account's top level.
+    pub fn browse(&self, input: &ProfileInput, dir: &str) -> Result<Vec<VfsEntry>> {
+        let mut resolved = self.profiles.preview(input)?;
+        resolved.profile.settings.remove("root");
+        let fs = self.connect(&resolved, false)?;
+        let dir = dir.trim_matches('/');
+        let listed = fs.read_dir(dir)?;
+        // Some services (Dropbox) list a missing folder as empty.
+        if listed.is_empty() && fs.stat(dir).map_err(|e| CoreError::remote(dir, e))?.is_none_or(|m| !m.is_dir) {
+            return Err(CoreError::Other(format!("folder `/{dir}` not found")));
+        }
+        let mut folders: Vec<VfsEntry> = listed.into_iter().filter(|e| e.meta.is_dir).collect();
+        folders.sort_by_key(|e| e.name.to_lowercase());
+        Ok(folders)
     }
 
     /// Interactive OAuth sign-in for a saved profile; stores the refresh

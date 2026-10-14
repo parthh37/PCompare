@@ -19,6 +19,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
+import { RootFolderPicker } from "./RootFolderPicker";
 import {
   api,
   errorMessage,
@@ -115,6 +116,7 @@ export function Profiles() {
   const [busy, setBusy] = useState<string | null>(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [menu, setMenu] = useState<{ x: number; y: number; profile: Profile } | null>(null);
+  const [pickingRoot, setPickingRoot] = useState(false);
   /** A sign-in is waiting for the browser (so leaving the page cancels it). */
   const signingIn = useRef(false);
 
@@ -326,6 +328,24 @@ export function Profiles() {
         );
         break;
       default:
+        if (f.key === "root") {
+          control = (
+            <div className="input-row">
+              <input value={value} placeholder={f.placeholder} onChange={(e) => setSetting(f.key, e.target.value)} spellCheck={false} />
+              <button
+                title={canConnect ? "Choose from the folders on the server" : "Sign in or fill in the required fields first"}
+                disabled={!!busy || !canConnect}
+                onClick={(e) => {
+                  e.preventDefault(); // inside a <label>: don't refocus the input
+                  setPickingRoot(true);
+                }}
+              >
+                <FolderOpen size={14} /> Browse…
+              </button>
+            </div>
+          );
+          break;
+        }
         control = (
           <input
             type={f.kind === "number" ? "number" : "text"}
@@ -353,6 +373,8 @@ export function Profiles() {
   const pastedToken =
     !!draft && ((draft.secrets[ACCESS_TOKEN] ?? "") !== "" || (draft.stored.includes(ACCESS_TOKEN) && draft.secrets[ACCESS_TOKEN] !== ""));
   const authorized = signedIn || pastedToken;
+  /** Enough is filled in to connect (Test connection, Browse). */
+  const canConnect = !!spec && missing.length === 0 && (!spec.oauth || authorized);
   const builtinApp = !!spec?.oauth?.hasBuiltinClient;
   const ownApp = !!draft?.settings.client_id?.trim();
   const basicFields = spec?.fields.filter((f) => !f.advanced) ?? [];
@@ -496,7 +518,7 @@ export function Profiles() {
               <button className="primary" onClick={save} disabled={!!busy || missing.length > 0 || !dirty}>
                 {busy === "save" ? "Saving…" : "Save"}
               </button>
-              <button onClick={test} disabled={!!busy || missing.length > 0 || (!!spec.oauth && !authorized)}>
+              <button onClick={test} disabled={!!busy || !canConnect}>
                 {busy === "test" ? "Testing…" : "Test connection"}
               </button>
               {dirty && draft.id && (
@@ -519,6 +541,18 @@ export function Profiles() {
           </>
         )}
       </section>
+
+      {pickingRoot && draft && (
+        <RootFolderPicker
+          input={toInput(draft)}
+          initial={draft.settings.root ?? ""}
+          onPick={(root) => {
+            setPickingRoot(false);
+            setSetting("root", root);
+          }}
+          onClose={() => setPickingRoot(false)}
+        />
+      )}
 
       {menu && (
         <div className="ctx-menu" style={{ left: menu.x, top: menu.y }} onClick={(e) => e.stopPropagation()}>

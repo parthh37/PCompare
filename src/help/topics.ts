@@ -302,7 +302,11 @@ Use \`remote://<profile>/path\` (or the globe button next to a path) on either s
 
 **OneDrive, SharePoint, Dropbox, Google Drive**: click **Sign in** and approve PCompare in your browser. To go through an app registration of your own instead (some organisations require it), open **Advanced** and enter its Client ID. Builds without a built-in app always need one — follow the link in the form. While the browser is open, **Cancel** stops waiting.
 
-**Dropbox access token**: instead of signing in, paste a token generated on your app's page in the Dropbox App Console into **Access token**. It is used while set (signing in replaces it); generated tokens expire after about 4 hours.
+**Dropbox access token**: instead of signing in, paste a token generated on your app's page in the Dropbox App Console into **Access token**. It is used while set (signing in replaces it); generated tokens expire after about 4 hours. Tick **files.metadata.read**, **files.content.read** and **files.content.write** on the app's Permissions tab (and click Submit) *before* generating it: a token keeps the permissions it was created with, so a \`missing_scope\` error means generating a new one.
+
+**Dropbox team accounts**: team folders are found automatically. For accounts with a team space, paths start at the team's top level, where your own folder appears as a folder too.
+
+**Root folder**: click **Browse…** next to it to pick from the folders on the server. It works before saving, once sign-in details are filled in.
 
 **SharePoint**: paste the site's address from the browser (e.g. \`https://contoso.sharepoint.com/sites/Marketing\`); a link into a library also picks that library. Leave **Library** empty for the site's default *Documents* library. Deletes go to the site's recycle bin. SharePoint adds metadata to Office files it stores, so a .docx synced there can differ in size from the original even though nothing was edited.
 

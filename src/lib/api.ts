@@ -554,6 +554,8 @@ export const api = {
   saveProfile: (input: ProfileInput) => invoke<Profile>("save_profile", { input }),
   deleteProfile: (id: string) => invoke<void>("delete_profile", { id }),
   testProfile: (input: ProfileInput) => invoke<string>("test_profile", { input }),
+  /** Folders under `path` (relative to the account's top level) for the Root folder picker. */
+  browseProfile: (input: ProfileInput, path: string) => invoke<RemoteEntry[]>("browse_profile", { input, path }),
   signInProfile: (id: string) => invoke<Profile>("sign_in_profile", { id }),
   /** Stops a pending sign-in; `signInProfile` then rejects with SIGN_IN_CANCELLED. */
   cancelSignIn: () => invoke<void>("cancel_sign_in"),
