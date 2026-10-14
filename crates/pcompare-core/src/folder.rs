@@ -25,9 +25,13 @@
 
 mod align;
 mod pe_version;
+mod status;
 
 pub use align::{AlignOptions, AlignRule};
 pub use pe_version::VERSION_MAX_BYTES;
+pub use status::{
+    aggregate, contribution, replace_entry, Replaced, StatusCounts, StatusDetail, StatusSet,
+};
 
 use crate::text::{self, TextDiffOptions};
 use crate::textfile;
@@ -257,6 +261,9 @@ pub struct FolderEntry {
     pub rel_path: String,
     pub is_dir: bool,
     pub status: EntryStatus,
+    /// [`Self::status`] at Beyond Compare's granularity: newer side,
+    /// same-but-quick-tests-differ, not compared yet.
+    pub detail: StatusDetail,
     /// For differing files, which side carries the newer timestamp.
     pub newer: Option<Side>,
     pub left: Option<EntryMeta>,
@@ -272,6 +279,10 @@ pub struct FolderEntry {
     /// `rel_path` and `name` describe the right side.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub left_rel_path: Option<String>,
+    /// Folders whose contents were listed: how many rows below have each
+    /// detail (see [`StatusCounts`]).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub counts: Option<StatusCounts>,
     /// Set when filters leave out one side or the whole row. Rows filtered
     /// on [`Filtered::Both`] sides are only reported with
     /// [`ScanControl::keep_filtered`]; their files get quick tests only.
@@ -303,6 +314,8 @@ pub struct FolderStats {
     /// Folders read from disk by this run; the rest came from the
     /// [`FolderScan`]'s listings.
     pub dirs_read: usize,
+    /// The whole tree's [`StatusCounts`], as for a folder holding both roots.
+    pub counts: StatusCounts,
 }
 
 /// Remembers file checksums between scans so unchanged files need not be
@@ -1300,6 +1313,7 @@ fn error_entry(name: String, rel_path: String, is_dir: bool, err: CoreError) -> 
         rel_path,
         is_dir,
         status: EntryStatus::Error,
+        detail: StatusDetail::Error,
         newer: None,
         left: None,
         right: None,
@@ -1309,6 +1323,7 @@ fn error_entry(name: String, rel_path: String, is_dir: bool, err: CoreError) -> 
         crc: None,
         left_rel_path: None,
         filtered: None,
+        counts: None,
     }
 }
 
@@ -1417,6 +1432,7 @@ fn orphan_tree(
             left_rel_path: (side == Side::Left && own_rel != rel_path).then_some(own_rel),
             rel_path,
             status,
+            detail: status.into(),
             newer: None,
             left,
             right,
@@ -1425,6 +1441,7 @@ fn orphan_tree(
             content_checked: None,
             crc: None,
             filtered: (filtered || item.filtered).then_some(Filtered::Both),
+            counts: None,
         }
     };
     // One-sided rows are final as soon as they're listed, so the folder
@@ -1466,6 +1483,7 @@ fn orphan_tree(
                 let inherited = entry.filtered_out();
                 entry.children =
                     orphan_tree(&path, &entry.rel_path, &own_rel, side, &sub, inherited, ctx);
+                entry.counts = Some(aggregate(&entry.children));
             }
             entry
         })
@@ -1527,6 +1545,11 @@ fn pair_entry(at: &DirPair, l: Option<&Listed>, r: Option<&Listed>) -> FolderEnt
         (Some(l), _) => (EntryStatus::Same, l.meta.is_dir),
         (None, None) => unreachable!("pairs always have at least one side"),
     };
+    // Two-sided rows are settled by compare_pair.
+    let detail = match status {
+        EntryStatus::Same => StatusDetail::Unknown,
+        s => s.into(),
+    };
     FolderEntry {
         left_rel_path: l
             .map(|x| join_rel(at.lrel, &x.name))
@@ -1535,6 +1558,7 @@ fn pair_entry(at: &DirPair, l: Option<&Listed>, r: Option<&Listed>) -> FolderEnt
         rel_path,
         is_dir,
         status,
+        detail,
         newer: None,
         left: l.map(|x| x.meta.clone()),
         right: r.map(|x| x.meta.clone()),
@@ -1543,6 +1567,7 @@ fn pair_entry(at: &DirPair, l: Option<&Listed>, r: Option<&Listed>) -> FolderEnt
         content_checked: None,
         crc: None,
         filtered: pair_filtered(at.filtered, l, r),
+        counts: None,
     }
 }
 
@@ -1592,6 +1617,7 @@ fn compare_pair(
                     };
                     entry.children =
                         orphan_tree(&path, &rel_path, &left_rel, Side::Left, &sub, inherited, ctx);
+                    entry.counts = Some(aggregate(&entry.children));
                 }
             }
         }
@@ -1610,6 +1636,7 @@ fn compare_pair(
                     };
                     entry.children =
                         orphan_tree(&path, &rel_path, &rel_path, Side::Right, &sub, inherited, ctx);
+                    entry.counts = Some(aggregate(&entry.children));
                 }
             }
         }
@@ -1633,6 +1660,7 @@ fn compare_pair(
                     } else {
                         EntryStatus::Error
                     };
+                    entry.detail = entry.status.into();
                     entry.error = Some(LOOP_MESSAGE.into());
                     return entry;
                 }
@@ -1647,6 +1675,7 @@ fn compare_pair(
                     } else {
                         EntryStatus::Different
                     };
+                    entry.detail = entry.status.into();
                     entry.error = Some(inside_message(&rt));
                     return entry;
                 }
@@ -1664,10 +1693,13 @@ fn compare_pair(
                 match compare_dirs(&at, &sub, ctx) {
                     Ok(children) => {
                         entry.status = folder_status(&children);
+                        entry.detail = entry.status.into();
+                        entry.counts = Some(aggregate(&children));
                         entry.children = children;
                     }
                     Err(e) => {
                         entry.status = EntryStatus::Error;
+                        entry.detail = StatusDetail::Error;
                         entry.error = Some(e.to_string());
                     }
                 }
@@ -1700,9 +1732,13 @@ fn compare_pair(
                     if entry.status != EntryStatus::Same {
                         entry.newer = newer_side(&l.meta, &r.meta, ctx.opts);
                     }
+                    let quick_differs = l.meta.size != r.meta.size
+                        || !timestamps_match(l.meta.modified_ms, r.meta.modified_ms, ctx.opts);
+                    entry.detail = StatusDetail::for_file(entry.status, entry.newer, quick_differs);
                 }
                 Err(e) => {
                     entry.status = EntryStatus::Error;
+                    entry.detail = StatusDetail::Error;
                     entry.error = Some(e.to_string());
                 }
             }
@@ -1868,6 +1904,7 @@ pub fn compare_folders_controlled(
     ctx.check_cancel()?;
     let mut stats = FolderStats::default();
     tally(&entries, &mut stats);
+    stats.counts = aggregate(&entries);
     stats.checksums_reused = ctx.reused.load(Ordering::Relaxed);
     stats.dirs_read = ctx.dirs_read.load(Ordering::Relaxed);
     Ok(FolderCompareResult {
