@@ -44,6 +44,7 @@ import {
   effectiveStatus,
   LiveTree,
   nameMatcher,
+  replaceEntry,
   withoutFiltered,
   pairedFiles,
   selectMatching,
@@ -384,6 +385,46 @@ export function FolderCompare({
   );
   const runRef = useRef(run);
   runRef.current = run;
+  const resultRef = useRef(result);
+  resultRef.current = result;
+
+  /**
+   * After a file operation: compares just the rows it changed (tree paths)
+   * and swaps them into the tree, Beyond Compare's partial refresh. Rescans
+   * instead while a compare runs or when a row's folder isn't in the tree.
+   */
+  const refreshRows = async (rels: string[]) => {
+    const scan = scanId.current;
+    const tree = live.current;
+    if (runKey.current || !resultRef.current || !scan || !tree) return void run("quiet");
+    const seq = requestSeq.current;
+    const busy = () => seq !== requestSeq.current || !!runKey.current;
+    let rows: (FolderEntry | null)[];
+    try {
+      const options = scanOptions.current ?? (JSON.parse(optionsKey) as FolderCompareOptions);
+      const ref = { id: scan, showFiltered: suppressFilters.current };
+      rows = await api.compareFolderEntries(left, right, options, rels, ref, expandArchives);
+    } catch {
+      if (!busy()) void run("quiet");
+      return;
+    }
+    // A compare started meanwhile shows the change already.
+    const prev = resultRef.current;
+    if (busy() || !prev) return;
+    let entries = prev.entries;
+    for (const [i, rel] of rels.entries()) {
+      const next = replaceEntry(entries, rel, rows[i] ?? null);
+      if (!next) return void run("quiet");
+      entries = next;
+    }
+    for (const rel of rels) tree.patch(entries, rel);
+    const next = { ...prev, entries, stats: { ...prev.stats, filtered: 0, ...tally(entries) } };
+    resultRef.current = next;
+    setResult(next);
+    // Content checks of the old rows no longer hold.
+    const stale = (key: string) => rels.some((rel) => key === rel || key.startsWith(`${rel}/`));
+    setVerdicts((v) => ([...v.keys()].some(stale) ? new Map([...v].filter(([key]) => !stale(key))) : v));
+  };
 
   const cancel = () => {
     if (runKey.current) api.cancelCompareFolders(runKey.current).catch(() => {});
@@ -551,6 +592,7 @@ export function FolderCompare({
     // Enter opens the selection: one folder toggles, file pairs open (a handful at most).
     onOpen: (list) => (list.length === 1 ? open(list[0]) : list.filter((e) => !e.isDir).slice(0, 10).forEach(open)),
     onRefresh: () => run("quiet"),
+    onRefreshRows: (rels) => void refreshRows(rels),
     onError: setError,
     compareOptions: engineOptions,
   });
