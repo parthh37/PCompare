@@ -10,7 +10,13 @@ repository.workspace = true
 pcompare-core = { path = "../pcompare-core" }
 pcompare-sync = { path = "../pcompare-sync" }
 pcompare-report = { path = "../pcompare-report" }
+pcompare-archive = { path = "../pcompare-archive" }
+pcompare-convert = { path = "../pcompare-convert" }
+pcompare-merge = { path = "../pcompare-merge" }
 chrono = { version = "0.4", default-features = false, features = ["std", "clock"] }
+regex = "1"
+serde_json.workspace = true
+tempfile = "3"
 
 [dev-dependencies]
-tempfile = "3"
+filetime = "0.2"

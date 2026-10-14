@@ -185,8 +185,9 @@ Cells are matched by `values_equal` in `crates/pcompare-db/src/value.rs`. Number
 ```text
 pcompare [options] <left> [<right>]                  compare two files or folders
 pcompare [options] <left> <right> <base> [<output>]  3-way merge (Beyond Compare's argument order)
-pcompare @<script> [<param>…] [/silent]               run a script without a window
+pcompare @<script> [<param>…] [/silent] [--dry-run]   run a Beyond Compare script without a window
 pcompare /qc[=size|crc|binary|rules] <left> <right>   quick compare without a window
+pcompare <left> <right> <base> <output> /automerge    merge without a window (git mergetool)
 ```
 
 Switches take Beyond Compare's spelling (`/name=value`, case-insensitive) or a GNU-style one (`--name value` /
@@ -195,20 +196,40 @@ Switches take Beyond Compare's spelling (`/name=value`, case-insensitive) or a G
 | Switch | What it does |
 |---|---|
 | `/fv=<viewer>`, `--viewer <kind>` | Open as a specific session: `text`, `hex`, `table`, `picture`, `folder`, `sync`, `merge`, `folderMerge`, `registry`, `version`, `mp3`, `database` (BC names such as `"Text Compare"` or `"Data Compare"` work too) |
-| `/title1=<text>`, `/title2=<text>`, `--title-left`, `--title-right` | Tab labels instead of the file names (handy for git's temporary files) |
-| `/readonly` (`/ro`), `/lro`, `/rro`, `--readonly[-left\|-right]` | Open sides read-only in Text Compare |
+| `/title1=<text>`, `/title2=<text>`, `--title-left`, `--title-right` | Tab labels instead of the file names (handy for git's temporary files); `/title3=`, `/title4=` (`/centertitle=`, `/outputtitle=`) label a merge's base and output, and `/vcs1=`…`/vcs4=` stand in for missing titles |
+| `/readonly` (`/ro`), `/lro` (`/ro1`), `/rro` (`/ro2`), `--readonly[-left\|-right]` | Open sides read-only in Text Compare |
 | `/mergeoutput=<path>`, `--merge-output <path>` | Where a 3-way merge writes its result (implies `--wait`) |
+| `/center=<path>` | The merge base, instead of the third path |
+| `/automerge` | Merge without a window and write the output — unless there are conflicts: then `/force` writes them with `<<<<<<<` markers, `/reviewconflicts` opens the merge in PCompare (and waits for it), and otherwise the output is left alone. `/iu` makes whitespace-only changes merge cleanly, taken from `/favorleft` / `/favorright` or else from the base |
+| `/filters=<masks>`, `/expandall`, `/savetarget=<path>`, `/sync`, `/edit` | Accepted with Beyond Compare's meaning (`/sync` and `/edit` pick the viewer); `/solo`, `/nobackups` and `/closescript` are accepted and ignored |
 | `/wait`, `--wait` | Don't return until the comparison's tab is closed — also when PCompare is already running. Exit code `0`, or `1` for a merge whose output was never saved <!-- araxis:vcs --> |
 | `--base-first` | Merge paths come as `<base> <theirs> <yours> <merged>` (P4MERGE, svn `merge-tool-cmd`) <!-- araxis:vcs --> |
 | `-L <label>` | Labels the next side, as `svn diff --diff-cmd` passes them <!-- araxis:vcs --> |
 | `/qc[=<method>]`, `--quick-compare[=<method>]` | Compare headlessly and print one line. `rules` (default) applies the text rules to text files and compares other files byte by byte; `binary`, `crc` and `size` are stricter or quicker. Folders are compared recursively |
-| `@<file>`, `/silent` | Run a script (below); `/silent` prints only errors |
+| `@<file>`, `/silent`, `--dry-run` | Run a script (below); `/silent` prints only errors; `--dry-run` lists file operations instead of performing them |
 | `--select-left <path>`, `--compare-to <path>` | Explorer's "Select Left Side" / "Compare to" |
 | `-h`, `--help`, `/?` | Usage |
 
-Exit codes: quick compare `0` = same (or only unimportant differences), `1` = different, `2` = error; scripts `0` =
-success, `1` = some commands failed, `2` = the script is unreadable or has syntax errors (nothing ran). With
-PCompare already open, a new `pcompare <paths>` (switches included) opens a tab in that window.
+Exit codes are Beyond Compare's, so CI jobs and hooks written for BC work unchanged:
+
+| Code | Quick compare (`/qc`) | Script (`@file`) | `/automerge` |
+|---|---|---|---|
+| 0 | | success | merged |
+| 1 | binary same | | |
+| 2 | rules-based same (only encoding or line endings differ) | | |
+| 11 | binary differences | | |
+| 12 | similar (only unimportant differences) | | |
+| 13 | rules-based differences | | |
+| 14 | | | conflicts, written with markers (`/force`) |
+| 100 | error | some commands failed | error |
+| 101 | | | conflicts, output not written |
+| 105 / 106 / 107 | | script unreadable / syntax error (nothing ran) / a `load` failed (the script stops there) | |
+
+> **Changed in 1.5:** quick compare used to exit `0` for same and `1` for different, and scripts `1` and `2` for
+> errors. Scripts testing `%ERRORLEVEL% == 0` after `/qc` must now test for `1` or `2` (or `< 11` for "not
+> different").
+
+With PCompare already open, a new `pcompare <paths>` (switches included) opens a tab in that window.
 
 On Windows the installed `pcompare.exe` is a GUI program: `cmd.exe` doesn't wait for it, so use
 `start /wait pcompare.exe /qc a b` (or PowerShell's `Start-Process -Wait`) to read `%ERRORLEVEL%`; output goes to the
@@ -232,39 +253,55 @@ print dialog.
 
 ### Scripts
 
-`pcompare @nightly.txt "D:/work" "E:/backup"` runs a Beyond Compare–style script without opening a window. One
-command per line, keywords are case-insensitive, `#` starts a comment line, arguments with spaces go in double quotes,
-`%1`–`%9` are the parameters after the script name and `%NAME%` is an environment variable. The whole script is
-checked before anything runs.
+`pcompare @nightly.txt "D:/work" "E:/backup"` runs a Beyond Compare script without opening a window — BC's own
+sample scripts run unchanged. One command per line (a trailing `&` continues it on the next line), keywords are
+case-insensitive, `#` starts a comment (a whole line, or after a space at the end of one), arguments with spaces go in
+double quotes, `%1`–`%9` are the parameters after the script name, `%date%` (`2012-12-31`), `%time%` and `%fn_time%`
+(`23-59-59`, safe in file names) are the current date and time, and `%NAME%` is an environment variable. `lt` and
+`rt` stand for `left` and `right`. The whole script is checked before anything runs.
 
 ```text
 # Mirror a project to a backup and keep a report of what changed.
-log verbose "%TEMP%/backup.log"
+log verbose append:"%TEMP%/backup %date%.log"
 criteria timestamp:2sec size
 filter "-target\;-node_modules\;-*.tmp"
 load "%1" "%2"
 expand all
-folder-report layout:side-by-side options:display-mismatches,include-file-links output-to:"%2/../changes.html"
+folder-report layout:side-by-side &
+   options:display-mismatches,include-file-links,column-size,column-crc &
+   output-to:"%2/../changes.html" output-options:html-color
 sync create-empty mirror:left->right
 ```
 
+Base folders can be local folders, zip / tar / 7z archives, snapshots (`.pcsnap`, or saved by a script under BC's
+`.bcss` name), `svn:` / `git:` / `hg:` revisions, `remote://<connection>/<path>`, or BC-style `ftp://user@host/path`
+and `sftp://…` URLs, which use the saved connection for that host. Writes to remote folders and zip archives go
+through the same fail-safe executors as the app.
+
 | Command | |
 |---|---|
-| `log [normal\|verbose] [append:]<file>` | Log commands, results and errors (verbose: every file operation) |
-| `criteria <timestamp[:Nsec;IgnoreDST]\|size\|crc\|binary\|rules-based\|version\|attrib>…` | How files are compared (default `timestamp size`) |
-| `filter "<mask>;-<mask>;<folder>\;-<folder>\"` | Include / exclude file masks; masks ending in `\` or `/` are folders |
-| `load <left> <right>` | Compare two folders (or two files, for `text-report`) |
-| `expand all\|<folder>`, `collapse all\|<folder>` | Like the folder view: `select` and reports only see expanded folders' contents |
-| `select <side>.<status>.<type>…` | e.g. `all.diff.files`, `left.orphan`, `right.newer.files`, `all`; side `left\|right\|all`, status `all\|diff\|same\|exact\|orphan\|newer\|older`, type `files\|folders` |
+| `log [none\|normal\|verbose] [[append:]<file>]` | Log commands, results and errors (verbose: every file operation); `Log.txt` by default, `none` stops logging |
+| `criteria [timestamp[:Nsec;IgnoreDST]] [size\|crc\|binary\|rules-based] [version] [attrib:<ashr>] [timezone:<ignore\|left±N\|right±N>] [follow-symlinks] [ignore-unimportant]` | How files are compared (default `timestamp size`) |
+| `filter "<mask>;-<mask>;<folder>\;-<folder>\"`, `filter cutoff:<[<\|>]<date>\|<N>days\|none>`, `filter size:<[<\|>]N[KB\|MB\|GB]\|none>`, `filter attrib:<±ashr\|none>`, `filter exclude-protected\|include-protected` | Name masks (a trailing `\` or `/` means a folder), and files older / newer, smaller / larger, or with / without attributes |
+| `load <left> [<right>]`, `load <session>`, `load <default>`, `load create:<all\|left\|right> …` | Compare two folders (or files), open a saved session by name, go back to the default settings, create missing base folders. A failed load ends the script (exit 107) |
+| `expand all\|<folder>…`, `collapse all\|<folder>…` | Like the folder view: `select` and reports only see expanded folders' contents |
+| `select <side>.<status>.<type>…`, `select empty.folders` | e.g. `all.diff.files`, `left.orphan`, `right.newer.files`, `all`; side `left\|right\|all`, status `all\|diff\|same\|exact\|orphan\|newer\|older`, type `files\|folders` |
 | `compare [crc\|binary\|rules-based]` | Content-compare the selected files |
-| `folder-report layout:<summary\|side-by-side> [options:<display-all\|display-mismatches\|display-matches\|display-orphans\|display-left-newer…>,include-file-links,column-size,column-timestamp] [title:<text>] output-to:<file> [output-options:<html-color\|html-mono\|text\|csv>]` | Folder report (format defaults from the file extension) |
-| `text-report layout:<side-by-side\|interleaved\|patch> [options:display-all\|display-mismatches\|display-context[=N],line-numbers,ignore-unimportant] output-to:<file> [output-options:html-color\|html-mono\|text,wrap-none]` | Text report of the loaded files, or of every selected file pair in one report |
-| `sync [create-empty] <mirror\|update>:<left->right\|right->left>`, `sync update:all` | Synchronize (fail-safe executor: atomic copies, retries, deletions to the Recycle Bin / Trash) |
-| `copy [left->right\|right->left]`, `delete [left\|right\|all]` | Copy or delete the selection (folders with their contents) |
-| `option confirm:<yes-to-all\|no-to-all\|prompt>` | Overwrites and deletions by `copy` / `delete` need confirmation: asked on the terminal (`prompt`, the default), never asked with `/silent` (skipped) |
-| `option stop-on-error`, `option recycle:<yes\|no>` | Stop at the first failing command (otherwise the script goes on and exits with 1); delete permanently instead of to the Recycle Bin |
+| `folder-report layout:<summary\|side-by-side\|xml> [options:<display-…>,include-file-links,column-<size\|timestamp\|crc\|attributes\|none>] [title:<text>] output-to:<file> [output-options:<html-color\|html-mono\|text\|csv>]` | Folder report (format defaults to text, or from the file extension) |
+| `file-report`, `text-report`, `hex-report`, `data-report`, `picture-report`, `media-report`, `registry-report`, `version-report` with `layout:<side-by-side\|summary\|interleaved\|patch\|statistics\|xml> [options:display-<all\|mismatches\|context\|matches>,line-numbers,ignore-unimportant,patch-<normal\|context\|unified>] output-to:<file> [output-options:…] [<session> \| <left file> <right file>]` | File reports of the loaded files, every selected file pair, or the named comparison. `file-report` reads each pair by the *File formats* rules (documents converted to text) and reports binary files as a hex comparison |
+| `sync [visible] [create-empty] <mirror\|update>:<left->right\|right->left>`, `sync update:all` | Synchronize (fail-safe executor: atomic copies, retries, deletions to the Recycle Bin / Trash); `visible` only touches expanded folders |
+| `copy\|move <left->right\|right->left>`, `delete [recyclebin=<yes\|no>] <left\|right\|all>` | Copy, move or delete the selection (folders with their contents) |
+| `copyto\|moveto [left\|right\|all] [path:<none\|relative\|base>] <folder or .zip>` | Copy or move the selection elsewhere: flat, below the deepest folder they share, or with their full path |
+| `rename <mask>`, `rename regexpr <old> <new>` | Rename the selection, DOS-style (`*.bak`) or by regular expression (`$1`) |
+| `touch <left->right\|right->left>`, `touch <left\|right\|all>:<now\|<date>>` | Copy or set timestamps of the selection |
+| `attrib +r -h …` | Set or clear attributes of the selection (`a`, `s`, `h`, `r`) |
+| `snapshot [save-crc] [include-empty] [no-filters] [expand-archives] <left\|right\|path:<folder>> [output:<file or folder>]` | Save a snapshot (honouring the filters unless `no-filters`) |
+| `beep` | Sound the terminal bell |
+| `option confirm:<yes-to-all\|no-to-all\|prompt>` | Overwrites and deletions need confirmation: asked on the terminal (`prompt`, the default), never asked with `/silent` (skipped) |
+| `option stop-on-error`, `option recycle:<yes\|no>` | Stop at the first failing command (otherwise the script goes on and exits with 100); delete permanently instead of to the Recycle Bin |
 
-Scripts work on local folders; `printer` and `clipboard` outputs need the window.
+`printer` and `clipboard` outputs need the window; `column-version`, `column-owner`, `column-group`, `column-vcs` and
+`snapshot save-version` are accepted but not filled in.
 
 <!-- araxis:vcs -->
 ### Version control
@@ -289,7 +326,10 @@ git config --global merge.tool pcompare
 `--wait` keeps the process alive until you close that tab, even with PCompare already open, so git doesn't delete
 its temporary files early; a merge closed without saving its output exits with 1, which `trustExitCode` reports as an
 unresolved merge. Add `/title1="$BASE (old)" /title2="$BASE (new)"` to the difftool command for readable tab names.
-To check whether two revisions differ without a window: `pcompare /qc "$LOCAL" "$REMOTE"` (exit code 0 or 1).
+To check whether two revisions differ without a window: `pcompare /qc "$LOCAL" "$REMOTE"` (exit code 1 or 2 when
+they're the same, 11–13 when they differ). For merges without a window, as with Beyond Compare:
+`pcompare "$LOCAL" "$REMOTE" "$BASE" "$MERGED" /automerge /reviewconflicts` writes clean merges straight away and
+opens only the ones with conflicts.
 
 **Mercurial, Perforce, Subversion.** The same Settings page has copy-paste snippets, e.g. for `~/.hgrc`:
 
