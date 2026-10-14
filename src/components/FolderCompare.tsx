@@ -1,16 +1,4 @@
-import {
-  ArrowLeft,
-  ArrowRight,
-  ChevronDown,
-  ChevronRight,
-  Equal,
-  EqualApproximately,
-  EqualNot,
-  EyeOff,
-  Link,
-  TriangleAlert,
-  type LucideIcon,
-} from "lucide-react";
+import { ChevronDown, ChevronRight, Eye, Link } from "lucide-react";
 import { FunnelX, ListChecks, PanelBottom } from "lucide-react";
 import {
   useCallback,
@@ -50,6 +38,8 @@ import {
 import {
   allDirs,
   applyVerdicts,
+  countsNewer,
+  detailOf,
   DISPLAY_FILTERS,
   effectiveStatus,
   LiveTree,
@@ -88,6 +78,7 @@ import { getPrefs, setPrefs, usePref } from "../lib/prefs";
 import { sessionForFiles } from "../lib/sessions";
 import { FolderSelectDialog, type SelectRequest } from "./FolderSelectDialog";
 import { FolderSplitPane, type SplitPair } from "./FolderSplitPane";
+import { countsSummary, DETAIL_LABEL, folderTones, LegendPopover, StatusGlyph, toneStyle } from "./FolderStatusLegend";
 import "./FolderCompare.css";
 
 export type { FolderSettings };
@@ -108,16 +99,6 @@ interface Props {
   /** The split view's embedded file comparison holds unsaved edits. */
   onDirtyChange?: (dirty: boolean) => void;
 }
-
-const STATUS_ICON: Record<EntryStatus, LucideIcon> = {
-  same: Equal,
-  similar: EqualApproximately,
-  different: EqualNot,
-  leftOnly: ArrowLeft,
-  rightOnly: ArrowRight,
-  typeMismatch: TriangleAlert,
-  error: TriangleAlert,
-};
 
 const STATUS_LABEL: Record<EntryStatus, string> = {
   same: "Same",
@@ -197,8 +178,12 @@ const FILTERED_LABEL: Record<NonNullable<FolderEntry["filtered"]>, string> = {
 
 function rowTitle(e: FolderEntry): string {
   if (e.pending) return "Not compared yet";
-  const parts = e.ignored ? [`Ignored (marked as same; really ${STATUS_LABEL[e.status].toLowerCase()})`] : [STATUS_LABEL[e.status]];
+  const parts = e.ignored
+    ? [`Ignored (marked as same; really ${STATUS_LABEL[e.status].toLowerCase()})`]
+    : [e.isDir ? STATUS_LABEL[e.status] : DETAIL_LABEL[detailOf(e)]];
   if (e.filtered) parts.push(FILTERED_LABEL[e.filtered]);
+  const inside = e.isDir && !e.ignored ? countsSummary(e) : "";
+  if (inside) parts.push(`inside: ${inside}`);
   if (e.leftRelPath) parts.push(`aligned with ${e.leftRelPath} on the left`);
   if (attributesDiffer(e)) parts.push(`attributes ${formatAttributes(e.left)} ↔ ${formatAttributes(e.right)}`);
   for (const side of ["left", "right"] as const) {
@@ -207,7 +192,7 @@ function rowTitle(e: FolderEntry): string {
   }
   if (e.contentChecked && e.contentChecked !== "off") parts.push(`checked by ${METHOD_LABEL[e.contentChecked]}`);
   if (e.crc) parts.push(`CRC ${hex(e.crc[0], 8)} ↔ ${hex(e.crc[1], 8)}`);
-  if (e.newer) parts.push(`${e.newer} is newer`);
+  if (e.newer && !e.isDir && detailOf(e) !== "leftNewer" && detailOf(e) !== "rightNewer") parts.push(`${e.newer} is newer`);
   if (e.error) parts.push(e.error);
   return parts.join(" · ");
 }
@@ -237,6 +222,8 @@ export function FolderCompare({
   const [snapshotting, setSnapshotting] = useState(false); // bc5:archives
   const [reporting, setReporting] = useState(false); // bc5:reports-script
   const [selecting, setSelecting] = useState(false);
+  /** Where View > Legend is open, if it is. */
+  const [legendAt, setLegendAt] = useState<{ x: number; y: number } | null>(null);
   // Split view (file comparison below the list): each tab toggles its own, and
   // the last choice and divider position are saved in prefs for new tabs.
   const [splitView, setSplitView] = useState(() => getPrefs().folderSplitView);
@@ -631,6 +618,15 @@ export function FolderCompare({
   };
 
   // Row context menu; built after the right-click's selection change renders.
+  // View menu: display toggles and the status legend, opened under its button.
+  const viewMenu = useContextMenu((at: { x: number; y: number }): MenuItems => [
+    { label: "Flatten folders", checked: cfg.flatten, onClick: () => update({ flatten: !cfg.flatten }) },
+    { label: "Show attributes", checked: !!cfg.showAttributes, onClick: () => update({ showAttributes: !cfg.showAttributes }) },
+    { label: "Split view", checked: splitView, shortcut: shortcutLabel("folder.splitView"), onClick: toggleSplit },
+    SEPARATOR,
+    { label: "Legend…", onClick: () => setLegendAt(at) },
+  ]);
+
   const menu = useContextMenu(({ entry, side }: MenuTarget): Promise<MenuItems> | MenuItems => {
     // bc5:file-ops — context-menu actions cover the whole selection.
     const list = fops.menuEntries(entry);
@@ -714,8 +710,18 @@ export function FolderCompare({
 
   const renderSide = (e: FolderEntry, side: "left" | "right", depth: number) => {
     const meta = e[side];
-    // Beyond Compare draws the newer of two differing files in red and the older in grey.
-    const newer = e.newer === side ? " newer" : e.newer ? " older" : "";
+    // Beyond Compare draws the newer of two differing files in red and the older in grey;
+    // a folder is bold on the side all newer files below it are on.
+    const newer = e.isDir
+      ? !e.ignored && countsNewer(e.counts) === side
+        ? " newer"
+        : ""
+      : e.newer === side
+        ? " newer"
+        : e.newer
+          ? " older"
+          : "";
+    const tones = e.isDir ? toneStyle(folderTones(e)) : undefined;
     // Beyond Compare draws what the filters leave out in teal; a half-filtered pair only on that side.
     const filtered = e.filtered === "both" || e.filtered === side ? " filtered" : "";
     const showChevron = e.isDir && meta && !cfg.flatten;
@@ -740,7 +746,9 @@ export function FolderCompare({
               <span className="ficon">
                 <FileIcon name={e.name} isDir={e.isDir} open={e.isDir && expanded.has(e.relPath) && !cfg.flatten} />
               </span>
-              {cfg.flatten ? (side === "left" ? (e.leftRelPath ?? e.relPath) : e.relPath) : sideName(e, side)}
+              <span style={tones}>
+                {cfg.flatten ? (side === "left" ? (e.leftRelPath ?? e.relPath) : e.relPath) : sideName(e, side)}
+              </span>
               {meta.linkTarget != null && (
                 <span className="fc-link" title={`Link → ${meta.linkTarget || "(unreadable)"}`}>
                   <Link size={11} />
@@ -762,10 +770,9 @@ export function FolderCompare({
   const renderRow = (i: number) => {
     const { entry: e, depth } = flat[i];
     const checked = e.contentChecked && e.contentChecked !== "off";
-    const StatusIcon = e.ignored ? EyeOff : STATUS_ICON[e.status];
     return (
       <div
-        className={`frow s-${e.pending ? "pending" : effectiveStatus(e)}${e.ignored ? " ignored" : ""}${fops.rowClass(e.relPath)}${review.rowClass(e.relPath) /* araxis:text-review */}`}
+        className={`frow s-${e.pending ? "pending" : effectiveStatus(e)} d-${detailOf(e)}${e.ignored ? " ignored" : ""}${fops.rowClass(e.relPath)}${review.rowClass(e.relPath) /* araxis:text-review */}`}
         onClick={(ev) => fops.onRowClick(ev, e)}
         onDoubleClick={() => open(e)}
         onContextMenu={(ev) => {
@@ -783,7 +790,7 @@ export function FolderCompare({
           {oneSided ? null : e.pending ? (
             phase ? <span className="spinner" /> : <span className="muted">…</span>
           ) : (
-            <StatusIcon size={13} />
+            <StatusGlyph entry={e} />
           )}
         </div>
         {renderSide(e, "right", depth)}
@@ -848,6 +855,17 @@ export function FolderCompare({
           active={cfg.flatten}
           onClick={() => update({ flatten: !cfg.flatten })}
         />
+        <button
+          className={`tool-btn${legendAt ? " active" : ""}`}
+          title="View options and the legend of status colours and icons"
+          onClick={(ev) => {
+            const r = ev.currentTarget.getBoundingClientRect();
+            viewMenu.open({ clientX: r.left, clientY: r.bottom }, { x: r.left, y: r.bottom + 2 });
+          }}
+        >
+          <Eye size={20} className="fop-tool" />
+          <span>View</span>
+        </button>
         <span className="tool-sep" />
         <ToolButton
           icon="rules"
@@ -1060,6 +1078,8 @@ export function FolderCompare({
       </div>
 
       {menu.element}
+      {viewMenu.element}
+      {legendAt && <LegendPopover {...legendAt} onClose={() => setLegendAt(null)} />}
 
       {/* bc5:reports-script — the report lists what the view shows (re-checks and ignore marks included). */}
       {reporting && result && (

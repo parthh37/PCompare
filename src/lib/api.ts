@@ -220,6 +220,25 @@ export interface FolderCompareOptions {
 export type LargeFileMethod = "binary" | "size" | "sizeTimestamp";
 
 export type EntryStatus = "same" | "similar" | "different" | "leftOnly" | "rightOnly" | "typeMismatch" | "error";
+/**
+ * `StatusDetail` in pcompare-core: the status at Beyond Compare's
+ * granularity. `sameDiff` = same contents, but size or timestamp differ;
+ * `unknown` = not compared yet.
+ */
+export type StatusDetail =
+  | "unknown"
+  | "same"
+  | "sameDiff"
+  | "similar"
+  | "leftNewer"
+  | "rightNewer"
+  | "different"
+  | "leftOnly"
+  | "rightOnly"
+  | "typeMismatch"
+  | "error";
+/** `StatusCounts` in pcompare-core: rows below a folder per detail (zero counts omitted). */
+export type StatusCounts = Partial<Record<StatusDetail, number>>;
 export type Side = "left" | "right";
 
 export interface EntryMeta {
@@ -239,6 +258,8 @@ export interface FolderEntry {
   relPath: string;
   isDir: boolean;
   status: EntryStatus;
+  /** Missing in results saved by older versions; see `detailOf`. */
+  detail?: StatusDetail;
   newer: Side | null;
   left: EntryMeta | null;
   right: EntryMeta | null;
@@ -254,6 +275,8 @@ export interface FolderEntry {
    * "right" pairs are compared, the filtered side drawn teal.
    */
   filtered?: Side | "both";
+  /** Folders whose contents were listed: rows below per detail. */
+  counts?: StatusCounts;
   /** UI only: the user marked it "ignore", so it counts as same. */
   ignored?: boolean;
   /** UI only: a streamed pair whose contents aren't compared yet. */
@@ -290,6 +313,8 @@ export interface FolderStats {
   leftOnly: number;
   rightOnly: number;
   errors: number;
+  /** The whole tree's status counts. */
+  counts?: StatusCounts;
   /** UI only: files marked "ignore" (included in `same`). */
   ignored?: number;
   /** Reported files the filters leave out on every side; counted nowhere else. */
