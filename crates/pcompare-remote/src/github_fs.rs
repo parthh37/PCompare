@@ -251,6 +251,7 @@ impl Node {
             modified_ms,
             is_dir,
             mode: (!is_dir).then_some(self.mode),
+            content_id: (!is_dir).then(|| self.sha.clone()),
             ..Default::default()
         }
     }
