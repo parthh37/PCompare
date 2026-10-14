@@ -555,9 +555,14 @@ export const api = {
   deleteProfile: (id: string) => invoke<void>("delete_profile", { id }),
   testProfile: (input: ProfileInput) => invoke<string>("test_profile", { input }),
   signInProfile: (id: string) => invoke<Profile>("sign_in_profile", { id }),
+  /** Stops a pending sign-in; `signInProfile` then rejects with SIGN_IN_CANCELLED. */
+  cancelSignIn: () => invoke<void>("cancel_sign_in"),
   openProviderConsole: (kind: ProviderKind) => invoke<void>("open_provider_console", { kind }),
   remoteList: (path: string) => invoke<RemoteEntry[]>("remote_list", { path }),
 };
+
+/** The error a cancelled sign-in rejects with (oauth.rs CANCELLED). */
+export const SIGN_IN_CANCELLED = "sign-in cancelled";
 
 export function errorMessage(e: unknown): string {
   return typeof e === "string" ? e : e instanceof Error ? e.message : JSON.stringify(e);

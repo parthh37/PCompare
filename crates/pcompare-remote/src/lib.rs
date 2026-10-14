@@ -21,7 +21,7 @@ use pcompare_core::vfs_write::VfsWrite;
 use pcompare_core::{CoreError, Result};
 use profile::{Profile, ProfileInput, ProfileStore, ResolvedProfile, SecretStore};
 use prompt::Prompter;
-use provider::{spec, OAuthSpec, ProviderKind, REFRESH_TOKEN};
+use provider::{spec, OAuthSpec, ProviderKind, ACCESS_TOKEN, REFRESH_TOKEN};
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::io::{self, Read, Write};
@@ -123,6 +123,9 @@ pub struct RemoteManager {
     downloads: Mutex<HashMap<PathBuf, Arc<Mutex<()>>>>,
     /// Archives, snapshots and svn: repositories (containers.rs).
     containers: containers::Containers, // bc5:archives
+    /// The sign-in waiting for the browser, if any: its number and the
+    /// switch that cancels it (sending, or dropping the sender, cancels).
+    sign_in: Mutex<Option<(u64, tokio::sync::oneshot::Sender<()>)>>,
 }
 
 /// How long a live connection is reused before reconnecting. OAuth access
@@ -151,6 +154,7 @@ impl RemoteManager {
             cache_dir,
             prompter: Mutex::new(None),
             downloads: Mutex::new(HashMap::new()),
+            sign_in: Mutex::new(None),
         }
     }
 
@@ -187,10 +191,17 @@ impl RemoteManager {
             }
             return Ok(Arc::new(conn.fs));
         }
-        let token = match spec(kind).oauth {
-            Some(oauth) => {
+        let token = match (spec(kind).oauth, p.get(ACCESS_TOKEN)) {
+            // A pasted token is used as is (sign_in removes it again).
+            (Some(_), Some(pasted)) => Some(pasted.to_owned()),
+            (Some(oauth), None) => {
                 let refresh_token = p.get(REFRESH_TOKEN).ok_or_else(|| {
-                    CoreError::Other(format!("`{}` is not signed in — open Profiles and click Sign in", p.profile.name))
+                    let paste = spec(kind).fields.iter().any(|f| f.key == ACCESS_TOKEN);
+                    CoreError::Other(format!(
+                        "`{}` is not signed in — open Profiles and click Sign in{}",
+                        p.profile.name,
+                        if paste { " or paste an access token" } else { "" }
+                    ))
                 })?;
                 let (client_id, client_secret) = oauth_client(p, &oauth)?;
                 let tokens = rt().block_on(oauth::refresh(&oauth, client_id, client_secret, refresh_token))?;
@@ -200,7 +211,7 @@ impl RemoteManager {
                 }
                 Some(tokens.access_token)
             }
-            None => None,
+            (None, _) => None,
         };
         if kind == ProviderKind::Sharepoint {
             return Ok(Arc::new(graph_fs::GraphFs::connect(p, token.as_deref().unwrap_or_default())?));
@@ -315,20 +326,45 @@ impl RemoteManager {
         Ok(format!("Connected — {n} item{} in the root folder.", if n == 1 { "" } else { "s" }))
     }
 
-    /// Interactive OAuth sign-in for a saved profile; stores the refresh token.
+    /// Interactive OAuth sign-in for a saved profile; stores the refresh
+    /// token. Starting a second sign-in cancels the first.
     pub fn sign_in(&self, id: &str, open_browser: impl FnOnce(&str) -> Result<()>) -> Result<Profile> {
         let p = self.profiles.resolve(id)?;
         let oauth = spec(p.profile.kind)
             .oauth
             .ok_or_else(|| CoreError::Other(format!("{:?} does not use sign-in", p.profile.kind)))?;
         let (client_id, client_secret) = oauth_client(&p, &oauth)?;
-        let tokens = rt().block_on(oauth::authorize(&oauth, client_id, client_secret, open_browser))?;
-        let refresh = tokens.refresh_token.ok_or_else(|| {
+
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+        let ticket = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let (cancel_tx, cancel_rx) = tokio::sync::oneshot::channel();
+        *self.sign_in.lock().unwrap() = Some((ticket, cancel_tx));
+        let cancelled = async {
+            let _ = cancel_rx.await;
+        };
+        let result = rt().block_on(oauth::authorize(&oauth, client_id, client_secret, open_browser, cancelled));
+        {
+            let mut slot = self.sign_in.lock().unwrap();
+            if slot.as_ref().is_some_and(|(t, _)| *t == ticket) {
+                *slot = None;
+            }
+        }
+
+        let refresh = result?.refresh_token.ok_or_else(|| {
             CoreError::Other("the provider did not return a refresh token; check the app's offline-access permission".into())
         })?;
         self.profiles.set_secret(id, REFRESH_TOKEN, &refresh)?;
+        // The newest way of authenticating wins: drop a pasted token.
+        self.profiles.remove_secret(id, ACCESS_TOKEN)?;
         self.invalidate(id);
         self.profiles.get(id)
+    }
+
+    /// Stops a sign-in that is waiting for the browser. Harmless when none is.
+    pub fn cancel_sign_in(&self) {
+        if let Some((_, tx)) = self.sign_in.lock().unwrap().take() {
+            let _ = tx.send(());
+        }
     }
 
     /// Downloads a remote file into the cache and returns the local copy, so

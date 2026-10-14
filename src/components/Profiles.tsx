@@ -18,11 +18,12 @@ import {
   Triangle,
   type LucideIcon,
 } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   api,
   errorMessage,
   REMOTE_SCHEME,
+  SIGN_IN_CANCELLED,
   type FieldSpec,
   type Profile,
   type ProfileInput,
@@ -31,6 +32,8 @@ import {
 } from "../lib/api";
 
 const REFRESH_TOKEN = "refresh_token";
+/** A token pasted instead of signing in (Dropbox). */
+const ACCESS_TOKEN = "access_token";
 
 /** Display names for select options whose stored values are terse keys. */
 const OPTION_LABELS: Record<string, string> = {
@@ -111,6 +114,9 @@ export function Profiles() {
   const [status, setStatus] = useState<Status>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const [menu, setMenu] = useState<{ x: number; y: number; profile: Profile } | null>(null);
+  /** A sign-in is waiting for the browser (so leaving the page cancels it). */
+  const signingIn = useRef(false);
 
   useEffect(() => {
     Promise.all([api.listProviders(), api.listProfiles(), api.oauthRedirectUri()])
@@ -122,6 +128,28 @@ export function Profiles() {
       })
       .catch((e) => setStatus({ tone: "error", text: errorMessage(e) }));
   }, []);
+
+  useEffect(
+    () => () => {
+      // Leaving Profiles mid sign-in frees the redirect port for next time.
+      if (signingIn.current) void api.cancelSignIn();
+    },
+    [],
+  );
+
+  useEffect(() => {
+    if (!menu) return;
+    const close = () => setMenu(null);
+    const onKey = (e: KeyboardEvent) => e.key === "Escape" && close();
+    window.addEventListener("click", close);
+    window.addEventListener("blur", close);
+    window.addEventListener("keydown", onKey);
+    return () => {
+      window.removeEventListener("click", close);
+      window.removeEventListener("blur", close);
+      window.removeEventListener("keydown", onKey);
+    };
+  }, [menu]);
 
   const spec = useMemo(() => providers.find((p) => p.kind === draft?.kind), [providers, draft?.kind]);
 
@@ -199,19 +227,38 @@ export function Profiles() {
     run("signin", async () => {
       const saved = dirty || !draft?.id ? await persist() : null;
       setStatus({ tone: "info", text: "Complete the sign-in in your browser…" });
-      const updated = await api.signInProfile(saved?.id ?? draft!.id!);
-      setProfiles(await api.listProfiles());
-      setDraft(draftFrom(updated));
-      setStatus({ tone: "ok", text: "Signed in." });
+      signingIn.current = true;
+      try {
+        const updated = await api.signInProfile(saved?.id ?? draft!.id!);
+        setProfiles(await api.listProfiles());
+        setDraft(draftFrom(updated));
+        setStatus({ tone: "ok", text: "Signed in." });
+      } catch (e) {
+        if (errorMessage(e) !== SIGN_IN_CANCELLED) throw e;
+        setStatus({ tone: "info", text: "Sign-in cancelled." });
+      } finally {
+        signingIn.current = false;
+      }
     });
 
-  const remove = () =>
+  const deleteProfile = (id: string) =>
     run("delete", async () => {
-      await api.deleteProfile(draft!.id!);
+      await api.deleteProfile(id);
       const rest = await api.listProfiles();
       setProfiles(rest);
-      select(rest.length ? draftFrom(rest[0]) : null);
+      // Keep editing the open profile unless it was the one deleted.
+      if (!draft || draft.id === id) select(rest.length ? draftFrom(rest[0]) : null);
     });
+
+  const remove = () => deleteProfile(draft!.id!);
+
+  /** From the list's context menu: asks first, since secrets go with it. */
+  const removeFromMenu = (p: Profile) => {
+    setMenu(null);
+    if (busy) return;
+    const secrets = p.storedSecrets.length ? " Its saved passwords and tokens are removed from the keychain too." : "";
+    if (window.confirm(`Delete the connection profile “${p.name}”?${secrets}`)) void deleteProfile(p.id);
+  };
 
   const renderField = (f: FieldSpec) => {
     if (!draft || !visible(f)) return null;
@@ -302,6 +349,10 @@ export function Profiles() {
   };
 
   const signedIn = draft?.stored.includes(REFRESH_TOKEN);
+  // A token typed in this edit counts too, so Test connection works before saving.
+  const pastedToken =
+    !!draft && ((draft.secrets[ACCESS_TOKEN] ?? "") !== "" || (draft.stored.includes(ACCESS_TOKEN) && draft.secrets[ACCESS_TOKEN] !== ""));
+  const authorized = signedIn || pastedToken;
   const builtinApp = !!spec?.oauth?.hasBuiltinClient;
   const ownApp = !!draft?.settings.client_id?.trim();
   const basicFields = spec?.fields.filter((f) => !f.advanced) ?? [];
@@ -335,6 +386,10 @@ export function Profiles() {
             key={p.id}
             className={`profile-item${draft?.id === p.id ? " active" : ""}`}
             onClick={() => select(draftFrom(p))}
+            onContextMenu={(e) => {
+              e.preventDefault();
+              setMenu({ x: e.clientX, y: e.clientY, profile: p });
+            }}
           >
             <span className="pi-icon">
               <ProviderIcon kind={p.kind} />
@@ -397,24 +452,34 @@ export function Profiles() {
             {spec.oauth && (
               <div className="oauth-box">
                 <div>
-                  <strong className={signedIn ? "signed-in" : undefined}>
-                    {signedIn && <CircleCheck size={14} />} {signedIn ? "Signed in" : "Not signed in"}
+                  <strong className={authorized ? "signed-in" : undefined}>
+                    {authorized && <CircleCheck size={14} />}{" "}
+                    {pastedToken ? "Using a pasted access token" : signedIn ? "Signed in" : "Not signed in"}
                   </strong>
                   <p className="muted">
-                    {builtinApp && !ownApp
+                    {busy === "signin"
+                      ? "Finish in the browser window that opened, or cancel to stop waiting."
+                      : pastedToken
+                        ? "Clear the access token to use the sign-in instead; signing in also replaces it."
+                        : builtinApp && !ownApp
                       ? `Click Sign in and approve PCompare with your ${SIGN_IN_WITH[draft.kind] ?? "provider"} account — no setup needed.`
-                      : builtinApp
-                        ? "Signs in through your own app registration (see Advanced). Sign in again after changing it."
-                        : appSetup}
+                        : builtinApp
+                          ? "Signs in through your own app registration (see Advanced). Sign in again after changing it."
+                          : appSetup}
                   </p>
                 </div>
-                <button onClick={signIn} disabled={!!busy || !draft.name.trim() || (!builtinApp && !ownApp)}>
-                  {busy === "signin"
-                    ? "Waiting for browser…"
-                    : signedIn
-                      ? "Sign in again"
-                      : `Sign in with ${SIGN_IN_WITH[draft.kind] ?? "provider"}…`}
-                </button>
+                {busy === "signin" ? (
+                  <div className="oauth-waiting">
+                    <span className="muted">Waiting for browser…</span>
+                    <button onClick={() => void api.cancelSignIn()} title="Stop waiting for the browser">
+                      Cancel
+                    </button>
+                  </div>
+                ) : (
+                  <button onClick={signIn} disabled={!!busy || !draft.name.trim() || (!builtinApp && !ownApp)}>
+                    {signedIn ? "Sign in again" : `Sign in with ${SIGN_IN_WITH[draft.kind] ?? "provider"}…`}
+                  </button>
+                )}
               </div>
             )}
 
@@ -431,7 +496,7 @@ export function Profiles() {
               <button className="primary" onClick={save} disabled={!!busy || missing.length > 0 || !dirty}>
                 {busy === "save" ? "Saving…" : "Save"}
               </button>
-              <button onClick={test} disabled={!!busy || missing.length > 0 || (!!spec.oauth && !signedIn)}>
+              <button onClick={test} disabled={!!busy || missing.length > 0 || (!!spec.oauth && !authorized)}>
                 {busy === "test" ? "Testing…" : "Test connection"}
               </button>
               {dirty && draft.id && (
@@ -454,6 +519,16 @@ export function Profiles() {
           </>
         )}
       </section>
+
+      {menu && (
+        <div className="ctx-menu" style={{ left: menu.x, top: menu.y }} onClick={(e) => e.stopPropagation()}>
+          <button onClick={() => (setMenu(null), select(draftFrom(menu.profile)))}>Edit</button>
+          <hr />
+          <button className="danger-text" onClick={() => removeFromMenu(menu.profile)} disabled={!!busy}>
+            Delete…
+          </button>
+        </div>
+      )}
     </div>
   );
 }
