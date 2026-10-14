@@ -90,7 +90,6 @@ import {
 import { composeRuns, segmentRanges, visualLines, wrapRuns, type Run, type StyledRange } from "../lib/textRuns";
 import { FindBar, type FindScope } from "./FindBar";
 import { LineDetails } from "./LineDetails";
-import { Modal } from "./Modal";
 import { PathBar } from "./PathBar";
 import { VarList, type VarListHandle } from "./VarList";
 // bc5:converters — converted documents, file format rules, formatted HTML view.
@@ -2721,54 +2720,6 @@ export function TextCompare({
         {/* araxis:text-view end */}
       </div>
     </div>
-  );
-}
-
-/** Edits the regexes whose matches are ignored when comparing lines. */
-export function IgnoreRulesDialog({
-  patterns,
-  onApply,
-  onClose,
-}: {
-  patterns: string[];
-  onApply: (p: string[]) => void;
-  onClose: () => void;
-}) {
-  const [text, setText] = useState(patterns.join("\n"));
-  return (
-    <Modal
-      title="Ignore rules"
-      onClose={onClose}
-      footer={
-        <>
-          <button onClick={onClose}>Cancel</button>
-          <button
-            className="primary"
-            onClick={() => {
-              onApply(text.split("\n").map((p) => p.trim()).filter(Boolean));
-              onClose();
-            }}
-          >
-            Apply
-          </button>
-        </>
-      }
-    >
-      <label className="field">
-        <span>Ignore text matching (one regex per line)</span>
-        <textarea
-          rows={6}
-          spellCheck={false}
-          autoFocus
-          value={text}
-          placeholder={"\\$Id:[^$]*\\$\n^\\s*//.*$"}
-          onChange={(e) => setText(e.target.value)}
-        />
-        <small className="muted">
-          Matching text is removed before lines are compared — lines that differ only there are shown as unimportant.
-        </small>
-      </label>
-    </Modal>
   );
 }
 

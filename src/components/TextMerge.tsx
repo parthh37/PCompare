@@ -39,7 +39,7 @@ import {
 import { composeRuns, type StyledRange } from "../lib/textRuns";
 import type { MergePaths, MergeProps } from "../lib/sessionProps";
 import { PathField } from "./PathField";
-import { IgnoreRulesDialog } from "./TextCompare";
+import { TextRulesDialog } from "./TextRulesDialog";
 import { VirtualList, type VirtualListHandle } from "./VirtualList";
 import "./TextMerge.css";
 import { isComposing } from "../lib/ime"; // araxis:text-view araxis:text-view end
@@ -1129,7 +1129,17 @@ export function TextMerge({
   const canResolve = !!curChunk;
   const resolutions = RESOLUTIONS.filter((r) => !(twoWay && r.id === "base"));
   const lineCount = lineSel ? Math.abs(lineSel.focus - lineSel.anchor) + 1 : 0;
-  const patternCount = options.ignorePatterns.filter((p) => p.trim()).length;
+  // The Text Compare rules a merge honours (alignment-only rules don't apply).
+  const ruleCount =
+    options.ignorePatterns.filter((p) => p.trim()).length +
+    options.pageHeaderPatterns.filter((p) => p.trim()).length +
+    options.ignoreColumns.length +
+    options.replacements.length +
+    options.unimportantLines.left.length +
+    options.unimportantLines.right.length +
+    [options.ignoreComments, options.ignoreStrings].filter(Boolean).length +
+    (options.pageHeaderLines || options.pageFooterLines ? 1 : 0) +
+    (options.ignoreBlocks?.length ?? 0);
   return (
     <div className="session tm-session" ref={root}>
       <div className="toolbar">
@@ -1254,8 +1264,11 @@ export function TextMerge({
           />
           Ignore case
         </label>
-        <button onClick={() => setEditingRules(true)} title="Regexes for text that never matters">
-          <ListFilter size={14} /> Ignore rules{patternCount ? ` · ${patternCount}` : ""}
+        <button
+          onClick={() => setEditingRules(true)}
+          title="What counts as a change: comments and strings, ignored text, columns and blocks, replacements (the Text Compare rules)"
+        >
+          <ListFilter size={14} /> Rules{ruleCount ? ` · ${ruleCount}` : ""}
         </button>
         {!twoWay && (
           <label
@@ -1289,10 +1302,11 @@ export function TextMerge({
       </div>
 
       {editingRules && (
-        <IgnoreRulesDialog
-          patterns={options.ignorePatterns}
+        <TextRulesDialog
+          options={options}
+          lineCounts={data ? { left: data.left.lines.length, right: data.right.lines.length } : undefined}
           onClose={() => setEditingRules(false)}
-          onApply={(ignorePatterns) => setOptions({ ...options, ignorePatterns })}
+          onApply={setOptions}
         />
       )}
 

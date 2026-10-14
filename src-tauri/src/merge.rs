@@ -138,6 +138,14 @@ pub async fn load_merge(
     rules: Option<MergeRules>,
 ) -> CmdResult<MergeLoad> {
     let rules = rules.unwrap_or_default();
+    // Without a grammar picked in the rules, the files' type decides (as in Text Compare).
+    let mut options = options;
+    if options.grammar.as_deref().is_none_or(|g| g.trim().is_empty()) {
+        options.grammar = [&left, &right, &base]
+            .into_iter()
+            .find_map(|p| pcompare_core::grammar::for_path(p))
+            .map(|g| g.id.to_owned());
+    }
     crate::blocking(move || {
         let (lp, rp) = crate::with_remote(&app, [&left, &right], |r| {
             Ok((r.local_copy(&left, true)?, r.local_copy(&right, true)?))
