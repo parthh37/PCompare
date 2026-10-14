@@ -299,6 +299,7 @@ pub(crate) fn mode_label(mode: SyncMode) -> &'static str {
         SyncMode::MirrorLeftToRight => "Mirror left → right",
         SyncMode::MirrorRightToLeft => "Mirror right → left",
         SyncMode::TwoWay => "Two-way",
+        SyncMode::Custom => "Custom",
     }
 }
 
