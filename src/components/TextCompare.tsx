@@ -1289,10 +1289,15 @@ export function TextCompare({
     setBookmarks((bs) => bs.filter((b) => b.side !== side));
   };
 
-  const save = async () => {
+  /** Whether `side` holds unsaved edits that can be written back to its file. */
+  const sideSavable = (side: Side) =>
+    !!docs && isDirty(docs[side]) && !readOnly[side] && !docs[side].memory;
+
+  /** Saves `only` that side, or every modified side when omitted. */
+  const save = async (only?: Side) => {
     const current = docs;
     if (!current || saving) return;
-    const sides = SIDES.filter((s) => isDirty(current[s]) && !readOnly[s] && !current[s].memory);
+    const sides = (only ? [only] : SIDES).filter((s) => sideSavable(s));
     if (!sides.length) return;
     setSaving(true);
     setError(null);
@@ -2087,9 +2092,19 @@ export function TextCompare({
       );
   // araxis:text-view end
 
-  /** "Clipboard" button per side, plus the way back to the file while clipboard text is shown. */
+  /** Per-side "Save", "Clipboard" button, plus the way back to the file while clipboard text is shown. */
   const clipControls = (side: Side) => (
     <span className="tc-clip">
+      {!memory[side] && !readOnly[side] && (
+        <button
+          className="tc-mini"
+          onClick={() => save(side)}
+          disabled={!sideSavable(side) || saving}
+          title={`Save the ${side} file only`}
+        >
+          <Save size={11} /> Save
+        </button>
+      )}
       {memory[side] && (
         <button
           className="tc-mini"
@@ -2136,7 +2151,7 @@ export function TextCompare({
   );
 
   const stats = diff?.stats;
-  const canSave = !!docs && SIDES.some((s) => isDirty(docs[s]) && !readOnly[s] && !docs[s].memory);
+  const canSave = SIDES.some(sideSavable);
   const allReadOnly = readOnly.left && readOnly.right;
   const hasHunk = fresh && hunkIdx >= 0 && hunkIdx < hunks.length;
   // araxis:text-view — Ln/Col of the caret (the line editor's caret, else the caret line).
@@ -2335,9 +2350,9 @@ export function TextCompare({
           <Redo2 size={14} />
         </button>
         <button
-          onClick={save}
+          onClick={() => save()}
           disabled={!canSave || saving}
-          title={allReadOnly ? READ_ONLY_HINT : "Save modified files (Ctrl+S)"}
+          title={allReadOnly ? READ_ONLY_HINT : "Save all modified files (Ctrl+S)"}
         >
           <Save size={14} /> {saving ? "Saving…" : "Save"}
         </button>
