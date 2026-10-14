@@ -14,7 +14,7 @@ use std::time::{Duration, Instant};
 
 use pcompare_core::folder::{
     self, ChecksumCache, ContentMethod, ContentVerdict, FolderCompareOptions, FolderCompareResult,
-    FolderLevel, ScanControl, ScanProgress,
+    FolderLevel, FolderScan, ScanControl, ScanProgress,
 };
 use serde::Serialize;
 use pcompare_core::text::TextDiffOptions;
@@ -116,12 +116,79 @@ impl Drop for RunGuard {
     }
 }
 
+/// Listed trees kept for restaging; the oldest go beyond this many (each
+/// holds its folders' listings in memory).
+const MAX_SCANS: usize = 8;
+
+/// A comparison's resolved sides and listed tree.
+struct ScanSession {
+    left: String,
+    right: String,
+    expand: bool,
+    sides: (archive::FolderSide, archive::FolderSide),
+    scan: FolderScan,
+}
+
+/// Kept scans by the client's scan id, least recently used first.
+#[derive(Default)]
+struct FolderScans(Mutex<Vec<(String, Arc<ScanSession>)>>);
+
+impl FolderScans {
+    fn list(&self) -> MutexGuard<'_, Vec<(String, Arc<ScanSession>)>> {
+        self.0.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    fn take(&self, id: &str) -> Option<Arc<ScanSession>> {
+        let mut list = self.list();
+        let at = list.iter().position(|(key, _)| key == id)?;
+        let entry = list.remove(at);
+        let session = entry.1.clone();
+        list.push(entry);
+        Some(session)
+    }
+
+    fn put(&self, id: String, session: Arc<ScanSession>) {
+        let mut list = self.list();
+        list.retain(|(key, _)| *key != id);
+        list.push((id, session));
+        let excess = list.len().saturating_sub(MAX_SCANS);
+        list.drain(..excess);
+    }
+
+    fn forget(&self, id: &str) {
+        self.list().retain(|(key, _)| key != id);
+    }
+}
+
+fn scans(app: &AppHandle) -> tauri::State<'_, FolderScans> {
+    if app.try_state::<FolderScans>().is_none() {
+        app.manage(FolderScans::default());
+    }
+    app.state::<FolderScans>()
+}
+
+/// What a comparison command was asked for.
+struct Request {
+    left: String,
+    right: String,
+    options: FolderCompareOptions,
+    run_key: Option<String>,
+    expand: bool,
+    stream: bool,
+    /// Keep the listed tree under this id (and report filtered rows).
+    scan_id: Option<String>,
+    /// Walk folders the filters leave out, so their contents show.
+    show_filtered: bool,
+}
+
 /// Compares two folders (either may be a `remote://` path or empty),
 /// streaming [`ScanUpdate`]s over `on_progress`. Pass a `run_key` to make
 /// the run cancellable with [`compare_folders_cancel`]. With `stream`, rows
 /// arrive as [`FolderLevel`]s on the channel and the returned result has no
 /// `entries` (its stats are still complete); the channel's `end` message
-/// follows the last level.
+/// follows the last level. With a `scan_id`, the folders are listed afresh
+/// and kept for [`restage_folders`], and rows the filters leave out are
+/// reported too, marked (their folders walked with `show_filtered`).
 #[tauri::command]
 #[allow(clippy::too_many_arguments)]
 pub async fn compare_folders(
@@ -133,24 +200,106 @@ pub async fn compare_folders(
     on_progress: Channel<ScanUpdate>,
     expand_archives: Option<bool>, // bc5:archives
     stream: Option<bool>,
+    scan_id: Option<String>,
+    show_filtered: Option<bool>,
 ) -> CmdResult<FolderCompareResult> {
-    let guard = run_key.map(|key| RunGuard::new(&app, key));
-    let stream = stream.unwrap_or(false);
+    let request = Request {
+        left,
+        right,
+        options,
+        run_key,
+        expand: expand_archives.unwrap_or(false),
+        stream: stream.unwrap_or(false),
+        scan_id,
+        show_filtered: show_filtered.unwrap_or(false),
+    };
+    run(app, request, on_progress, false).await
+}
+
+/// [`compare_folders`] on the tree a scan id kept: only the stages the
+/// options changed since its last run are redone (see
+/// [`folder::CompareNeeds`], reported in the result's `needs`), so filters,
+/// alignment and comparison criteria apply without reading any folder
+/// again. Falls back to a fresh listing when the scan is gone or was of
+/// other folders.
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+pub async fn restage_folders(
+    app: AppHandle,
+    left: String,
+    right: String,
+    options: FolderCompareOptions,
+    scan_id: String,
+    run_key: Option<String>,
+    on_progress: Channel<ScanUpdate>,
+    expand_archives: Option<bool>,
+    stream: Option<bool>,
+    show_filtered: Option<bool>,
+) -> CmdResult<FolderCompareResult> {
+    let request = Request {
+        left,
+        right,
+        options,
+        run_key,
+        expand: expand_archives.unwrap_or(false),
+        stream: stream.unwrap_or(false),
+        scan_id: Some(scan_id),
+        show_filtered: show_filtered.unwrap_or(false),
+    };
+    run(app, request, on_progress, true).await
+}
+
+/// Drops a kept tree (its view closed or moved to other folders).
+#[tauri::command]
+pub fn forget_folder_scan(app: AppHandle, scan_id: String) {
+    scans(&app).forget(&scan_id);
+}
+
+async fn run(
+    app: AppHandle,
+    req: Request,
+    on_progress: Channel<ScanUpdate>,
+    restage: bool,
+) -> CmdResult<FolderCompareResult> {
+    let guard = req.run_key.clone().map(|key| RunGuard::new(&app, key));
     blocking(move || {
+        let (left, right, expand, stream) = (&req.left, &req.right, req.expand, req.stream);
         // Sending under the lock keeps messages in report order: a folder's
         // "listed" level must not be overtaken by its "complete" one.
         let outbox = Mutex::new(Outbox::default());
         let outbox_lock = || outbox.lock().unwrap_or_else(|e| e.into_inner());
-        let res = with_remote(&app, [&left, &right], |r| {
-            // bc5:archives — sides resolve in archive.rs: folders, archive /
-            // snapshot / svn: sides, archives in the tree optionally expanded,
-            // and a side with no folder chosen yet as empty.
-            let expand = expand_archives.unwrap_or(false);
-            let (ls, rs) = (archive::folder_side(r, &left, expand)?, archive::folder_side(r, &right, expand)?);
-            let options = archive::options_for_sides(&options, &ls, &rs);
+        let res = with_remote(&app, [left, right], |r| {
+            let kept = match &req.scan_id {
+                Some(id) if restage => scans(&app)
+                    .take(id)
+                    .filter(|s| s.left == *left && s.right == *right && s.expand == expand),
+                _ => None,
+            };
+            let session = match kept {
+                Some(session) => session,
+                None => {
+                    // bc5:archives — sides resolve in archive.rs: folders, archive /
+                    // snapshot / svn: sides, archives in the tree optionally expanded,
+                    // and a side with no folder chosen yet as empty.
+                    let sides = (archive::folder_side(r, left, expand)?, archive::folder_side(r, right, expand)?);
+                    let session = Arc::new(ScanSession {
+                        left: left.clone(),
+                        right: right.clone(),
+                        expand,
+                        sides,
+                        scan: FolderScan::new(),
+                    });
+                    if let Some(id) = &req.scan_id {
+                        scans(&app).put(id.clone(), session.clone());
+                    }
+                    session
+                }
+            };
+            let (ls, rs) = &session.sides;
+            let options = archive::options_for_sides(&req.options, ls, rs);
             let (lfs, lpath, rfs, rpath) = (&ls.fs, &ls.path, &rs.fs, &rs.path);
-            let cache = sync::checksum_cache(&app, [archive::cache_root(&left), archive::cache_root(&right)]);
-            let stored = archive::stored_checksums(&ls, &rs, cache.as_ref().map(|c| c as &dyn ChecksumCache));
+            let cache = sync::checksum_cache(&app, [archive::cache_root(left), archive::cache_root(right)]);
+            let stored = archive::stored_checksums(ls, rs, cache.as_ref().map(|c| c as &dyn ChecksumCache));
             let report = |p: &ScanProgress| {
                 let mut out = outbox_lock();
                 out.update.progress = Some(p.clone());
@@ -170,10 +319,22 @@ pub async fn compare_folders(
                 cancel: guard.as_ref().map(|g| &*g.flag),
                 progress: Some(&report),
                 levels: stream.then_some(&levels as &(dyn Fn(FolderLevel) + Sync)),
+                // Without a kept scan, nothing would outlive this run.
+                scan: req.scan_id.is_some().then_some(&session.scan),
+                keep_filtered: req.scan_id.is_some(),
+                expand_filtered: req.show_filtered,
             };
             let mut res = folder::compare_folders_controlled(
                 &**lfs, lpath, &**rfs, rpath, &options, control,
-            )?;
+            )
+            .inspect_err(|e| {
+                // A tree that failed to compare may be what's broken (a
+                // dropped connection): list afresh next time. A cancelled
+                // one is fine; what it listed stays good.
+                if let Some(id) = req.scan_id.as_ref().filter(|_| e.to_string() != folder::CANCELLED) {
+                    scans(&app).forget(id);
+                }
+            })?;
             if let Some(cache) = cache {
                 let _ = cache.flush();
             }

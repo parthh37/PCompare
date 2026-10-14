@@ -2,7 +2,7 @@
 
 use pcompare_core::folder::FolderCompareOptions;
 use pcompare_sync::exec::{Disposal, ExecOptions};
-use pcompare_sync::sync::{ConflictPolicy, SyncMode};
+use pcompare_sync::sync::{ConflictPolicy, PlanRules, SyncMatrix, SyncMode};
 use serde::{Deserialize, Serialize};
 
 use crate::trigger::Trigger;
@@ -23,6 +23,15 @@ pub struct SyncTask {
     pub left: String,
     pub right: String,
     pub mode: SyncMode,
+    /// One action per category (bc5:sync-matrix). Planning uses it only in
+    /// [`SyncMode::Custom`]; for the fixed modes it is kept equal to their
+    /// preset ([`normalize_task`]) so the file says what the task does.
+    /// Format 1 files have none; [`migrate_task`] fills it in.
+    #[serde(default)]
+    pub matrix: SyncMatrix,
+    /// Don't create orphan folders that hold no files.
+    #[serde(default)]
+    pub skip_empty_folders: bool,
     #[serde(default)]
     pub conflicts: ConflictPolicy,
     /// How the two sides are compared (filters, content method...). The
@@ -55,6 +64,38 @@ pub struct SyncTask {
 
 fn yes() -> bool {
     true
+}
+
+impl SyncTask {
+    /// The matrix the task plans with.
+    pub fn effective_matrix(&self) -> SyncMatrix {
+        SyncMatrix::for_mode(self.mode, &self.matrix)
+    }
+
+    /// What planning needs besides the folders, compare options and conflict policy.
+    pub fn plan_rules(&self) -> PlanRules {
+        PlanRules {
+            matrix: self.matrix,
+            skip_empty_folders: self.skip_empty_folders,
+            ..PlanRules::default()
+        }
+    }
+}
+
+/// Brings a task read from an older automation file up to date. Format 1
+/// had no matrix: a fixed mode's preset stands in for it.
+pub fn migrate_task(task: &mut SyncTask, from_version: u32) {
+    if from_version < 2 {
+        task.matrix = SyncMatrix::preset(task.mode);
+    }
+}
+
+/// Keeps a fixed mode's stored matrix equal to its preset, so switching a
+/// task from Custom to a preset doesn't leave a stale table behind.
+pub fn normalize_task(task: &mut SyncTask) {
+    if task.mode != SyncMode::Custom {
+        task.matrix = SyncMatrix::preset(task.mode);
+    }
 }
 
 /// Guards that stop an unattended run from doing something drastic. A run
@@ -270,10 +311,28 @@ pub fn validate_task(task: &SyncTask, other_names: &[String]) -> Vec<TaskIssue> 
             }
         }
     }
-    let deletes = matches!(
-        task.mode,
-        SyncMode::MirrorLeftToRight | SyncMode::MirrorRightToLeft | SyncMode::TwoWay
-    );
+    let matrix = task.effective_matrix();
+    let deletes = matrix.deletes();
+    if task.mode == SyncMode::Custom {
+        if !matrix.copies_to(true) && !matrix.copies_to(false) && !deletes {
+            warn(
+                "options",
+                "The custom sync leaves every kind of item alone, so runs never change anything.".into(),
+            );
+        }
+        if matrix.prompt_cells() > 0 {
+            warn(
+                "options",
+                "Some categories are set to Prompt: unattended runs leave those items alone and report them as conflicts.".into(),
+            );
+        }
+        if !matrix.invalid_cells().is_empty() {
+            warn(
+                "options",
+                "Some categories name an action that can't apply to them (such as copying an item from the side that doesn't have it); those items are left alone.".into(),
+            );
+        }
+    }
     if deletes && task.exec.disposal == Disposal::Permanent {
         warn(
             "options",
@@ -337,6 +396,19 @@ pub(crate) fn watched_sides(task: &SyncTask) -> Vec<(&'static str, &str)> {
         SyncMode::UpdateLeftToRight | SyncMode::MirrorLeftToRight => vec![left],
         SyncMode::UpdateRightToLeft | SyncMode::MirrorRightToLeft => vec![right],
         SyncMode::UpdateBoth | SyncMode::TwoWay => vec![left, right],
+        SyncMode::Custom => {
+            // A side matters when changes there lead to copies or (via the
+            // baseline) to deletions on the other side.
+            use pcompare_sync::sync::SyncAction::{DeleteLeft, DeleteRight};
+            let m = &task.matrix;
+            let from_left = m.copies_to(true) || m.left_deleted == DeleteRight;
+            let from_right = m.copies_to(false) || m.right_deleted == DeleteLeft;
+            match (from_left, from_right) {
+                (true, false) => vec![left],
+                (false, true) => vec![right],
+                _ => vec![left, right],
+            }
+        }
     }
 }
 

@@ -44,7 +44,9 @@ import {
 import { COMPARE_PRESETS, type ComparePreset } from "../lib/folderSettings";
 import type { ConflictPolicy, SyncMode } from "../lib/syncApi";
 import "./Automation.css";
-import { CONFLICT_POLICIES, MODES } from "./FolderSync";
+import { CONFLICT_POLICIES, MODES, modeLabel } from "./FolderSync";
+import { SyncMatrixEditor } from "./SyncMatrixEditor"; // bc5:sync-matrix
+import { matrixFor } from "../lib/syncMatrix"; // bc5:sync-matrix
 import { Modal } from "./Modal";
 import { ChannelIcon, channelSummary } from "./NotificationChannelsDialog";
 import { PathField } from "./PathField";
@@ -351,7 +353,10 @@ type TabProps = { task: SyncTask; set: (patch: Partial<SyncTask>) => void };
 
 function GeneralTab({ task, set }: TabProps) {
   const mode = MODES.find((m) => m.value === task.mode) ?? MODES[0];
-  const showConflicts = task.mode === "twoWay" || task.mode === "updateBoth";
+  const showConflicts = task.mode === "twoWay" || task.mode === "updateBoth" || task.mode === "custom";
+  // bc5:sync-matrix — Custom starts from the mode in use (saving resets a fixed mode's matrix to its preset).
+  const pickMode = (next: SyncMode) =>
+    set(next === "custom" ? { mode: next, matrix: matrixFor(task.mode, task.matrix) } : { mode: next });
   return (
     <>
       <div className="field-row">
@@ -423,7 +428,7 @@ function GeneralTab({ task, set }: TabProps) {
             const Icon = m.icon;
             return (
               <label key={m.value} className={`auto-mode${task.mode === m.value ? " active" : ""}${m.deletes ? " deletes" : ""}`}>
-                <input type="radio" name="auto-mode" checked={task.mode === m.value} onChange={() => set({ mode: m.value })} />
+                <input type="radio" name="auto-mode" checked={task.mode === m.value} onChange={() => pickMode(m.value)} />
                 <span className={`sync-mode-icon${m.deletes ? " mirror" : ""}`}>
                   <Icon size={14} />
                 </span>
@@ -440,6 +445,22 @@ function GeneralTab({ task, set }: TabProps) {
             <TriangleAlert size={13} /> {MODE_DETAILS[mode.value]}
           </p>
         )}
+        {/* bc5:sync-matrix */}
+        {task.mode === "custom" && (
+          <SyncMatrixEditor
+            value={matrixFor("custom", task.matrix)}
+            onChange={(matrix) => set({ matrix })}
+            presetLabel={modeLabel}
+          />
+        )}
+        <label className="field check" title="Create folders that hold no files (or only filtered-out ones) on the other side">
+          <input
+            type="checkbox"
+            checked={!task.skipEmptyFolders}
+            onChange={(e) => set({ skipEmptyFolders: !e.target.checked })}
+          />
+          Create empty folders
+        </label>
       </div>
 
       {showConflicts && (

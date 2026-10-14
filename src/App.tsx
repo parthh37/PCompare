@@ -695,7 +695,7 @@ export default function App() {
               openTab(kind, left, right, kind === "text" ? { settings: { options: rules } } : {});
             }}
             onOpenHex={(left, right) => openTab("hex", left, right)}
-            onOpenSync={(left, right) => openTab("sync", left, right)}
+            onOpenSync={(left, right, scope) => openTab("sync", left, right, scope ? { settings: { scope } } : {})} // bc5:sync-matrix
             onEditFile={(p) => openTab("edit", p)} // bc5:editor-patch
           />
         );

@@ -4,7 +4,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type { FolderCompareOptions } from "./api";
-import type { ConflictPolicy, ExecOptions, SyncMode } from "./syncApi";
+import type { ConflictPolicy, ExecOptions, SyncMatrix, SyncMode } from "./syncApi";
 
 // ---------- triggers ----------
 export type Trigger =
@@ -75,6 +75,10 @@ export interface SyncTask {
   left: string;
   right: string;
   mode: SyncMode;
+  /** bc5:sync-matrix — used in `custom` mode; mirrors the preset otherwise. */
+  matrix?: SyncMatrix;
+  /** bc5:sync-matrix — don't create orphan folders that hold no files. */
+  skipEmptyFolders?: boolean;
   conflicts: ConflictPolicy;
   compare: FolderCompareOptions;
   exec: ExecOptions;

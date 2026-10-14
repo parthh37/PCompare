@@ -665,3 +665,54 @@
 .sync-inline-confirm > span {
   flex: 1;
 }
+
+/* bc5:sync-matrix — custom sync table, per-row actions */
+.sync-matrix {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 380px;
+}
+.sync-matrix-start {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+}
+.sync-matrix table {
+  border-collapse: collapse;
+  width: 100%;
+  font-size: 12px;
+}
+.sync-matrix th {
+  text-align: left;
+  font-weight: 600;
+  color: var(--muted);
+  padding: 4px 6px;
+  border-bottom: 1px solid var(--border);
+}
+.sync-matrix td {
+  padding: 3px 6px;
+}
+.sync-matrix td select {
+  width: 100%;
+}
+.sync-matrix select.deletes {
+  color: var(--different);
+}
+.sync-matrix small {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.sync-override {
+  margin-left: 4px;
+  color: var(--accent);
+  font-size: 11px;
+}
+.sync-actions button {
+  font-size: 12px;
+}
+.sync-row.skipped.selected {
+  background: var(--sel-bg);
+}

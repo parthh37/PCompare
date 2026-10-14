@@ -11,6 +11,13 @@ export interface LaunchOptions {
   /** Tab labels (`/title1=`, `/title2=`). */
   titleLeft: string | null;
   titleRight: string | null;
+  /** Merge base / output labels (`/title3=`, `/title4=`). */
+  titleBase?: string | null;
+  titleOutput?: string | null;
+  /** `/filters=`, `/expandall`, `/savetarget=`. */
+  filters?: string | null;
+  expandAll?: boolean;
+  saveTarget?: string | null;
   /** `/readonly`, `/lro`, `/rro`. */
   readOnlyLeft: boolean;
   readOnlyRight: boolean;
