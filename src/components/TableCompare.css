@@ -173,35 +173,6 @@
   height: 1px;
 }
 
-/* column menu */
-.tbl-menu {
-  position: fixed;
-  z-index: 20;
-  min-width: 180px;
-  padding: 4px;
-  display: flex;
-  flex-direction: column;
-  background: var(--panel-2);
-  border: 1px solid var(--border);
-  border-radius: 7px;
-  box-shadow: 0 8px 24px var(--shadow);
-}
-.tbl-menu-title {
-  padding: 3px 8px 5px;
-  font-size: 11.5px;
-  color: var(--muted);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  max-width: 260px;
-}
-.tbl-menu button {
-  justify-content: flex-start;
-  background: none;
-  border-color: transparent;
-  text-align: left;
-}
-
 /* columns dialog */
 .tbl-columns-hint {
   margin: 0 0 10px;
@@ -267,12 +238,6 @@
   color: var(--accent);
   flex: none;
 }
-.tbl-menu-sep {
-  height: 1px;
-  margin: 3px 4px;
-  background: var(--border);
-}
-
 /* status bar: alignment mode and hidden-column notice */
 .tbl-align {
   display: inline-flex;

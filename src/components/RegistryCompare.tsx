@@ -45,6 +45,8 @@ import {
   type SideEdit,
 } from "../lib/metaApi";
 import type { CompareProps } from "../lib/sessionProps";
+import { SEPARATOR, type MenuEntry, type MenuItems } from "../lib/nativeMenu";
+import { useContextMenu } from "./ContextMenu";
 import { PathField } from "./PathField";
 import { STATUS_ICON } from "./PropertyCompare";
 import { LiveConfirmDialog, RegKeyDialog, RegValueDialog, type ValueDraft } from "./RegistryEditDialogs";
@@ -167,9 +169,7 @@ interface FlatRow {
   depth: number;
 }
 
-type Menu =
-  | { kind: "key"; x: number; y: number; key: RegKeyDiff }
-  | { kind: "value"; x: number; y: number; key: RegKeyDiff; value: RegValueDiff };
+type MenuTarget = { kind: "key"; key: RegKeyDiff } | { kind: "value"; key: RegKeyDiff; value: RegValueDiff };
 
 type Dialog =
   | { kind: "value"; side: RegSide; key: RegKeyDiff; initial: ValueDraft; adding: boolean }
@@ -297,7 +297,6 @@ export function RegistryCompare({
   const dirty = history.length > 0;
   const [notice, setNotice] = useState<string | null>(null);
   const [working, setWorking] = useState<string | null>(null);
-  const [menu, setMenu] = useState<Menu | null>(null);
   const [dialog, setDialog] = useState<Dialog | null>(null);
 
   const reportDirty = useRef(onDirtyChange);
@@ -442,7 +441,6 @@ export function RegistryCompare({
 
   /** Queues a group of edits to a .reg side, or asks to apply it to a live side. */
   const commit = async (side: RegSide, group: RegEdit[], description: string) => {
-    setMenu(null);
     setDialog(null);
     if (!canEdit(side)) return;
     if (isLive(side)) {
@@ -544,7 +542,6 @@ export function RegistryCompare({
     commit(side, [{ op: "deleteValue", key: keyPath(k, side), name: v.name }], `Delete value ${valueLabel(v)}`);
 
   const editValue = (k: RegKeyDiff, v: RegValueDiff | null, side: RegSide) => {
-    setMenu(null);
     if (!canEdit(side)) return;
     const type = v ? (side === "left" ? v.leftType : v.rightType) : null;
     const text = v ? (side === "left" ? v.leftText : v.rightText) : null;
@@ -599,30 +596,91 @@ export function RegistryCompare({
     return () => window.removeEventListener("keydown", onKey);
   });
 
-  // Close the context menu on any outside press, Escape or resize.
-  useEffect(() => {
-    if (!menu) return;
-    const close = () => setMenu(null);
-    const onKey = (e: globalThis.KeyboardEvent) => e.key === "Escape" && close();
-    window.addEventListener("mousedown", close);
-    window.addEventListener("keydown", onKey);
-    window.addEventListener("resize", close);
-    return () => {
-      window.removeEventListener("mousedown", close);
-      window.removeEventListener("keydown", onKey);
-      window.removeEventListener("resize", close);
-    };
-  }, [menu]);
+  const menu = useContextMenu((target: MenuTarget): MenuItems => {
+    const k = target.key;
+    const sideItems = (make: (side: RegSide) => MenuEntry | null) => SIDES.map(make);
+    // Native menus have no tooltips, so say up front why a side's edits are greyed out.
+    const readOnly: MenuItems = SIDES.map((side) => {
+      const reason = readOnlyReason(side);
+      return reason && { heading: `${side === "left" ? "Left" : "Right"}: ${reason}` };
+    });
+    if (target.kind === "key") {
+      const either = keyOn(k, "left") || keyOn(k, "right");
+      return [
+        ...readOnly,
+        SEPARATOR,
+        { label: "Expand all under this key", disabled: !k.children.length, onClick: () => expandUnder(k) },
+        { label: "Collapse all under this key", disabled: !k.children.length, onClick: () => collapseUnder(k) },
+        SEPARATOR,
+        {
+          label: "Copy key to right  →",
+          shortcut: "Alt+→",
+          disabled: !canEdit("right") || !either,
+          onClick: () => copyKey(k, "right"),
+        },
+        {
+          label: "←  Copy key to left",
+          shortcut: "Alt+←",
+          disabled: !canEdit("left") || !either,
+          onClick: () => copyKey(k, "left"),
+        },
+        SEPARATOR,
+        ...sideItems((side) =>
+          keyOn(k, side)
+            ? { label: `Add ${side} value…`, disabled: !canEdit(side), onClick: () => editValue(k, null, side) }
+            : null,
+        ),
+        ...sideItems((side) =>
+          keyOn(k, side)
+            ? {
+                label: `Add ${side} subkey…`,
+                disabled: !canEdit(side),
+                onClick: () => setDialog({ kind: "key", side, parent: k }),
+              }
+            : null,
+        ),
+        ...sideItems((side) =>
+          keyOn(k, side)
+            ? { label: `Delete ${side} key`, disabled: !canEdit(side), onClick: () => deleteKey(k, side) }
+            : null,
+        ),
+      ];
+    }
+    const v = target.value;
+    return [
+      ...readOnly,
+      SEPARATOR,
+      ...sideItems((side) => ({
+        label: `${valueOn(v, side) ? "Edit" : "Add"} ${side} value…`,
+        disabled: !canEdit(side) || !keyOn(k, side),
+        onClick: () => editValue(k, v, side),
+      })),
+      SEPARATOR,
+      {
+        label: "Copy value to right  →",
+        shortcut: "Alt+→",
+        disabled: !canEdit("right"),
+        onClick: () => copyValue(k, v, "right"),
+      },
+      { label: "←  Copy value to left", shortcut: "Alt+←", disabled: !canEdit("left"), onClick: () => copyValue(k, v, "left") },
+      SEPARATOR,
+      ...sideItems((side) =>
+        valueOn(v, side)
+          ? { label: `Delete ${side} value`, disabled: !canEdit(side), onClick: () => deleteValue(k, v, side) }
+          : null,
+      ),
+    ];
+  });
 
   const openKeyMenu = (e: ReactMouseEvent, k: RegKeyDiff) => {
     e.preventDefault();
     setSelected(k.id);
-    setMenu({ kind: "key", x: e.clientX, y: e.clientY, key: k });
+    menu.open(e, { kind: "key", key: k });
   };
   const openValueMenu = (e: ReactMouseEvent, k: RegKeyDiff, v: RegValueDiff) => {
     e.preventDefault();
     setSelectedValue(v.name.toLowerCase());
-    setMenu({ kind: "value", x: e.clientX, y: e.clientY, key: k, value: v });
+    menu.open(e, { kind: "value", key: k, value: v });
   };
 
   // Arrow-key navigation inside the key tree.
@@ -737,104 +795,6 @@ export function RegistryCompare({
         </div>
         {cell("left")}
         {cell("right")}
-      </div>
-    );
-  };
-
-  const renderMenu = () => {
-    if (!menu) return null;
-    const k = menu.key;
-    const item = (label: string, onClick: () => void, opts: { disabled?: boolean; title?: string } = {}) => (
-      <button key={label} onClick={onClick} disabled={opts.disabled} title={opts.title}>
-        {label}
-      </button>
-    );
-    const sideItems = (make: (side: RegSide) => ReturnType<typeof item> | null) =>
-      SIDES.map(make).filter((x) => x !== null);
-    let body;
-    if (menu.kind === "key") {
-      body = (
-        <>
-          {item("Expand all under this key", () => (expandUnder(k), setMenu(null)), { disabled: !k.children.length })}
-          {item("Collapse all under this key", () => (collapseUnder(k), setMenu(null)), {
-            disabled: !k.children.length,
-          })}
-          <hr />
-          {item("Copy key to right  →", () => copyKey(k, "right"), {
-            disabled: !canEdit("right") || (!keyOn(k, "left") && !keyOn(k, "right")),
-            title: readOnlyReason("right") ?? "Make the right key a copy of the left one, recursively (Alt+Right)",
-          })}
-          {item("←  Copy key to left", () => copyKey(k, "left"), {
-            disabled: !canEdit("left") || (!keyOn(k, "left") && !keyOn(k, "right")),
-            title: readOnlyReason("left") ?? "Make the left key a copy of the right one, recursively (Alt+Left)",
-          })}
-          <hr />
-          {sideItems((side) =>
-            keyOn(k, side)
-              ? item(`Add ${side} value…`, () => editValue(k, null, side), {
-                  disabled: !canEdit(side),
-                  title: readOnlyReason(side) ?? undefined,
-                })
-              : null,
-          )}
-          {sideItems((side) =>
-            keyOn(k, side)
-              ? item(
-                  `Add ${side} subkey…`,
-                  () => (setMenu(null), setDialog({ kind: "key", side, parent: k })),
-                  { disabled: !canEdit(side), title: readOnlyReason(side) ?? undefined },
-                )
-              : null,
-          )}
-          {sideItems((side) =>
-            keyOn(k, side)
-              ? item(`Delete ${side} key`, () => deleteKey(k, side), {
-                  disabled: !canEdit(side),
-                  title: readOnlyReason(side) ?? "Delete this key and everything under it",
-                })
-              : null,
-          )}
-        </>
-      );
-    } else {
-      const v = menu.value;
-      body = (
-        <>
-          {sideItems((side) =>
-            item(`${valueOn(v, side) ? "Edit" : "Add"} ${side} value…`, () => editValue(k, v, side), {
-              disabled: !canEdit(side) || !keyOn(k, side),
-              title: readOnlyReason(side) ?? undefined,
-            }),
-          )}
-          <hr />
-          {item("Copy value to right  →", () => copyValue(k, v, "right"), {
-            disabled: !canEdit("right"),
-            title: readOnlyReason("right") ?? "Alt+Right",
-          })}
-          {item("←  Copy value to left", () => copyValue(k, v, "left"), {
-            disabled: !canEdit("left"),
-            title: readOnlyReason("left") ?? "Alt+Left",
-          })}
-          <hr />
-          {sideItems((side) =>
-            valueOn(v, side)
-              ? item(`Delete ${side} value`, () => deleteValue(k, v, side), {
-                  disabled: !canEdit(side),
-                  title: readOnlyReason(side) ?? undefined,
-                })
-              : null,
-          )}
-        </>
-      );
-    }
-    return (
-      <div
-        className="ctx-menu"
-        style={{ left: Math.min(menu.x, window.innerWidth - 240), top: Math.min(menu.y, window.innerHeight - 320) }}
-        onMouseDown={(e) => e.stopPropagation()}
-        role="menu"
-      >
-        {body}
       </div>
     );
   };
@@ -1024,7 +984,7 @@ export function RegistryCompare({
         )}
       </div>
 
-      {renderMenu()}
+      {menu.element}
       {renderDialog()}
 
       <div className="statusbar">
