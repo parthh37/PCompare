@@ -37,6 +37,8 @@ pub struct DropboxCore {
     pub info: ServiceInfo,
     pub capability: Capability,
     pub root: String,
+    /// PCompare patch: `Dropbox-API-Path-Root` sent with every API call.
+    pub path_root: Option<http::HeaderValue>,
     pub signer: Arc<Mutex<DropboxSigner>>,
 }
 
@@ -57,6 +59,12 @@ impl DropboxCore {
     }
 
     pub async fn sign<T>(&self, ctx: &OperationContext, req: &mut Request<T>) -> Result<()> {
+        // PCompare patch: every API call is signed, so the namespace header
+        // added here reaches all of them.
+        if let Some(path_root) = &self.path_root {
+            req.headers_mut()
+                .insert("Dropbox-API-Path-Root", path_root.clone());
+        }
         let mut signer = self.signer.lock().await;
 
         // Access token is valid, use it directly.
@@ -555,6 +563,8 @@ pub(crate) fn parse_error(ctx: ErrorContext, resp: Response<Buffer>) -> Error {
     let (mut kind, mut retryable) = match parts.status {
         StatusCode::NOT_FOUND => (ErrorKind::NotFound, false),
         StatusCode::FORBIDDEN => (ErrorKind::PermissionDenied, false),
+        // PCompare patch: bad, expired or under-scoped token.
+        StatusCode::UNAUTHORIZED => (ErrorKind::PermissionDenied, false),
         StatusCode::TOO_MANY_REQUESTS => (ErrorKind::RateLimited, true),
         StatusCode::INTERNAL_SERVER_ERROR
         | StatusCode::BAD_GATEWAY
@@ -563,9 +573,11 @@ pub(crate) fn parse_error(ctx: ErrorContext, resp: Response<Buffer>) -> Error {
         _ => (ErrorKind::Unexpected, false),
     };
 
-    let (message, dropbox_err) = serde_json::from_slice::<DropboxErrorResponse>(&bs)
-        .map(|dropbox_err| (format!("{dropbox_err:?}"), Some(dropbox_err)))
-        .unwrap_or_else(|_| (String::from_utf8_lossy(&bs).into_owned(), None));
+    // PCompare patch: keep the whole body as the message. Dropbox puts the
+    // useful part (e.g. `required_scope` of a `missing_scope` error) beside
+    // `error_summary`, which is all the upstream message kept.
+    let message = String::from_utf8_lossy(&bs).into_owned();
+    let dropbox_err = serde_json::from_slice::<DropboxErrorResponse>(&bs).ok();
 
     if let Some(dropbox_err) = dropbox_err {
         (kind, retryable) =

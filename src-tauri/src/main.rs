@@ -310,6 +310,25 @@ async fn test_profile(app: AppHandle, input: ProfileInput) -> CmdResult<String> 
     blocking(move || state(&app).remote.test(&input)).await
 }
 
+/// Folders in `path` for the Root folder picker, using unsaved form values.
+#[tauri::command]
+async fn browse_profile(app: AppHandle, input: ProfileInput, path: String) -> CmdResult<Vec<RemoteEntry>> {
+    blocking(move || {
+        state(&app).remote.browse(&input, &path).map(|entries| {
+            entries
+                .into_iter()
+                .map(|e| RemoteEntry {
+                    name: e.name,
+                    is_dir: true,
+                    size: 0,
+                    modified_ms: e.meta.modified_ms,
+                })
+                .collect()
+        })
+    })
+    .await
+}
+
 #[tauri::command]
 async fn sign_in_profile(app: AppHandle, id: String) -> CmdResult<Profile> {
     blocking(move || {
@@ -480,6 +499,7 @@ fn main() {
             save_profile,
             delete_profile,
             test_profile,
+            browse_profile,
             sign_in_profile,
             cancel_sign_in,
             open_provider_console,

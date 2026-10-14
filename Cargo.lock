@@ -4791,8 +4791,6 @@ dependencies = [
 [[package]]
 name = "opendal-service-dropbox"
 version = "0.59.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2b0c4348ec4a7239fd195cceebae237a0de07ef3666206d38d6619c095ed6db9"
 dependencies = [
  "asyncband",
  "bytes",

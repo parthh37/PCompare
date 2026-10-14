@@ -109,6 +109,22 @@ impl Builder for DropboxBuilder {
 
     fn build(self) -> Result<impl Service> {
         let root = normalize_root(&self.config.root.unwrap_or_default());
+        // PCompare patch: see DropboxConfig::root_namespace_id.
+        let path_root = match self.config.root_namespace_id.as_deref().filter(|id| !id.is_empty()) {
+            Some(id) if id.chars().all(|c| c.is_ascii_digit()) => Some(
+                format!(r#"{{".tag":"root","root":"{id}"}}"#)
+                    .parse()
+                    .expect("digits make a valid header value"),
+            ),
+            Some(id) => {
+                return Err(Error::new(
+                    ErrorKind::ConfigInvalid,
+                    format!("root_namespace_id must be numeric, got `{id}`"),
+                )
+                .with_context("service", DROPBOX_SCHEME));
+            }
+            None => None,
+        };
 
         let signer = match (self.config.access_token, self.config.refresh_token) {
             (Some(access_token), None) => DropboxSigner {
@@ -183,6 +199,7 @@ impl Builder for DropboxBuilder {
                     ..Default::default()
                 },
                 root,
+                path_root,
                 signer: Arc::new(Mutex::new(signer)),
             }),
         })
