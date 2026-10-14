@@ -157,3 +157,56 @@
   border-color: var(--accent);
   box-shadow: 0 0 0 2px var(--accent-border);
 }
+
+/* ---------- status detail, combination folders, legend ---------- */
+.folder-mix {
+  vertical-align: -2px;
+  color: var(--text);
+}
+/* Same contents, quick tests differ: a same row, marked by its clock glyph. */
+.d-sameDiff .fcell.status {
+  color: var(--unimportant);
+}
+.d-unknown .fcell.status {
+  color: var(--faint, var(--muted));
+}
+.fc-legend {
+  position: fixed;
+  z-index: 50;
+  width: 330px;
+  padding: 8px 12px 10px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+  font-size: 12.5px;
+}
+.fc-legend h4 {
+  margin: 6px 0 4px;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+}
+.fc-legend .fc-legend-row {
+  display: flex;
+  align-items: center;
+  height: 22px;
+  cursor: default;
+}
+.fc-legend .fc-legend-row:hover {
+  background: none;
+}
+.fc-legend .fcell.status {
+  width: 28px;
+  flex: none;
+  padding: 0;
+}
+.fc-legend .d-rightNewer .fcell.name {
+  font-weight: 650;
+}
+.fc-legend p {
+  margin: 8px 0 0;
+  line-height: 1.4;
+}
