@@ -64,7 +64,7 @@ import {
 import { basename } from "../lib/format";
 import { matches, shortcutLabel } from "../lib/keymap";
 import { mergeApi } from "../lib/mergeApi";
-import type { CompareProps } from "../lib/sessionProps";
+import { LAUNCH_READ_ONLY_HINT, type CompareProps, type ReadOnlySides } from "../lib/sessionProps";
 import { DbConnectionDialog, describeConfig, EngineBadge, SQLITE_FILTERS } from "./DbConnectionDialog";
 import { Modal } from "./Modal";
 import { VirtualList } from "./VirtualList";
@@ -167,7 +167,14 @@ function restore(s: Partial<DbSettings> | undefined): DbSettings {
   };
 }
 
-export function DbCompare({ left, right, onPathsChange, settings, onSettingsChange }: CompareProps<DbSettings>) {
+export function DbCompare({
+  left,
+  right,
+  onPathsChange,
+  settings,
+  onSettingsChange,
+  readOnlySides, // bc5:reports-script
+}: CompareProps<DbSettings>) {
   const [initial] = useState(() => restore(settings));
   const [mode, setMode] = useState<Mode>(initial.mode);
   const [schemaFilter, setSchemaFilter] = useState<SchemaFilter>(initial.schemaFilter);
@@ -828,6 +835,7 @@ export function DbCompare({ left, right, onPathsChange, settings, onSettingsChan
         <ScriptDialog
           mode={scriptFor}
           paths={{ left, right }}
+          readOnly={readOnlySides}
           labels={labels}
           sides={{ left: result.left, right: result.right }}
           schemaOptions={schemaOptions}
@@ -1551,6 +1559,7 @@ function KeyDialog({
 function ScriptDialog({
   mode,
   paths,
+  readOnly,
   labels,
   sides,
   schemaOptions,
@@ -1563,6 +1572,8 @@ function ScriptDialog({
 }: {
   mode: Mode;
   paths: Record<Side, string>;
+  /** bc5:reports-script — `/lro`, `/rro`: scripts never run on that side. */
+  readOnly?: ReadOnlySides;
   labels: Record<Side, string>;
   sides: Record<Side, SideInfo>;
   schemaOptions: SchemaCompareOptions;
@@ -1579,6 +1590,7 @@ function ScriptDialog({
   const [confirming, setConfirming] = useState(false);
   const [copied, setCopied] = useState(false);
   const target: Side = options.direction === "leftToRight" ? "right" : "left";
+  const targetLocked = !!readOnly?.[target]; // bc5:reports-script
   const targetEngine = sides[target].engine;
   const set = (patch: Partial<ScriptOptions>) => {
     setConfirming(false);
@@ -1635,7 +1647,7 @@ function ScriptDialog({
   };
 
   const run = async () => {
-    if (!script) return;
+    if (!script || targetLocked) return;
     setBusy("run");
     setError(null);
     try {
@@ -1695,7 +1707,12 @@ function ScriptDialog({
             </button>
             <span className="spacer" />
             <button onClick={onClose}>Close</button>
-            <button className="primary" onClick={() => setConfirming(true)} disabled={!script || !count || busy !== null}>
+            <button
+              className="primary"
+              onClick={() => setConfirming(true)}
+              disabled={!script || !count || busy !== null || targetLocked}
+              title={targetLocked ? LAUNCH_READ_ONLY_HINT : undefined}
+            >
               <Play size={14} /> Run on {labels[target]}…
             </button>
           </>

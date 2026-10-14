@@ -115,6 +115,7 @@ import { TextLinkedView } from "./TextLinkedView";
 // araxis:text-review — bookmark comments, statistics, comparison archives.
 import { useTextReview } from "./TextReview";
 // araxis:text-review end
+import type { PaneTitles } from "../lib/sessionProps"; // bc5:reports-script
 import "./TextCompare.css";
 
 const ROW_HEIGHT = 20;
@@ -292,6 +293,10 @@ interface Props {
   onOpenEditor?: (path: string) => void;
   /** bc5:reports-script — sides opened read-only from the command line (`/readonly`). */
   readOnlySides?: { left: boolean; right: boolean };
+  /** bc5:reports-script — `/savetarget=`: Save writes the edited side here instead of over its file. */
+  saveTarget?: string;
+  /** bc5:reports-script — `/title1=`, `/title2=`: shown above each side. */
+  titles?: PaneTitles;
 }
 
 /** One side's file as edited in memory. */
@@ -409,6 +414,8 @@ export function TextCompare({
   onDirtyChange,
   onOpenEditor, // bc5:editor-patch
   readOnlySides, // bc5:reports-script
+  saveTarget,
+  titles,
 }: Props) {
   const [options, setOptions] = useState<TextDiffOptions>({ ...DEFAULT_TEXT_OPTIONS, ...settings?.options });
   const [mode, setMode] = useState<ViewMode>(settings?.mode ?? "all");
@@ -615,6 +622,9 @@ export function TextCompare({
     left: (!memory.left || !!readOnlySides?.left) && (isRemote(left) || !!docs?.left.conversion?.readOnly || !!readOnlySides?.left), // bc5:reports-script
     right: (!memory.right || !!readOnlySides?.right) && (isRemote(right) || !!docs?.right.conversion?.readOnly || !!readOnlySides?.right),
   };
+  // bc5:reports-script — `/savetarget=` takes the editable side: the right one
+  // (a version control system's working copy) unless only the left is editable.
+  const saveTargetSide: Side | null = !saveTarget ? null : !readOnly.right ? "right" : !readOnly.left ? "left" : null;
   const dirty = !!docs && SIDES.some((s) => isDirty(docs[s]) && !docs[s].memory);
   const reportDirty = useRef(onDirtyChange);
   reportDirty.current = onDirtyChange;
@@ -1402,13 +1412,15 @@ export function TextCompare({
       for (const s of sides) {
         const doc = current[s];
         // bc5:text-engine — backups per the rules dialog setting.
+        const target = s === saveTargetSide && saveTarget ? saveTarget : doc.info.path; // bc5:reports-script
         const { info, backup } = await textApi.saveTextFile(
-          doc.info.path,
+          target,
           joinLines(doc.lines, doc.trailingNewline),
           doc.format,
           loadBackups(),
         );
         if (backup) setNotice(`Previous version backed up to ${backup}`);
+        else if (target !== doc.info.path) setNotice(`Saved the ${s} side to ${target}`);
         // Edits made while saving stay dirty: only the saved array is marked clean.
         setDocs((d) => d && { ...d, [s]: { ...d[s], info: { ...info, path: doc.info.path }, saved: doc.lines } });
         setEdited((m) => m.filter((b) => b.side !== s)); // araxis:text-view araxis:text-view end
@@ -2185,7 +2197,7 @@ export function TextCompare({
           className="tc-mini"
           onClick={() => save(side)}
           disabled={!sideSavable(side) || saving}
-          title={`Save the ${side} file only`}
+          title={side === saveTargetSide ? `Save the ${side} side to ${saveTarget}` : `Save the ${side} file only`}
         >
           <Save size={11} /> Save
         </button>
@@ -2427,7 +2439,13 @@ export function TextCompare({
         <button
           onClick={() => save()}
           disabled={!canSave || saving}
-          title={allReadOnly ? READ_ONLY_HINT : "Save all modified files (Ctrl+S)"}
+          title={
+            allReadOnly
+              ? READ_ONLY_HINT
+              : saveTargetSide
+                ? `Save all modified files (Ctrl+S); the ${saveTargetSide} side is written to ${saveTarget}`
+                : "Save all modified files (Ctrl+S)"
+          }
         >
           <Save size={14} /> {saving ? "Saving…" : "Save"}
         </button>
@@ -2490,6 +2508,12 @@ export function TextCompare({
           {SIDES.map((side) => (
             // bc5:text-engine — per-side encoding picker
             <span key={side} className="tc-side-info">
+              {titles?.[side] && (
+                // bc5:reports-script — `/title1=`, `/title2=`
+                <b className="tc-title" title={docs[side].info.path}>
+                  {titles[side]}
+                </b>
+              )}
               <FileInfo doc={docs[side]} readOnly={readOnly[side]} />
               {!docs[side].binary && !docs[side].memory && !docs[side].conversion?.convertedFrom /* bc5:converters */ && (
                 <TextEncodingPicker

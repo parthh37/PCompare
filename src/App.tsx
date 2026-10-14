@@ -47,7 +47,8 @@ import "./lib/theme";
 import { workspaceApi, type RecentSession, type Workspace, type WorkspaceTab } from "./lib/workspaceApi";
 import { openExternalIfAlways } from "./lib/convertApi"; // bc5:converters
 import { isContainerPath } from "./lib/archiveApi"; // bc5:archives
-import { toLaunchOptions, type LaunchOptions } from "./lib/cliApi"; // bc5:reports-script
+import { folderFilterSettings, toLaunchOptions, type LaunchOptions } from "./lib/cliApi"; // bc5:reports-script
+import type { PaneTitles, ReadOnlySides } from "./lib/sessionProps"; // bc5:reports-script
 import { vcsApi } from "./lib/vcsApi"; // araxis:vcs
 // araxis:text-review — comparison archives (.pcmpz) open as read-only review tabs.
 import { ReviewArchiveView } from "./components/ReviewArchiveView";
@@ -75,9 +76,13 @@ export interface Tab {
   /** Set once the tab is backed by a saved session. */
   sessionId?: string;
   sessionName?: string;
-  /** bc5:reports-script — command-line tab labels (`/title1=`, `/title2=`) and read-only sides. */
-  labels?: { left?: string; right?: string };
-  readOnly?: { left: boolean; right: boolean };
+  /** bc5:reports-script — command-line pane labels (`/title1=` … `/title4=`) and read-only sides. */
+  labels?: PaneTitles;
+  readOnly?: ReadOnlySides;
+  /** bc5:reports-script — `/savetarget=`: Save writes here instead of over the file. */
+  saveTarget?: string;
+  /** bc5:reports-script — `/expandall`: the folder comparison expands every folder once. */
+  expandAll?: boolean;
   /** araxis:vcs — opened by `pcompare --wait`: closing the tab lets that process exit. */
   waitToken?: string;
 }
@@ -219,18 +224,22 @@ export default function App() {
 
   /** Picks the session type from what the two paths are; `right` may be empty to open one side. */
   const openAuto = useCallback(
-    // bc5:reports-script — `extra` carries command-line titles / read-only sides.
-    async (left: string, right: string, extra: Partial<Tab> = {}) => {
-      if (isReviewArchivePath(left) && !right) return openTab("review", left, "", extra); // araxis:text-review
+    // bc5:reports-script — `extra` carries command-line titles / read-only sides, or
+    // is a function of the kind picked (`/filters=` only means something to a folder compare).
+    async (left: string, right: string, extraArg: Partial<Tab> | ((kind: SessionKind) => Partial<Tab>) = {}) => {
+      const extraFor = (kind: SessionKind) => (typeof extraArg === "function" ? extraArg(kind) : extraArg);
+      const open = (kind: SessionKind) => openTab(kind, left, right, extraFor(kind));
+      if (isReviewArchivePath(left) && !right) return open("review"); // araxis:text-review
       // A missing side takes the other's kind, so one folder still opens a folder compare.
       const [lk, rk] = await Promise.all([api.pathKind(left), api.pathKind(right || left)]);
-      if (lk === "directory" && rk === "directory") return openTab("folder", left, right, extra);
+      if (lk === "directory" && rk === "directory") return open("folder");
       // bc5:archives — archives, snapshots and svn: URLs (with each other or a folder) open as folders.
       const asFolder = (p: string, k: string) => k === "directory" || isContainerPath(p);
-      if (asFolder(left, lk) && asFolder(right || left, rk)) return openTab("folder", left, right, extra);
+      if (asFolder(left, lk) && asFolder(right || left, rk)) return open("folder");
       // bc5:converters — pairs matching an "always use" external tool open there instead.
       if (right && (await openExternalIfAlways(left, right))) {
-        if (extra.waitToken) vcsApi.waitDone(extra.waitToken).catch(() => {}); // araxis:vcs — no tab to wait for
+        const { waitToken } = extraFor("text");
+        if (waitToken) vcsApi.waitDone(waitToken).catch(() => {}); // araxis:vcs — no tab to wait for
         return;
       }
       let kind = sessionForFiles(left, right || left);
@@ -238,7 +247,7 @@ export default function App() {
       if (kind === "hex" && right && extension(left) === "db" && extension(right) === "db") {
         if (await dbApi.isSqlite([left, right]).catch(() => false)) kind = "database";
       }
-      openTab(kind, left, right, extra);
+      open(kind);
     },
     [openTab],
   );
@@ -308,12 +317,15 @@ export default function App() {
     });
   };
 
+  const openNamed = useRef<(sessionId?: string | null, workspaceId?: string | null) => Promise<void>>(async () => {});
   // `pcompare.exe <left> <right>` from the shell or a git difftool, and
   // `pcompare.exe <left> <right> <base> [<output>]` (Beyond Compare's order) as a git mergetool.
   const openLaunch = useCallback(
     async (launch: LaunchOptions | string[]) => {
       // bc5:reports-script — switches: forced viewer (`/fv=`), tab titles, read-only sides.
       const o = toLaunchOptions(launch);
+      // BC's "Named Session" / "Named Workspace": `pcompare "My Session"`.
+      if (o.sessionId || o.workspaceId) return openNamed.current(o.sessionId, o.workspaceId);
       const [left, right, base, output] = o.paths;
       // araxis:vcs — `--wait` launches report back when their tab closes.
       if (!left) {
@@ -323,11 +335,27 @@ export default function App() {
       const extra: Partial<Tab> = {};
       if (o.waitToken) extra.waitToken = o.waitToken;
       // araxis:vcs end
-      if (o.titleLeft || o.titleRight) extra.labels = { left: o.titleLeft ?? undefined, right: o.titleRight ?? undefined };
+      const labels: PaneTitles = {
+        left: o.titleLeft || undefined,
+        right: o.titleRight || undefined,
+        base: o.titleBase || undefined,
+        output: o.titleOutput || undefined,
+      };
+      if (Object.values(labels).some(Boolean)) extra.labels = labels;
       if (o.readOnlyLeft || o.readOnlyRight) extra.readOnly = { left: o.readOnlyLeft, right: o.readOnlyRight };
+      if (o.saveTarget) extra.saveTarget = o.saveTarget;
       if (base) Object.assign(extra, { base, output: output ?? o.mergeOutput ?? "" });
-      if (o.viewer && o.viewer in SESSIONS) return openTab(o.viewer, left, right ?? "", extra);
-      if (!base) return openAuto(left, right ?? "", extra);
+      // `/filters=` and `/expandall` apply to the launch's folder comparison only.
+      const extraFor = (kind: SessionKind): Partial<Tab> =>
+        kind !== "folder"
+          ? extra
+          : {
+              ...extra,
+              ...(o.nameFilter && { settings: folderFilterSettings(o.nameFilter) }),
+              ...(o.expandAll && { expandAll: true }),
+            };
+      if (o.viewer && o.viewer in SESSIONS) return openTab(o.viewer, left, right ?? "", extraFor(o.viewer));
+      if (!base) return openAuto(left, right ?? "", extraFor);
       const kind = (await api.pathKind(base)) === "directory" ? "folderMerge" : "merge";
       openTab(kind, left, right ?? "", extra);
     },
@@ -370,6 +398,21 @@ export default function App() {
       return;
     tabs.forEach(autoSaveOnClose);
     await loadTabs(w.tabs, w.active);
+  };
+
+  // bc5:reports-script — a launch naming a saved session or workspace (cli.rs
+  // `resolve_named` found it by name). Read through a ref: `openLaunch` is a
+  // stable callback, and these depend on the open tabs.
+  openNamed.current = async (sessionId, workspaceId) => {
+    if (sessionId) {
+      const s = (await api.listSessions()).find((x) => x.id === sessionId);
+      if (s) openSaved(s);
+      else setToast("That saved session no longer exists.");
+    } else if (workspaceId) {
+      const w = (await workspaceApi.list()).find((x) => x.id === workspaceId);
+      if (w) await openWorkspace(w);
+      else setToast("That saved workspace no longer exists.");
+    }
   };
 
   // Startup: restore the previous run's tabs (if enabled), then open the
@@ -521,6 +564,7 @@ export default function App() {
         if (dirty) dirtyTabs.current.add(t.id);
         else dirtyTabs.current.delete(t.id);
       },
+      readOnlySides: t.readOnly, // bc5:reports-script — `/ro`, `/lro`, `/rro` in every viewer
     };
     const three = {
       left: t.left,
@@ -531,6 +575,8 @@ export default function App() {
       onSettingsChange: two.onSettingsChange,
       onDirtyChange: two.onDirtyChange,
       onPathsChange: (p: MergePaths) => updateTab(t.id, p),
+      readOnlySides: t.readOnly, // bc5:reports-script
+      titles: t.labels,
     };
     switch (t.kind) {
       case "home":
@@ -630,7 +676,8 @@ export default function App() {
         return (
           <TextCompare
             {...two}
-            readOnlySides={t.readOnly} // bc5:reports-script — `/readonly`, `/lro`, `/rro`
+            saveTarget={t.saveTarget} // bc5:reports-script — `/savetarget=`, `/title1=`, `/title2=`
+            titles={t.labels}
             onOpenHex={() => updateTab(t.id, { kind: "hex" })}
             // bc5:editor-patch — the one chosen file, edited on its own in this tab
             onOpenEditor={(p) => updateTab(t.id, { kind: "edit", left: p, right: "", settings: undefined })}
@@ -646,6 +693,7 @@ export default function App() {
         return (
           <FolderCompare
             {...two}
+            expandAll={t.expandAll} // bc5:reports-script — `/expandall`
             onOpenFiles={(left, right, rules) => {
               // An orphan has one path: route by that file's type (the viewer shows the other side blank).
               const kind = left && right ? sessionForFiles(left, right) : sessionForFiles(left || right, left || right);
@@ -679,7 +727,7 @@ export default function App() {
         return <DbCompare {...two} />;
       // bc5:editor-patch — Text Edit and Patch Viewer
       case "edit":
-        return <TextEditor {...two} />;
+        return <TextEditor {...two} saveTarget={t.saveTarget} />;
       case "patch":
         return (
           <PatchViewer

@@ -37,7 +37,7 @@ import { COMPARE_PRESETS, DEFAULT_FOLDER_SETTINGS, toEngineOptions, type Compare
 import { basename, formatSize, formatTime, joinPath } from "../lib/format";
 import type { SyncTask } from "../lib/automationApi"; // automation:ui
 import { matches, shortcutLabel } from "../lib/keymap";
-import type { CompareProps } from "../lib/sessionProps";
+import { LAUNCH_READ_ONLY_HINT, type CompareProps } from "../lib/sessionProps";
 import {
   DEFAULT_EXEC_OPTIONS,
   FAILURE_LABELS,
@@ -263,7 +263,16 @@ interface RunningJob {
   paused?: boolean;
 }
 
-export function FolderSync({ left, right, onPathsChange, settings, onSettingsChange, onOpenFiles, onAutomate }: Props) {
+export function FolderSync({
+  left,
+  right,
+  onPathsChange,
+  settings,
+  onSettingsChange,
+  onOpenFiles,
+  onAutomate,
+  readOnlySides, // bc5:reports-script
+}: Props) {
   const [cfg, setCfg] = useState<FolderSyncSettings>(() => restoreSettings(settings));
   const [excludeText, setExcludeText] = useState(cfg.exclude);
   const update = (patch: Partial<FolderSyncSettings>) => setCfg((c) => ({ ...c, ...patch }));
@@ -380,7 +389,18 @@ export function FolderSync({ left, right, onPathsChange, settings, onSettingsCha
     return out;
   }, [plan, filter, sort]);
 
-  const chosen = useMemo(() => plan?.ops.filter((op) => !excluded.has(op.id)) ?? [], [plan, excluded]);
+  // bc5:reports-script — `/lro`, `/rro`: operations that write a read-only side
+  // (a delete's direction names the side it deletes from) never run.
+  const lockedLeft = !!readOnlySides?.left;
+  const lockedRight = !!readOnlySides?.right;
+  const locked = useCallback(
+    (op: SyncOp) => (op.direction === "toRight" ? lockedRight : lockedLeft),
+    [lockedLeft, lockedRight],
+  );
+  const chosen = useMemo(
+    () => plan?.ops.filter((op) => !excluded.has(op.id) && !locked(op)) ?? [],
+    [plan, excluded, locked],
+  );
   const chosenTotals = useMemo(() => totals(chosen), [chosen]);
 
   const toggle = (id: number) =>
@@ -524,7 +544,7 @@ export function FolderSync({ left, right, onPathsChange, settings, onSettingsCha
       );
     }
     const op = row.op;
-    const on = !excluded.has(op.id);
+    const on = !excluded.has(op.id) && !locked(op);
     const { icon: Icon, text } = opLabel(op);
     return (
       <div
@@ -537,6 +557,8 @@ export function FolderSync({ left, right, onPathsChange, settings, onSettingsCha
           <input
             type="checkbox"
             checked={on}
+            disabled={locked(op)}
+            title={locked(op) ? LAUNCH_READ_ONLY_HINT : undefined}
             onChange={() => toggle(op.id)}
             onClick={(e) => e.stopPropagation()}
             aria-label={`Include ${op.relPath}`}

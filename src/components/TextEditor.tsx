@@ -70,6 +70,7 @@ import { FindBar } from "./FindBar";
 import { PathField } from "./PathField";
 import { TextEncodingPicker } from "./TextEncodingPicker";
 import { VarList, type VarListHandle } from "./VarList";
+import { LAUNCH_READ_ONLY_HINT, type ReadOnlySides } from "../lib/sessionProps"; // bc5:reports-script
 import "./TextCompare.css";
 import "./TextEditor.css";
 
@@ -105,6 +106,10 @@ interface Props {
   settings?: Partial<EditSettings>;
   onSettingsChange?: (s: EditSettings) => void;
   onDirtyChange?: (dirty: boolean) => void;
+  /** bc5:reports-script — `/ro` (or `/lro`) from the command line: no editing. */
+  readOnlySides?: ReadOnlySides;
+  /** bc5:reports-script — `/savetarget=`: Save writes here instead of over the file. */
+  saveTarget?: string;
 }
 
 /** The file as edited in memory. */
@@ -195,7 +200,15 @@ const renderRun = (r: Run, i: number) => (
 
 const EOL_LABEL: Record<LineEnding, string> = { lf: "LF", crlf: "CRLF", cr: "CR", mixed: "Mixed", none: "None" };
 
-export function TextEditor({ left: path, onPathsChange, settings, onSettingsChange, onDirtyChange }: Props) {
+export function TextEditor({
+  left: path,
+  onPathsChange,
+  settings,
+  onSettingsChange,
+  onDirtyChange,
+  readOnlySides, // bc5:reports-script
+  saveTarget,
+}: Props) {
   const [wordWrap, setWordWrap] = useState(settings?.wordWrap ?? false);
   const [lineNumbers, setLineNumbers] = useState(settings?.lineNumbers ?? true);
   const [syntaxOn, setSyntaxOn] = useState(settings?.syntax ?? true);
@@ -228,7 +241,8 @@ export function TextEditor({ left: path, onPathsChange, settings, onSettingsChan
   const editorEl = useRef<HTMLTextAreaElement>(null);
 
   const remote = isRemote(path);
-  const readOnly = remote || !!doc?.binary;
+  const launchLocked = !!readOnlySides?.left; // bc5:reports-script
+  const readOnly = remote || !!doc?.binary || launchLocked;
   const dirty = !!doc && isDirty(doc);
   const reportDirty = useRef(onDirtyChange);
   reportDirty.current = onDirtyChange;
@@ -351,7 +365,8 @@ export function TextEditor({ left: path, onPathsChange, settings, onSettingsChan
 
   const save = () => {
     if (!docRef.current || docRef.current.binary) return;
-    if (!path || remote) saveAs();
+    if (saveTarget) writeTo(saveTarget); // bc5:reports-script — `/savetarget=`
+    else if (!path || remote) saveAs();
     else if (dirty) writeTo(path);
   };
 
@@ -1010,7 +1025,7 @@ export function TextEditor({ left: path, onPathsChange, settings, onSettingsChan
   return (
     <div className={`session te-session${wordWrap ? " te-wrapped" : ""}`} ref={root}>
       <div className="toolbar">
-        <button onClick={save} disabled={!canSave} title={`Save (${shortcutLabel("edit.save")})${remote ? ` · ${READ_ONLY_HINT}` : ""}`}>
+        <button onClick={save} disabled={!canSave} title={`Save (${shortcutLabel("edit.save")})${saveTarget ? ` to ${saveTarget}` : remote ? ` · ${READ_ONLY_HINT}` : ""}`}>
           <Save size={14} /> {saving ? "Saving…" : "Save"}
         </button>
         <button onClick={saveAs} disabled={!doc || doc.binary || saving} title={`Save as… (${shortcutLabel("edit.saveAs")})`}>
@@ -1204,8 +1219,8 @@ export function TextEditor({ left: path, onPathsChange, settings, onSettingsChan
             {lang && syntaxOn ? ` · ${lang.name}` : ""}
           </span>
         )}
-        {remote && (
-          <span className="tc-readonly" title={READ_ONLY_HINT}>
+        {(remote || launchLocked) && (
+          <span className="tc-readonly" title={launchLocked ? LAUNCH_READ_ONLY_HINT : READ_ONLY_HINT}>
             <Lock size={11} /> read-only
           </span>
         )}

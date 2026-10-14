@@ -137,7 +137,8 @@ fn absolutize(paths: Vec<String>, cwd: &str) -> Vec<String> {
 /// opens them in a new tab exactly like startup arguments.
 pub fn on_second_instance(app: &AppHandle, argv: Vec<String>, cwd: String) {
     // bc5:reports-script — the full launch options (viewer, titles, read-only), not just paths.
-    let mut launch = crate::resolve_launch_paths(argv.get(1..).unwrap_or_default());
+    let config = app.path().app_config_dir().ok();
+    let mut launch = crate::resolve_launch_paths(argv.get(1..).unwrap_or_default(), config.as_deref(), Path::new(&cwd));
     launch.paths = absolutize(launch.paths, &cwd);
     launch.merge_output = launch.merge_output.and_then(|o| absolutize(vec![o], &cwd).pop());
     if let Some(window) = app.webview_windows().values().next() {
@@ -150,7 +151,7 @@ pub fn on_second_instance(app: &AppHandle, argv: Vec<String>, cwd: String) {
         crate::vcs::register(token);
     }
     // araxis:vcs end
-    if !launch.paths.is_empty() {
+    if !launch.paths.is_empty() || launch.session_id.is_some() || launch.workspace_id.is_some() {
         let _ = app.emit(OPEN_PATHS_EVENT, launch); // bc5:reports-script
     }
 }

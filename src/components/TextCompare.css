@@ -80,6 +80,15 @@
   align-items: center;
   gap: 3px;
 }
+/* bc5:reports-script — a command-line title (`/title1=`) ahead of the file info. */
+.tc-title {
+  margin-right: 6px;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 40ch;
+}
 .statusbar .tc-hint {
   margin-left: auto;
   color: var(--muted);

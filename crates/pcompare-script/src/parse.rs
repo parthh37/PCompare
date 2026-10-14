@@ -928,7 +928,9 @@ fn folder_glob(mask: &str) -> String {
     mask.replace('\\', "/").trim_matches('/').to_owned()
 }
 
-fn parse_name_filter(masks: &[&str]) -> Filter {
+/// BC file masks (`*.c;-obj\`) as include / exclude globs; also used for
+/// the app's `/filters=` switch.
+pub fn parse_name_filter(masks: &[&str]) -> Filter {
     let mut f = Filter::default();
     let mut include_folders = Vec::new();
     for mask in masks

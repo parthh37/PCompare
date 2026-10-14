@@ -32,6 +32,7 @@ import {
   type OpPart,
   type ReadyPart,
 } from "./FileOpDialogs";
+import { LAUNCH_READ_ONLY_HINT, type ReadOnlySides } from "../lib/sessionProps"; // bc5:reports-script
 import { FileOpsPanel } from "./FileOpsPanel";
 
 export type SelSide = Side | "both";
@@ -66,6 +67,8 @@ interface Args {
   /** Rescans after an operation touched these folders. */
   onRefresh: () => void;
   onError: (message: string) => void;
+  /** bc5:reports-script — sides opened read-only from the command line (`/ro`, `/lro`, `/rro`). */
+  readOnly?: ReadOnlySides;
 }
 
 const ROW_HEIGHT = 24;
@@ -74,7 +77,18 @@ const parentOf = (rel: string) => (rel.includes("/") ? rel.slice(0, rel.lastInde
 const lastName = (rel: string) => rel.slice(rel.lastIndexOf("/") + 1);
 const sidesOf = (s: SelSide): Side[] => (s === "both" ? ["left", "right"] : [s]);
 
-export function useFolderFileOps({ root, result, entries, flat, left, right, onOpen, onRefresh, onError }: Args) {
+export function useFolderFileOps({
+  root,
+  result,
+  entries,
+  flat,
+  left,
+  right,
+  onOpen,
+  onRefresh,
+  onError,
+  readOnly,
+}: Args) {
   const [sel, setSel] = useState<Selection>({ side: "both", rows: new Set(), anchor: null, focus: null });
   const [dialog, setDialog] = useState<Dialog | null>(null);
   const [panelOpen, setPanelOpen] = useState(false);
@@ -210,7 +224,21 @@ export function useFolderFileOps({ root, result, entries, flat, left, right, onO
       .map((s) => part(s, list))
       .filter((p) => p.items.length);
 
+  // bc5:reports-script — nothing is written into a read-only side. Checked when
+  // an operation is picked, and again here where every operation starts.
+  const lockedRoot = (r: string | null) =>
+    (["left", "right"] as Side[]).find((s) => readOnly?.[s] && r && rootOf(s) === r);
+  const refuse = (sides: Side[]) => {
+    const s = sides.find((x) => readOnly?.[x]);
+    if (s) onError(`The ${s} folder is read-only. ${LAUNCH_READ_ONLY_HINT}`);
+    return !!s;
+  };
+
   const start = (ready: ReadyPart[], action: FileAction, options: Partial<FileOpOptions>) => {
+    const writes = (p: ReadyPart) =>
+      action === "copy" ? [p.dstRoot] : action === "move" ? [p.srcRoot, p.dstRoot] : [p.srcRoot];
+    const blocked = ready.flatMap(writes).map(lockedRoot).find(Boolean);
+    if (blocked && refuse([blocked])) return setDialog(null);
     setDialog(null);
     setPanelOpen(true);
     for (const p of ready) {
@@ -224,6 +252,7 @@ export function useFolderFileOps({ root, result, entries, flat, left, right, onO
   const copyTo = (action: "copy" | "move", target: Side) => {
     if (!selected.length) return nothing();
     if (!rootOf(target)) return onError(`Choose a folder on the ${target} first.`);
+    if (refuse(action === "move" ? [target, otherSide(target)] : [target])) return;
     const p = part(otherSide(target), selected);
     if (!p.items.length) return onError(`Nothing selected exists on the ${otherSide(target)}.`);
     setDialog({ kind: "transfer", action, parts: [p], toFolder: false });
@@ -245,6 +274,7 @@ export function useFolderFileOps({ root, result, entries, flat, left, right, onO
     if (!selected.length) return nothing();
     const parts = sideParts(selected);
     if (!parts.length) return nothing();
+    if (refuse(parts.map((p) => p.side))) return;
     setDialog({ kind: "delete", parts, permanent });
   };
 
@@ -253,12 +283,14 @@ export function useFolderFileOps({ root, result, entries, flat, left, right, onO
     if (!e) return nothing();
     const side: Side = sel.side === "both" ? (e.left ? "left" : "right") : sel.side;
     if (!e[side]) return onError(`${e.name} isn't on the ${side}.`);
+    if (refuse([side])) return;
     setDialog({ kind: "rename", side, root: rootOf(side), rel: relOn(side, e) });
   };
 
   const newFolder = () => {
     const side: Side = sel.side === "both" ? (rootOf("left") ? "left" : "right") : sel.side;
     if (!rootOf(side)) return onError(`Choose a folder on the ${side} first.`);
+    if (refuse([side])) return;
     const e = focusEntry;
     // Inside the focused folder, else next to the focused item.
     const folder = !e ? "" : e.isDir && e[side] ? relOn(side, e) : parentOf(relOn(side, e));
@@ -269,6 +301,7 @@ export function useFolderFileOps({ root, result, entries, flat, left, right, onO
     if (!selected.length) return nothing();
     const parts = sideParts(selected).filter((p) => !isRemotePath(p.srcRoot));
     if (!parts.length) return onError("Attributes can only be changed on local folders.");
+    if (refuse(parts.map((p) => p.side))) return;
     const metas = parts.flatMap((p) => selected.map((e) => e[p.side]).filter((m) => m != null));
     const modes = metas.filter((m) => m.mode != null).map((m) => m.mode!);
     setDialog({
@@ -284,6 +317,7 @@ export function useFolderFileOps({ root, result, entries, flat, left, right, onO
     if (!selected.length) return nothing();
     const parts = sideParts(selected);
     if (!parts.length) return nothing();
+    if (refuse(parts.map((p) => p.side))) return;
     const first = selected[0][parts[0].side];
     setDialog({
       kind: "touch",

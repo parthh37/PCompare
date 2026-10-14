@@ -16,6 +16,8 @@ export interface LaunchOptions {
   titleOutput?: string | null;
   /** `/filters=`, `/expandall`, `/savetarget=`. */
   filters?: string | null;
+  /** `/filters=` split into Folder Compare's glob lists (cli.rs `NameFilter`). */
+  nameFilter?: NameFilter | null;
   expandAll?: boolean;
   saveTarget?: string | null;
   /** `/readonly`, `/lro`, `/rro`. */
@@ -23,8 +25,30 @@ export interface LaunchOptions {
   readOnlyRight: boolean;
   /** `/mergeoutput=` (already folded into `paths[3]` for 3-way merges). */
   mergeOutput: string | null;
+  /** A single argument naming a saved session / workspace (BC "Named Session"). */
+  sessionId?: string | null;
+  workspaceId?: string | null;
   /** araxis:vcs — a `--wait` launch: report back under this token when the tab closes. */
   waitToken?: string | null;
+}
+
+export interface NameFilter {
+  includeFiles: string[];
+  excludeFiles: string[];
+  excludeFolders: string[];
+}
+
+/**
+ * Folder Compare settings for `/filters=` (its fields are comma-separated
+ * globs). Every list is set, so an empty one clears that field's default.
+ */
+export function folderFilterSettings(f: NameFilter): Record<string, string> {
+  const join = (globs: string[]) => globs.join(", ");
+  return {
+    includeFiles: join(f.includeFiles),
+    excludeFiles: join(f.excludeFiles),
+    excludeFolders: join(f.excludeFolders),
+  };
 }
 
 /** Accepts the old payload shape (a bare path list) too. */

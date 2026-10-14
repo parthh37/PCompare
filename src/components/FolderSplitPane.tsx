@@ -12,6 +12,7 @@ import { PictureCompare } from "./PictureCompare";
 import { TableCompare } from "./TableCompare";
 import { TextCompare } from "./TextCompare";
 import { VirtualList } from "./VirtualList";
+import type { ReadOnlySides } from "../lib/sessionProps"; // bc5:reports-script
 
 export interface SplitPair {
   /** Identifies the row (its relative path). */
@@ -35,6 +36,8 @@ interface Props {
   onDirtyChange: (dirty: boolean) => void;
   /** The embedded viewer saved its edits: the folder comparison should rescan. */
   onSaved: () => void;
+  /** bc5:reports-script — the folder session's read-only sides (`/ro`, `/lro`, `/rro`). */
+  readOnlySides?: ReadOnlySides;
 }
 
 /** Selection changes settle for this long before a (possibly heavy) viewer loads. */
@@ -47,7 +50,16 @@ const PREVIEW_MAX_BYTES = 8 * 1024 * 1024;
 const samePair = (a: SplitPair | null, b: SplitPair | null) =>
   a === b || (!!a && !!b && a.id === b.id && a.left === b.left && a.right === b.right);
 
-export function FolderSplitPane({ pair, hint, rules, style, onOpenInTab, onDirtyChange, onSaved }: Props) {
+export function FolderSplitPane({
+  pair,
+  hint,
+  rules,
+  style,
+  onOpenInTab,
+  onDirtyChange,
+  onSaved,
+  readOnlySides,
+}: Props) {
   const [shown, setShown] = useState<SplitPair | null>(pair);
   /** The embedded viewer's paths: its own swap button may change them. */
   const [paths, setPaths] = useState({ left: pair?.left ?? "", right: pair?.right ?? "" });
@@ -101,11 +113,15 @@ export function FolderSplitPane({ pair, hint, rules, style, onOpenInTab, onDirty
     }
     // A new pair remounts the viewer, so no state leaks from the previous one.
     const key = `${kind}\n${left}\n${right}`;
+    // The viewer's own swap button trades the files, and their read-only flags with them.
+    const swapped = !!shown && shown.left !== shown.right && left === shown.right && right === shown.left;
     const common = {
       left,
       right,
       onPathsChange: (l: string, r: string) => setPaths({ left: l, right: r }),
       onDirtyChange: setDirty,
+      readOnlySides:
+        readOnlySides && (swapped ? { left: readOnlySides.right, right: readOnlySides.left } : readOnlySides),
     };
     switch (kind) {
       case "hex":

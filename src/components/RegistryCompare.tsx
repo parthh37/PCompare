@@ -44,7 +44,7 @@ import {
   type RegValueDiff,
   type SideEdit,
 } from "../lib/metaApi";
-import type { CompareProps } from "../lib/sessionProps";
+import { LAUNCH_READ_ONLY_HINT, type CompareProps } from "../lib/sessionProps";
 import { SEPARATOR, type MenuEntry, type MenuItems } from "../lib/nativeMenu";
 import { useContextMenu } from "./ContextMenu";
 import { PathField } from "./PathField";
@@ -270,6 +270,7 @@ export function RegistryCompare({
   settings,
   onSettingsChange,
   onDirtyChange,
+  readOnlySides, // bc5:reports-script
 }: CompareProps<RegistrySettings>) {
   const [filter, setFilter] = useState<Filter>(settings?.filter ?? "all");
   const reportSettings = useRef(onSettingsChange);
@@ -434,6 +435,7 @@ export function RegistryCompare({
   /** Why a side can't be edited, or null when it can. */
   const readOnlyReason = (side: RegSide): string | null => {
     if (!result) return "Nothing loaded";
+    if (readOnlySides?.[side]) return LAUNCH_READ_ONLY_HINT; // bc5:reports-script
     if (result[side].kind === "file" && isRemote(sideSpec(side))) return "Remote files are read-only";
     return null;
   };
