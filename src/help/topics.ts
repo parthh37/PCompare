@@ -161,7 +161,7 @@ Compares images pixel by pixel: PNG, JPEG, GIF, BMP, ICO, TIFF, WebP, TGA, PNM a
     title: "Folder Compare",
     kinds: ["folder"],
     body: `
-Compares two folder trees. Red names differ (the older file is grey), purple items exist on one side only, blue (≈) items differ only in unimportant ways.
+Compares two folder trees. Red names differ (the older file is grey), purple items exist on one side only, blue (≈) items differ only in unimportant ways. A clock means the contents are the same but the size or timestamp differs. Folders take the colours of everything inside them: a folder holding both newer files and orphans shows red and purple, and its name is bold on the side its newer files are on. **View → Legend** explains every colour and icon.
 
 ## Toolbar
 - **Expand / Collapse** all folders; **Flatten** lists every file at one level.
