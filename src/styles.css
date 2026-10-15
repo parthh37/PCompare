@@ -419,21 +419,6 @@ select:focus {
   border-right: 1px solid var(--border);
   cursor: pointer;
 }
-.ov-mark {
-  position: absolute;
-  left: 2px;
-  right: 2px;
-  border-radius: 1px;
-}
-.ov-mark.k-changed {
-  background: #f59e0b;
-}
-.ov-mark.k-leftOnly {
-  background: #ef4444;
-}
-.ov-mark.k-rightOnly {
-  background: #22c55e;
-}
 .trow {
   display: grid;
   grid-template-columns: 52px 1fr 6px 52px 1fr;
@@ -1231,24 +1216,44 @@ textarea:focus {
 }
 
 /* ---------- updates ---------- */
-.update-banner {
+.update-badge {
+  color: var(--accent);
+  font-weight: 600;
+}
+.update-prompt {
+  width: min(520px, 92vw);
+}
+.update-prompt-head {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  margin-bottom: 10px;
+}
+.update-prompt-icon {
+  color: var(--accent);
+}
+.update-prompt-notes {
+  max-height: 220px;
+  overflow: auto;
+  margin: 0 0 10px;
+  padding: 8px 10px;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-family: inherit;
+  font-size: 12px;
+  white-space: pre-wrap;
+}
+.update-prompt-progress {
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 6px 12px;
-  background: var(--accent-tint);
-  border-bottom: 1px solid var(--accent-border);
 }
-.update-banner label.check {
-  display: flex;
-  align-items: center;
-  gap: 5px;
+.update-prompt-progress progress {
+  flex: 1;
 }
-.update-notes {
-  max-width: 40ch;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+.modal-foot .spacer {
+  flex: 1;
 }
 .update-status {
   display: flex;
@@ -1264,10 +1269,6 @@ textarea:focus {
 }
 .update-status > button {
   white-space: nowrap;
-}
-.update-banner progress {
-  flex: 1;
-  max-width: 260px;
 }
 
 /* ---------- icons ---------- */
