@@ -20,6 +20,27 @@ export interface RepoInfo {
   hgAvailable: boolean;
 }
 
+/** A commit some lines were last changed in (`git blame`). */
+export interface BlameCommit {
+  id: string;
+  short: string;
+  author: string;
+  timeMs: number;
+  summary: string;
+  /** The file's repository-relative path in this commit (differs after a rename). */
+  path: string;
+  /** The parent and the file's path there; null when this commit added the file. */
+  previous: { id: string; path: string } | null;
+}
+
+export interface Blame {
+  /** The repository's working-tree root. */
+  root: string;
+  commits: BlameCommit[];
+  /** Per line (0-based): index into `commits`, null = not committed yet. */
+  lines: (number | null)[];
+}
+
 export interface GitSetting {
   key: string;
   value: string;
@@ -47,7 +68,15 @@ export const vcsApi = {
   snippets: () => invoke<Snippet[]>("vcs_snippets"),
   detect: (path: string) => invoke<RepoInfo>("vcs_detect", { path }),
   revisions: (kind: VcsKind, path: string, limit?: number) => invoke<Revision[]>("vcs_revisions", { kind, path, limit }),
+  /**
+   * Who last changed each line of a local working-tree file or a `git:` side. `text`: the
+   * file's unsaved contents, so edited lines show as not committed and line numbers match.
+   */
+  blame: (path: string, text: string | null) => invoke<Blame>("vcs_blame", { path, text }),
 };
+
+/** A `git:` path to one file at one commit (`path` is repository-relative). */
+export const gitFileAt = (root: string, rev: string, path: string) => `git:${root}@${rev}/${path}`;
 
 export const VCS_NAMES: Record<VcsKind, string> = { git: "Git", hg: "Mercurial" };
 
