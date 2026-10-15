@@ -123,6 +123,8 @@ export const COMMANDS: CommandDef[] = [
   // ---- converted to matches() ----
   { id: "sync.refresh", label: "Rebuild sync preview", scope: ["sync"], binding: "F5" },
   { id: "database.refresh", label: "Recompare", scope: ["database"], binding: "F5" },
+  { id: "database.copyToRight", label: "Copy selected difference to right", scope: ["database"], binding: "Alt+Right" },
+  { id: "database.copyToLeft", label: "Copy selected difference to left", scope: ["database"], binding: "Alt+Left" },
   { id: "property.refresh", label: "Recompare", scope: ["version", "mp3"], binding: "F5" },
 
   // ---- bc5:editor-patch — Text Edit ----

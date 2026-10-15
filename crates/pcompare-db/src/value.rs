@@ -110,12 +110,22 @@ impl fmt::Display for Value {
     }
 }
 
+impl Value {
+    /// What the UI receives for this value: `None` for NULL, else display text.
+    pub fn display_text(&self) -> Option<String> {
+        match self {
+            Value::Null => None,
+            v => Some(v.to_string()),
+        }
+    }
+}
+
 /// The UI receives `null` or display text (strings keep 64-bit integers exact in JS).
 impl Serialize for Value {
     fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
-        match self {
-            Value::Null => s.serialize_none(),
-            v => s.serialize_str(&v.to_string()),
+        match self.display_text() {
+            None => s.serialize_none(),
+            Some(t) => s.serialize_str(&t),
         }
     }
 }
