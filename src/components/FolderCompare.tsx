@@ -1,5 +1,32 @@
-import { ChevronDown, ChevronRight, Eye, Link } from "lucide-react";
-import { FunnelX, ListChecks, PanelBottom } from "lucide-react";
+import {
+  ArrowLeft,
+  ArrowLeftRight,
+  ArrowRight,
+  Camera,
+  ChevronDown,
+  ChevronRight,
+  CircleStop,
+  Columns2,
+  Equal,
+  EqualNot,
+  Eye,
+  Feather,
+  FileCheck,
+  FileText,
+  FoldVertical,
+  FolderSync,
+  FolderTree,
+  Funnel,
+  FunnelX,
+  Link,
+  ListChecks,
+  PanelBottom,
+  RefreshCw,
+  Search,
+  SlidersHorizontal,
+  UnfoldVertical,
+  X,
+} from "lucide-react";
 import {
   useCallback,
   useEffect,
@@ -28,7 +55,10 @@ import {
   activeAlignCount,
   activeFilterCount,
   COMPARE_PRESETS,
+  FILTER_BOX_PRESETS,
+  formatFilterBox,
   loadFolderSettings,
+  parseFilterBox,
   presetOf,
   toEngineOptions,
   type ComparePreset,
@@ -42,6 +72,7 @@ import {
   detailOf,
   DISPLAY_FILTERS,
   effectiveStatus,
+  FOLDER_STRUCTURES,
   LiveTree,
   nameMatcher,
   replaceEntry,
@@ -50,16 +81,15 @@ import {
   selectMatching,
   tally,
   visibleSet,
-  type DisplayFilter,
   type SelectCriteria,
 } from "../lib/folderTree";
 import { basename, formatSize, formatTime, hex, joinPath } from "../lib/format";
 import { writeClipboardText } from "../lib/clipboard";
 import { useShell } from "../lib/shell";
 import { autoRefreshTitle, useAutoRefresh } from "../lib/useAutoRefresh";
-import { FolderSettingsDialog } from "./FolderSettingsDialog";
-import { FileIcon, type ToolIconName } from "./icons";
-import { ToolButton } from "./ToolButton";
+import { FolderSettingsDialog, type FolderSettingsPage } from "./FolderSettingsDialog";
+import { FileIcon } from "./icons";
+import { StackButton, StackMenuButton } from "./StackButton";
 // bc5:converters — external comparison tools.
 import { openExternalIfAlways } from "../lib/convertApi";
 import { externalToolItems } from "../lib/externalToolMenu";
@@ -119,6 +149,38 @@ const METHOD_LABEL: Record<ContentMethod, string> = {
   version: "exe/dll version",
 };
 
+/** A line of the log panel. */
+interface LogLine {
+  at: number;
+  text: string;
+  error?: boolean;
+}
+
+/** `12.3 GB free on C:\` for a side's footer. */
+const freeLabel = (f: { free: number; volume: string } | null) =>
+  f ? `${formatSize(f.free)} free${f.volume ? ` on ${f.volume}` : ""}` : "";
+
+/** The grid columns of one side's half of a row (the attributes column adds one). */
+const sideColumns = (side: Side, attrs: boolean) => {
+  const n = attrs ? 4 : 3;
+  return side === "left" ? `1 / ${n + 1}` : `${n + 2} / -1`;
+};
+
+/** `3 files, 1 folder selected (12 KB)` for one side, or "" with nothing selected there. */
+function selectionSummary(selected: FolderEntry[], selSide: Side | "both", side: Side): string {
+  if (selSide !== "both" && selSide !== side) return "";
+  const items = selected.map((e) => e[side]).filter((m): m is EntryMeta => !!m);
+  if (!items.length) return "";
+  const files = items.filter((m) => !m.isDir);
+  const folders = items.length - files.length;
+  const parts = [
+    files.length && `${files.length} file${files.length === 1 ? "" : "s"}`,
+    folders && `${folders} folder${folders === 1 ? "" : "s"}`,
+  ].filter(Boolean);
+  const bytes = files.reduce((sum, m) => sum + m.size, 0);
+  return `${parts.join(", ")} selected${files.length ? ` (${formatSize(bytes)})` : ""}`;
+}
+
 /** The engine's message for a cancelled run (`folder::CANCELLED`). */
 const CANCELLED = "Folder comparison cancelled";
 
@@ -163,13 +225,6 @@ interface MenuTarget {
   /** The half of the row that was right-clicked (or the only side the entry exists on). */
   side: Side;
 }
-
-const FILTER_ICON: Partial<Record<DisplayFilter, ToolIconName>> = {
-  all: "all",
-  diffs: "diffs",
-  same: "same",
-  orphans: "orphans",
-};
 
 const FILTERED_LABEL: Record<NonNullable<FolderEntry["filtered"]>, string> = {
   both: "left out by the filters (shown because filters are suppressed)",
@@ -216,9 +271,22 @@ export function FolderCompare({
   reportSettings.current = onSettingsChange;
   useEffect(() => void reportSettings.current?.(cfg), [cfg]);
 
-  const [excludeText, setExcludeText] = useState(cfg.exclude);
+  /** The Filters box as typed; applied on Enter or leaving it. */
+  const [filterText, setFilterText] = useState(() => formatFilterBox(cfg));
   const [nameQuery, setNameQuery] = useState("");
-  const [showSettings, setShowSettings] = useState(false);
+  /** The settings dialog's open tab, if it is open. */
+  const [settingsPage, setSettingsPage] = useState<FolderSettingsPage | null>(null);
+  const [log, setLog] = useState<LogLine[]>([]);
+  const addLog = useCallback(
+    (text: string, error = false) => setLog((l) => [...l.slice(-199), { at: Date.now(), text, error }]),
+    [],
+  );
+  const logBox = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (logBox.current) logBox.current.scrollTop = logBox.current.scrollHeight;
+  }, [log, cfg.showLog]);
+  /** Free space under each side's folder (local folders only). */
+  const [free, setFree] = useState<Record<Side, { free: number; volume: string } | null>>({ left: null, right: null });
   const [toolsDialog, setToolsDialog] = useState(false); // bc5:converters
   const [snapshotting, setSnapshotting] = useState(false); // bc5:archives
   const [reporting, setReporting] = useState(false); // bc5:reports-script
@@ -291,7 +359,9 @@ export function FolderCompare({
         shownPaths.current = pathsKey;
         live.current = new LiveTree();
         setResult(null);
-      }
+        addLog(left && right ? `Load comparison: ${left} ↔ ${right}` : `Load folder: ${left || right}`);
+      } else if (mode === "refresh") addLog("Full refresh");
+      const started = performance.now();
       const tree = live.current;
       const listing = `${pathsKey}\n${expandArchives}`;
       const quiet = mode === "quiet";
@@ -361,6 +431,16 @@ export function FolderCompare({
         const res = await pass(options, restage || twoPass);
         if (stale()) return;
         finish(res);
+        const secs = ((performance.now() - started) / 1000).toFixed(2);
+        addLog(
+          quiet
+            ? `Auto-refresh: compared again in ${secs} seconds`
+            : twoPass
+              ? `Background content comparison completed in ${secs} seconds`
+              : restage
+                ? `Comparison updated in ${secs} seconds`
+                : `Comparison completed in ${secs} seconds`,
+        );
       } catch (e) {
         window.clearTimeout(timer);
         if (stale()) return;
@@ -370,8 +450,10 @@ export function FolderCompare({
           if (timer !== undefined) paint();
           const kept = shown || painted || hasResult.current;
           setError(`Comparison cancelled${kept ? " — showing what was compared so far." : "."}`);
+          addLog("Comparison cancelled", true);
         } else {
           setError(msg);
+          addLog(msg, true);
           if (!quiet && !shown) setResult(null);
         }
       } finally {
@@ -381,7 +463,7 @@ export function FolderCompare({
         }
       }
     },
-    [left, right, optionsKey, expandArchives],
+    [left, right, optionsKey, expandArchives, addLog],
   );
   const runRef = useRef(run);
   runRef.current = run;
@@ -418,6 +500,7 @@ export function FolderCompare({
       entries = next;
     }
     for (const rel of rels) tree.patch(entries, rel);
+    addLog(`Refreshed ${rels.length === 1 ? rels[0] : `${rels.length} items`} after a file operation`);
     const next = { ...prev, entries, stats: { ...prev.stats, filtered: 0, ...tally(entries) } };
     resultRef.current = next;
     setResult(next);
@@ -455,6 +538,17 @@ export function FolderCompare({
     onChange: () => run("quiet"),
   });
 
+  // Free space per side, read again once each compare (or file operation) settles.
+  useEffect(() => {
+    if (phase) return;
+    let live = true;
+    const read = (p: string) => (p ? api.diskFree(p).catch(() => null) : Promise.resolve(null));
+    void Promise.all([read(left), read(right)]).then(([l, r]) => live && setFree({ left: l, right: r }));
+    return () => {
+      live = false;
+    };
+  }, [left, right, phase, result]);
+
   const ignoredSet = useMemo(() => new Set(cfg.ignored), [cfg.ignored]);
   const entries = useMemo(() => {
     if (!result) return [];
@@ -473,8 +567,12 @@ export function FolderCompare({
   const oneSided = !!result && (!result.leftRoot || !result.rightRoot);
   // Everything is an "orphan" until the other side exists, so display filters wait for it.
   const visible = useMemo(
-    () => visibleSet(entries, oneSided ? "all" : cfg.filter, matcher),
-    [entries, oneSided, cfg.filter, matcher],
+    () =>
+      visibleSet(entries, oneSided ? "all" : cfg.filter, matcher, {
+        structure: cfg.structure,
+        ignoreMinor: cfg.ignoreMinor,
+      }),
+    [entries, oneSided, cfg.filter, matcher, cfg.structure, cfg.ignoreMinor],
   );
 
   const flat = useMemo(() => {
@@ -663,12 +761,48 @@ export function FolderCompare({
   // Row context menu; built after the right-click's selection change renders.
   // View menu: display toggles and the status legend, opened under its button.
   const viewMenu = useContextMenu((at: { x: number; y: number }): MenuItems => [
-    { label: "Flatten folders", checked: cfg.flatten, onClick: () => update({ flatten: !cfg.flatten }) },
+    { label: "Ignore folder structure", checked: cfg.flatten, onClick: () => update({ flatten: !cfg.flatten }) },
     { label: "Show attributes", checked: !!cfg.showAttributes, onClick: () => update({ showAttributes: !cfg.showAttributes }) },
     { label: "Split view", checked: splitView, shortcut: shortcutLabel("folder.splitView"), onClick: toggleSplit },
+    { label: "Log", checked: cfg.showLog, onClick: () => update({ showLog: !cfg.showLog }) },
     SEPARATOR,
     { label: "Legend…", onClick: () => setLegendAt(at) },
   ]);
+  // Diffs ▾: every display filter that narrows to differences, orphans or newer files.
+  const filterMenu = useContextMenu((): MenuItems =>
+    DISPLAY_FILTERS.filter((f) => f.value !== "all" && f.value !== "same").map((f) => ({
+      label: f.label,
+      checked: cfg.filter === f.value,
+      onClick: () => update({ filter: f.value }),
+    })),
+  );
+  // Structure ▾: when folders show, and Ignore folder structure.
+  const structureMenu = useContextMenu((): MenuItems => [
+    ...FOLDER_STRUCTURES.map((f) => ({
+      label: f.label,
+      checked: !cfg.flatten && cfg.structure === f.value,
+      onClick: () => update({ structure: f.value, flatten: false }),
+    })),
+    SEPARATOR,
+    { label: "Ignore folder structure", checked: cfg.flatten, onClick: () => update({ flatten: !cfg.flatten }) },
+  ]);
+  // Copy with both sides selected: which way.
+  const copyMenu = useContextMenu((): MenuItems => [
+    { label: "Copy to Right", disabled: !right, onClick: () => fops.copyOther.run("right") },
+    { label: "Copy to Left", disabled: !left, onClick: () => fops.copyOther.run("left") },
+  ]);
+  /** Selects every file shown, on both sides ("Select All Files"). */
+  const selectAllFiles = () =>
+    fops.selectRows(
+      flat.filter((r) => !r.entry.isDir).map((r) => r.entry.relPath),
+      "both",
+      false,
+    );
+  const applyFilterBox = () => {
+    const parsed = parseFilterBox(filterText);
+    setFilterText(formatFilterBox(parsed));
+    if (parsed.includeFiles !== cfg.includeFiles || parsed.exclude !== cfg.exclude) update(parsed);
+  };
 
   const menu = useContextMenu(({ entry, side }: MenuTarget): Promise<MenuItems> | MenuItems => {
     // bc5:file-ops — context-menu actions cover the whole selection.
@@ -848,9 +982,12 @@ export function FolderCompare({
   };
 
   const preset = presetOf(cfg);
-  const filterCount = activeFilterCount(cfg) + activeAlignCount(cfg);
-  const primaryFilters = DISPLAY_FILTERS.filter((f) => f.primary);
-  const moreFilters = DISPLAY_FILTERS.filter((f) => !f.primary);
+  /** Filters beyond the Filters box (dialog only), and alignment overrides. */
+  const dialogFilters = activeFilterCount(cfg) - (cfg.includeFiles.trim() ? 1 : 0);
+  const alignCount = activeAlignCount(cfg);
+  const narrowed = cfg.filter !== "all" && cfg.filter !== "same";
+  const filterLabel = DISPLAY_FILTERS.find((f) => f.value === cfg.filter)?.label ?? "All";
+  const copy = fops.copyOther;
   /** Status-bar stand-in for the old blocking overlay. */
   const liveStatus = phase && (
     <span className="live-progress" title={progress?.current}>
@@ -870,118 +1007,191 @@ export function FolderCompare({
 
   return (
     <div className={`session${cfg.showAttributes ? " fc-attrs" : ""}`} ref={root}>
-      <div className="bc-toolbar">
-        {primaryFilters.map((f) => (
-          <ToolButton
-            key={f.value}
-            icon={FILTER_ICON[f.value]!}
-            label={f.label === "Differences" ? "Diffs" : f.label}
-            title={`Show ${f.label.toLowerCase()}`}
-            active={cfg.filter === f.value}
-            onClick={() => update({ filter: f.value })}
+      {/* Main toolbar: display filters, structure, Minor, Rules, copy, expand/collapse, selection, refresh. */}
+      <div className="toolbar fc-toolbar">
+        <div className="stack-group" role="group" aria-label="Show">
+          <StackButton
+            icon={<Columns2 size={16} />}
+            label="All"
+            active={cfg.filter === "all"}
+            onClick={() => update({ filter: "all" })}
+            title="Show all files and folders"
           />
-        ))}
-        <select
-          className={`more-filters${moreFilters.some((f) => f.value === cfg.filter) ? " active" : ""}`}
-          value={moreFilters.some((f) => f.value === cfg.filter) ? cfg.filter : ""}
-          onChange={(e) => e.target.value && update({ filter: e.target.value as DisplayFilter })}
-          title="More display filters"
-        >
-          <option value="">More…</option>
-          {moreFilters.map((f) => (
-            <option key={f.value} value={f.value}>
-              {f.label}
-            </option>
-          ))}
-        </select>
-        <span className="tool-sep" />
-        <ToolButton icon="expand" label="Expand" title="Expand all folders" disabled={cfg.flatten} onClick={() => setExpanded(allDirs(entries))} />
-        <ToolButton icon="collapse" label="Collapse" title="Collapse all folders" disabled={cfg.flatten} onClick={() => setExpanded(new Set())} />
-        <ToolButton
-          icon="flatten"
-          label="Flatten"
-          title="Ignore folder structure: list every file at one level"
-          active={cfg.flatten}
-          onClick={() => update({ flatten: !cfg.flatten })}
+          <StackMenuButton
+            icon={<EqualNot size={16} />}
+            label="Diffs"
+            active={narrowed}
+            onClick={() => update({ filter: "diffs" })}
+            onMenu={(at) => filterMenu.open(at, null)}
+            title={narrowed ? `Showing: ${filterLabel}. ▾ for orphans, newer files and more` : "Show differences. ▾ for orphans, newer files and more"}
+          />
+          <StackButton
+            icon={<Equal size={16} />}
+            label="Same"
+            active={cfg.filter === "same"}
+            onClick={() => update({ filter: "same" })}
+            title="Show only files that are the same"
+          />
+        </div>
+        <StackMenuButton
+          icon={<FolderTree size={16} />}
+          label="Structure"
+          active={cfg.flatten || cfg.structure !== "structure"}
+          onMenu={(at) => structureMenu.open(at, null)}
+          title={`When folders show: ${cfg.flatten ? "Ignore folder structure" : FOLDER_STRUCTURES.find((f) => f.value === cfg.structure)?.label}`}
         />
-        <button
-          className={`tool-btn${legendAt ? " active" : ""}`}
-          title="View options and the legend of status colours and icons"
+        <StackButton
+          icon={<Feather size={16} />}
+          label="Minor"
+          active={cfg.ignoreMinor}
+          onClick={() => update({ ignoreMinor: !cfg.ignoreMinor })}
+          title={
+            cfg.ignoreMinor
+              ? "Ignoring unimportant differences: files that differ only by the text rules count as same (click to count them as differences)"
+              : "Unimportant differences count as differences (click to ignore them)"
+          }
+        />
+        <StackButton
+          icon={<SlidersHorizontal size={16} />}
+          label={alignCount ? `Rules · ${alignCount}` : "Rules"}
+          onClick={() => setSettingsPage("comparison")}
+          title="Session rules: comparison criteria, alignment, filters and text rules"
+        />
+        <span className="sep" />
+        <StackButton
+          icon={copy.target === "left" ? <ArrowLeft size={16} /> : copy.target === "right" ? <ArrowRight size={16} /> : <ArrowLeftRight size={16} />}
+          label="Copy"
+          disabled={copy.disabled}
           onClick={(ev) => {
-            const r = ev.currentTarget.getBoundingClientRect();
-            viewMenu.open({ clientX: r.left, clientY: r.bottom }, { x: r.left, y: r.bottom + 2 });
+            if (copy.target) return copy.run(copy.target);
+            ev.stopPropagation();
+            const box = ev.currentTarget.getBoundingClientRect();
+            copyMenu.open({ clientX: box.left, clientY: box.bottom + 2 }, null);
           }}
-        >
-          <Eye size={20} className="fop-tool" />
-          <span>View</span>
-        </button>
-        <span className="tool-sep" />
-        <ToolButton
-          icon="rules"
-          label={filterCount ? `Rules · ${filterCount}` : "Rules"}
-          title={`Comparison, alignment, filters and text rules${filterCount ? ` (${filterCount} filter${filterCount > 1 ? "s" : ""} or override${filterCount > 1 ? "s" : ""} active)` : ""}`}
-          onClick={() => setShowSettings(true)}
+          title={copy.title}
         />
-        <button
-          className={`tool-btn${cfg.suppressFilters ? " active" : ""}`}
-          aria-pressed={cfg.suppressFilters}
-          title="Suppress filters: also show what the filters leave out, in teal (filtered folders are listed once, then kept)"
-          onClick={() => update({ suppressFilters: !cfg.suppressFilters })}
-        >
-          <FunnelX size={20} className="fop-tool" />
-          <span>Suppress</span>
+        <span className="sep" />
+        <StackButton
+          icon={<UnfoldVertical size={16} />}
+          label="Expand"
+          disabled={cfg.flatten}
+          onClick={() => setExpanded(allDirs(entries))}
+          title="Open every folder"
+        />
+        <StackButton
+          icon={<FoldVertical size={16} />}
+          label="Collapse"
+          disabled={cfg.flatten}
+          onClick={() => setExpanded(new Set())}
+          title="Close every folder"
+        />
+        <StackButton
+          icon={<ListChecks size={16} />}
+          label="Select"
+          disabled={!result}
+          onClick={() => setSelecting(true)}
+          title={`Select files and folders by status, name, size or date (${shortcutLabel("folder.selectWhere")})`}
+        />
+        <StackButton
+          icon={<FileCheck size={16} />}
+          label="Files"
+          disabled={!flat.length}
+          onClick={selectAllFiles}
+          title="Select all files shown, on both sides"
+        />
+        <StackButton icon={<RefreshCw size={16} />} label="Refresh" onClick={() => run()} title="Refresh: list and compare both folders again (F5)" />
+        <span className="spacer" />
+        {/* Less frequent commands, icon only. */}
+        <button className="icon-btn" title="Synchronize these folders" disabled={!left || !right} onClick={() => onOpenSync(left, right)}>
+          <FolderSync size={14} />
         </button>
-        <span className="tool-sep" />
-        <ToolButton icon="swap" label="Swap" title="Swap sides" disabled={!left && !right} onClick={() => onPathsChange(right, left)} />
-        <ToolButton icon="refresh" label="Refresh" title="Refresh (F5)" onClick={() => run()} />
-        <ToolButton icon="sync" label="Sync" title="Synchronize these folders" disabled={!left || !right} onClick={() => onOpenSync(left, right)} />
         {/* bc5:reports-script */}
-        <ToolButton
-          icon="report"
-          label="Report"
+        <button
+          className="icon-btn"
           title="Folder comparison report: summary or detailed, as HTML, text or CSV, honouring the display filter"
           disabled={!result}
           onClick={() => setReporting(true)}
-        />
-        <button
-          className="tool-btn"
-          title={`Select files and folders by status, name, size or date (${shortcutLabel("folder.selectWhere")})`}
-          disabled={!result}
-          onClick={() => setSelecting(true)}
         >
-          <ListChecks size={20} className="fop-tool" />
-          <span>Select</span>
+          <FileText size={14} />
         </button>
         <button
-          className={`tool-btn${splitView ? " active" : ""}`}
+          className={`icon-btn${splitView ? " active" : ""}`}
           aria-pressed={splitView}
           title={`Show the selected file pair's comparison below the folders (${shortcutLabel("folder.splitView")})`}
           onClick={toggleSplit}
         >
-          <PanelBottom size={20} className="fop-tool" />
-          <span>Split</span>
+          <PanelBottom size={14} />
         </button>
         {review.toolbar /* araxis:text-review */}
-        {fops.toolbar /* bc5:file-ops */}
         {/* bc5:archives */}
-        <ToolButton
-          icon="snapshot"
-          label="Snapshot"
+        <button
+          className="icon-btn"
           title="Save a snapshot of a side: names, sizes, dates (and optionally CRCs) to compare against later"
           disabled={!left && !right}
           onClick={() => setSnapshotting(true)}
-        />
+        >
+          <Camera size={14} />
+        </button>
+        {fops.toolbar /* bc5:file-ops */}
+        <button
+          className={`icon-btn${legendAt ? " active" : ""}`}
+          title="View: ignore folder structure, attributes, split view, log, and the legend of colours and icons"
+          onClick={(ev) => {
+            ev.stopPropagation();
+            const r = ev.currentTarget.getBoundingClientRect();
+            viewMenu.open({ clientX: r.left, clientY: r.bottom }, { x: r.left, y: r.bottom + 2 });
+          }}
+        >
+          <Eye size={14} />
+        </button>
       </div>
 
-      <div className="toolbar filterbar">
-        <input
-          className="name-filter"
-          value={nameQuery}
-          onChange={(e) => setNameQuery(e.target.value)}
-          placeholder="Filter names (*.rs)"
-          spellCheck={false}
+      {/* Second row: swap, stop, the file filter and Peek (suppress filters). */}
+      <div className="toolbar fc-toolbar fc-toolbar-2">
+        <StackButton
+          icon={<ArrowLeftRight size={16} />}
+          label="Swap"
+          disabled={!left && !right}
+          onClick={() => onPathsChange(right, left)}
+          title="Swap sides: exchange the left and right folders"
         />
-        <label>
+        <StackButton icon={<CircleStop size={16} />} label="Stop" disabled={!phase} onClick={cancel} title="Stop comparing (Esc)" />
+        <span className="sep" />
+        <label className="fc-filterbox" title="Files to include, then -names to exclude (files or folders), separated by ; — e.g. *.rs;*.ts;-target;-*.tmp. Press Enter to apply.">
+          Filters:
+          <input
+            list="fc-filter-presets"
+            value={filterText}
+            onChange={(e) => setFilterText(e.target.value)}
+            onKeyDown={(e) => e.key === "Enter" && applyFilterBox()}
+            onBlur={applyFilterBox}
+            spellCheck={false}
+          />
+          <datalist id="fc-filter-presets">
+            {FILTER_BOX_PRESETS.map((p) => (
+              <option key={p} value={p} />
+            ))}
+          </datalist>
+        </label>
+        <StackButton
+          icon={<Funnel size={16} />}
+          label={dialogFilters ? `Filters · ${dialogFilters}` : "Filters"}
+          onClick={() => setSettingsPage("filters")}
+          title={`Name, size, date, attribute and content filters${dialogFilters ? ` (${dialogFilters} active)` : ""}`}
+        />
+        <StackButton
+          icon={<FunnelX size={16} />}
+          label="Peek"
+          active={cfg.suppressFilters}
+          onClick={() => update({ suppressFilters: !cfg.suppressFilters })}
+          title="Peek: suppress the filters for a moment and show what they leave out, in teal"
+        />
+        <span className="spacer" />
+        <label className="fc-find" title="Show only names that match: text, or wildcards like *.rs">
+          <Search size={13} />
+          <input value={nameQuery} onChange={(e) => setNameQuery(e.target.value)} placeholder="Find names" spellCheck={false} />
+        </label>
+        <label title="What decides that two files are the same">
           Compare
           <select
             value={preset}
@@ -998,28 +1208,9 @@ export function FolderCompare({
             {preset === "custom" && <option value="custom">Custom</option>}
           </select>
         </label>
-        <label className="grow">
-          Exclude
-          <input
-            value={excludeText}
-            onChange={(e) => setExcludeText(e.target.value)}
-            onKeyDown={(e) => e.key === "Enter" && update({ exclude: excludeText })}
-            onBlur={() => update({ exclude: excludeText })}
-            placeholder="*.tmp, bin, obj"
-            spellCheck={false}
-          />
-        </label>
         <label className={`check${watchState === "watching" || watchState === "polling" ? " live" : ""}`} title={autoRefreshTitle(watchState)}>
           <input type="checkbox" checked={cfg.autoRefresh} onChange={(e) => update({ autoRefresh: e.target.checked })} />
           Auto-refresh
-        </label>
-        <label className="check" title="Show file attributes (DOS RHSA / Unix permissions)">
-          <input
-            type="checkbox"
-            checked={cfg.showAttributes}
-            onChange={(e) => update({ showAttributes: e.target.checked })}
-          />
-          Attributes
         </label>
       </div>
 
@@ -1050,6 +1241,16 @@ export function FolderCompare({
             {result && <VirtualList className="folder-list" count={flat.length} rowHeight={24} renderRow={renderRow} />}
             {review.layer /* araxis:text-review — Bookmarks & comments panel */}
           </div>
+          {/* Per side: what is selected there and the free space on its volume. */}
+          <div className="fheader fc-sidefoot">
+            {(["left", "right"] as const).map((side) => (
+              <div key={side} className={`fc-sidefoot-${side}`} style={{ gridColumn: sideColumns(side, cfg.showAttributes) }}>
+                <span>{selectionSummary(fops.selected, fops.sel.side, side)}</span>
+                <span className="spacer" />
+                <span>{freeLabel(free[side])}</span>
+              </div>
+            ))}
+          </div>
         </div>
         {splitView && (
           <>
@@ -1076,6 +1277,21 @@ export function FolderCompare({
         )}
       </div>
       {fops.panel /* bc5:file-ops — docked Operations panel */}
+      {cfg.showLog && (
+        <div className="fc-log" role="log" aria-label="Log">
+          <div className="fc-log-lines" ref={logBox}>
+            {log.map((l, i) => (
+              <div key={i} className={l.error ? "fc-log-error" : undefined}>
+                <span className="fc-log-time">{new Date(l.at).toLocaleString()}</span>
+                {l.text}
+              </div>
+            ))}
+          </div>
+          <button className="icon-btn" title="Hide the log (View → Log)" onClick={() => update({ showLog: false })}>
+            <X size={12} />
+          </button>
+        </div>
+      )}
 
       <div className="statusbar">
         {!stats && liveStatus}
@@ -1100,6 +1316,7 @@ export function FolderCompare({
             <span className="s-leftOnly-fg">{stats.leftOnly} left only</span>
             <span className="s-rightOnly-fg">{stats.rightOnly} right only</span>
             {stats.errors > 0 && <span className="s-error-fg">{stats.errors} errors</span>}
+            {cfg.filter !== "all" && <span className="muted">Showing: {filterLabel}</span>}
             {filteredCount > 0 && (
               <span
                 className="s-filtered-fg"
@@ -1128,6 +1345,9 @@ export function FolderCompare({
 
       {menu.element}
       {viewMenu.element}
+      {filterMenu.element}
+      {structureMenu.element}
+      {copyMenu.element}
       {legendAt && <LegendPopover {...legendAt} onClose={() => setLegendAt(null)} />}
 
       {/* bc5:reports-script — the report lists what the view shows (re-checks and ignore marks included). */}
@@ -1157,13 +1377,14 @@ export function FolderCompare({
       {snapshotting && <SnapshotDialog folders={[left, right]} onClose={() => setSnapshotting(false)} /> /* bc5:archives */}
       {/* bc5:converters */}
       {toolsDialog && <FileFormatsDialog initialPage="tools" onClose={() => setToolsDialog(false)} />}
-      {showSettings && (
+      {settingsPage && (
         <FolderSettingsDialog
           value={cfg}
-          onClose={() => setShowSettings(false)}
+          initialPage={settingsPage}
+          onClose={() => setSettingsPage(null)}
           onApply={(s: CompareSettings) => {
             update(s);
-            setExcludeText(s.exclude);
+            setFilterText(formatFilterBox(s));
           }}
         />
       )}

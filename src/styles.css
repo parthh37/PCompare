@@ -1526,3 +1526,54 @@ button,
 .path-recent-forget:hover {
   color: var(--text);
 }
+
+/* ---------- Viewer toolbar buttons (StackButton) ---------- */
+/* Icon above its label, flat until hovered, sunken while pressed (classic toggle look). */
+.stack-btn {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  min-width: 44px;
+  height: 42px;
+  padding: 3px 4px;
+  border-color: transparent;
+  background: transparent;
+  font-size: 11px;
+  line-height: 1.1;
+  white-space: nowrap;
+}
+.stack-btn svg.lucide {
+  vertical-align: 0;
+}
+.stack-btn.active {
+  background: var(--accent-tint);
+  border-color: var(--accent-border);
+  color: var(--accent);
+}
+/* All / Diffs / Same / Context are one radio group. */
+.stack-group {
+  display: inline-flex;
+  gap: 1px;
+  padding: 1px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+.stack-group .stack-btn {
+  min-width: 44px;
+  height: 40px;
+}
+/* A ▾ beside the label opens the button's menu. */
+.stack-btn .stack-drop {
+  display: inline-flex;
+  margin-left: 1px;
+  padding: 0 1px;
+  border-radius: 3px;
+  vertical-align: middle;
+  opacity: 0.75;
+}
+.stack-btn .stack-drop:hover {
+  background: var(--sel-bg-strong);
+  opacity: 1;
+}

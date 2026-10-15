@@ -8,7 +8,7 @@ import {
   type LargeFileMethod,
   type TextDiffOptions,
 } from "./api";
-import type { DisplayFilter } from "./folderTree";
+import type { DisplayFilter, FolderStructure } from "./folderTree";
 import type { FolderBookmark } from "./reviewApi"; // araxis:text-review
 
 /** Settings that change what the engine computes (editing them re-runs the compare). */
@@ -61,6 +61,12 @@ export interface CompareSettings {
 /** Everything a saved folder session remembers besides its paths. */
 export interface FolderSettings extends CompareSettings {
   filter: DisplayFilter;
+  /** When folders show, whatever the display filter. */
+  structure: FolderStructure;
+  /** Unimportant differences count as same for the display filters ("Minor"). */
+  ignoreMinor: boolean;
+  /** The log panel under the folders. */
+  showLog: boolean;
   flatten: boolean;
   autoRefresh: boolean;
   /** Show the Attributes column. */
@@ -109,6 +115,9 @@ export const DEFAULT_FOLDER_SETTINGS: FolderSettings = {
   followLinks: true,
   expandArchives: false, // bc5:archives
   filter: "all",
+  structure: "structure",
+  ignoreMinor: true,
+  showLog: true,
   flatten: false,
   autoRefresh: false,
   showAttributes: false,
@@ -235,6 +244,41 @@ export function toEngineOptions(s: CompareSettings): FolderCompareOptions {
     ignoreDstShift: s.ignoreDstShift,
   };
 }
+
+/**
+ * The toolbar's one-line file filter, e.g. `*.rs;*.ts;-target;-*.tmp`: names
+ * to include, then `-` names to exclude (files or folders). `*.*` stands for
+ * "every file". Name, size, date and content filters stay in the dialog.
+ */
+export function formatFilterBox(s: Pick<CompareSettings, "includeFiles" | "exclude">): string {
+  const include = globs(s.includeFiles);
+  return [...(include.length ? include : ["*.*"]), ...globs(s.exclude).map((g) => `-${g}`)].join(";");
+}
+
+/** Reads {@link formatFilterBox}'s format back; `;` and `,` both separate. */
+export function parseFilterBox(text: string): Pick<CompareSettings, "includeFiles" | "exclude"> {
+  const parts = text
+    .split(/[;,]/)
+    .map((p) => p.trim())
+    .filter(Boolean);
+  // A trailing slash marks a folder ("-node_modules/"); the exclude list matches folders by name anyway.
+  const bare = (p: string) => p.replace(/[\\/]+$/, "");
+  const include = parts.filter((p) => !p.startsWith("-") && p !== "*.*" && p !== "*");
+  const exclude = parts.filter((p) => p.startsWith("-")).map((p) => bare(p.slice(1).trim())).filter(Boolean);
+  return { includeFiles: include.join(", "), exclude: exclude.join(", ") };
+}
+
+/** Ready-made Filters box values, offered in its drop-down. */
+export const FILTER_BOX_PRESETS = [
+  "*.*",
+  "*.*;-.git;-node_modules",
+  "*.*;-*.bak;-*.tmp;-*.log;-~*",
+  "*.rs;*.ts;*.tsx;*.js;*.css",
+  "*.c;*.cpp;*.h;*.hpp",
+  "*.cs;*.csproj;*.sln",
+  "*.java;*.kt;*.gradle",
+  "*.py",
+];
 
 /** How many filters beyond the plain exclude list are active — shown on the toolbar. */
 export function activeFilterCount(s: CompareSettings): number {

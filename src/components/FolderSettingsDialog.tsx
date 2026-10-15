@@ -7,9 +7,12 @@ interface Props {
   value: CompareSettings;
   onApply: (s: CompareSettings) => void;
   onClose: () => void;
+  /** The tab to open on (default Comparison). */
+  initialPage?: Page;
 }
 
-type Page = "comparison" | "alignment" | "filters" | "rules";
+export type FolderSettingsPage = "comparison" | "alignment" | "filters" | "rules";
+type Page = FolderSettingsPage;
 
 /** Attribute exclusions offered on the Filters page (hidden has its own switch). */
 const ATTR_FILTERS: { bit: number; label: string }[] = [
@@ -45,9 +48,9 @@ const LARGE_FILE_METHODS: { value: LargeFileMethod; label: string }[] = [
 ];
 
 /** Beyond Compare-style session settings: comparison, filters, text rules. */
-export function FolderSettingsDialog({ value, onApply, onClose }: Props) {
+export function FolderSettingsDialog({ value, onApply, onClose, initialPage = "comparison" }: Props) {
   const [s, setS] = useState<CompareSettings>(value);
-  const [page, setPage] = useState<Page>("comparison");
+  const [page, setPage] = useState<Page>(initialPage);
   const set = <K extends keyof CompareSettings>(k: K, v: CompareSettings[K]) => setS((p) => ({ ...p, [k]: v }));
   const setRules = (patch: Partial<CompareSettings["rules"]>) => setS((p) => ({ ...p, rules: { ...p.rules, ...patch } }));
   const num = (v: string) => (v.trim() === "" ? null : Math.max(0, Number(v)));
