@@ -119,7 +119,16 @@ function GeneralPage({ updater, prefs, set }: { updater: Updater; prefs: Prefs; 
             checked={updater.autoCheck}
             onChange={(e) => updater.setAutoCheck(e.target.checked)}
           />
-          Check for updates automatically
+          Check for updates automatically (every hour)
+        </label>
+        <label className="field check">
+          <input
+            type="checkbox"
+            checked={updater.reminders}
+            disabled={!updater.autoCheck}
+            onChange={(e) => updater.setReminders(e.target.checked)}
+          />
+          Remind me with a pop-up whenever a new version is available
         </label>
       </fieldset>
     </div>
