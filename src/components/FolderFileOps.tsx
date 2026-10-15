@@ -6,10 +6,11 @@
 // ↑/↓ (with Shift) move through the list. Operations — copy / move to the
 // other side or a folder, delete, rename, new folder, attributes, touch —
 // work on the selected side's items, run in the background Operations queue
-// and rescan the comparison when they finish.
+// and, when they finish, compare the rows they changed again (or rescan).
 import { ArrowLeftToLine, ArrowRightToLine, ListTodo, Trash } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type MouseEvent, type ReactNode, type RefObject } from "react";
 import type { FolderCompareOptions, FolderCompareResult, FolderEntry, Side } from "../lib/api";
+import { touchedRows } from "../lib/folderRefresh";
 import {
   countSide,
   fileOps,
@@ -64,8 +65,10 @@ interface Args {
   right: string;
   /** Opens the given entries (Enter). */
   onOpen: (entries: FolderEntry[]) => void;
-  /** Rescans after an operation touched these folders. */
+  /** Rescans after an operation changed too much to refresh row by row. */
   onRefresh: () => void;
+  /** Compares these rows (tree paths) again after an operation changed them. */
+  onRefreshRows: (rels: string[]) => void;
   onError: (message: string) => void;
   /** The comparison's options: copies and moves leave out what its filters hide. */
   compareOptions?: FolderCompareOptions;
@@ -86,6 +89,7 @@ export function useFolderFileOps({
   right,
   onOpen,
   onRefresh,
+  onRefreshRows,
   onError,
   compareOptions,
 }: Args) {
@@ -103,15 +107,21 @@ export function useFolderFileOps({
   const selected = useMemo(() => flat.map((r) => r.entry).filter((e) => sel.rows.has(e.relPath)), [flat, sel.rows]);
   const focusEntry = (sel.focus != null ? flat[index.get(sel.focus) ?? -1]?.entry : undefined) ?? selected[0];
 
-  // Rescan when an operation that touched our folders finishes (in any tab).
-  const refresh = useRef({ onRefresh, left, right });
-  refresh.current = { onRefresh, left, right };
+  // When an operation that touched our folders finishes (in any tab), compare
+  // the rows it changed again; rescan when that can't be worked out.
+  const refresh = useRef({ onRefresh, onRefreshRows, left, right, result });
+  refresh.current = { onRefresh, onRefreshRows, left, right, result };
   useEffect(
     () =>
       fileOps.onFinished((op) => {
-        const { left: l, right: r, onRefresh: go } = refresh.current;
+        const { left: l, right: r, result: res, onRefresh: rescan, onRefreshRows: compareRows } = refresh.current;
+        const rows = res ? touchedRows(op, { left: l, right: r, entries: res.entries }) : null;
+        if (rows) {
+          if (rows.length) compareRows(rows);
+          return;
+        }
         const touched = [op.srcRoot, op.dstRoot ?? ""];
-        if (touched.some((t) => pathsOverlap(t, l) || pathsOverlap(t, r))) go();
+        if (touched.some((t) => pathsOverlap(t, l) || pathsOverlap(t, r))) rescan();
       }),
     [],
   );
