@@ -13,7 +13,7 @@ import {
   Clock,
   FolderPlus,
   FolderSync as FolderSyncIcon,
-  Grid3x3, // bc5:sync-matrix
+  Grid3x3,
   Info,
   ListChecks,
   ListX,
@@ -39,8 +39,8 @@ import { basename, formatSize, formatTime, joinPath } from "../lib/format";
 import type { SyncTask } from "../lib/automationApi"; // automation:ui
 import { matches, shortcutLabel } from "../lib/keymap";
 import type { CompareProps } from "../lib/sessionProps";
-import { SEPARATOR, type MenuItems } from "../lib/nativeMenu"; // bc5:sync-matrix
-import { ACTIONS, PRESET_MATRICES, actionApplies, matrixDeletes, presetOf } from "../lib/syncMatrix"; // bc5:sync-matrix
+import { SEPARATOR, type MenuItems } from "../lib/nativeMenu";
+import { ACTIONS, PRESET_MATRICES, actionApplies, matrixDeletes, presetOf } from "../lib/syncMatrix";
 import {
   DEFAULT_EXEC_OPTIONS,
   FAILURE_LABELS,
@@ -65,9 +65,9 @@ import {
   type SyncRun,
   type SyncSkip,
 } from "../lib/syncApi";
-import { useContextMenu } from "./ContextMenu"; // bc5:sync-matrix
+import { useContextMenu } from "./ContextMenu";
 import { Modal } from "./Modal";
-import { SyncMatrixEditor } from "./SyncMatrixEditor"; // bc5:sync-matrix
+import { SyncMatrixEditor } from "./SyncMatrixEditor";
 import { PathBar } from "./PathBar";
 import { SyncHistoryDialog } from "./SyncHistoryDialog";
 import { SyncOptionsDialog, TRASH_NAME, safetySummary } from "./SyncOptionsDialog";
@@ -90,14 +90,12 @@ export interface FolderSyncSettings {
   conflicts: ConflictPolicy;
   /** Retries, locked-file policy, verification and disposal for runs. */
   exec: ExecOptions;
-  // bc5:sync-matrix
   /** One action per category; planning uses it in Custom mode. */
   matrix: SyncMatrix;
   /** Don't create orphan folders that hold no files. */
   skipEmptyFolders: boolean;
   /** Only these items (Folder Compare's "Synchronize selection"); absent = everything. */
   scope?: string[];
-  // bc5:sync-matrix end
 }
 
 interface Props extends CompareProps<FolderSyncSettings> {
@@ -158,7 +156,6 @@ export const MODES: ModeInfo[] = [ // automation:ui — exported
     hint: "Make the left side identical to the right, deleting left-only items.",
     deletes: true,
   },
-  // bc5:sync-matrix
   {
     value: "custom",
     label: "Custom…",
@@ -209,7 +206,7 @@ function restoreSettings(s: Partial<FolderSyncSettings> | undefined): FolderSync
     compare: s?.compare && s.compare in COMPARE_PRESETS ? s.compare : DEFAULTS.compare,
     conflicts: CONFLICT_POLICIES.some((c) => c.value === s?.conflicts) ? s!.conflicts! : DEFAULTS.conflicts,
     exec: { ...DEFAULT_EXEC_OPTIONS, ...s?.exec },
-    // bc5:sync-matrix — sessions saved before the matrix start from their mode's preset.
+    // sessions saved before the matrix start from their mode's preset.
     matrix: s?.matrix
       ? { ...PRESET_MATRICES.updateLeftToRight, ...s.matrix }
       : PRESET_MATRICES[s?.mode && s.mode !== "custom" && s.mode in PRESET_MATRICES ? s.mode : DEFAULTS.mode as Exclude<SyncMode, "custom">],
@@ -218,7 +215,7 @@ function restoreSettings(s: Partial<FolderSyncSettings> | undefined): FolderSync
   };
 }
 
-// ---------- bc5:sync-matrix — per-row actions ----------
+// ---------- per-row actions ----------
 
 /** Which sides hold a preview row's item. */
 function rowSides(row: Row): { left: boolean; right: boolean } {
@@ -317,7 +314,7 @@ interface RunningJob {
   exec: ExecOptions;
   progress: SyncProgress | null;
   cancelling: boolean;
-  /** bc5:file-ops — held by the user. */
+  /** held by the user. */
   paused?: boolean;
 }
 
@@ -336,7 +333,7 @@ export function FolderSync({ left, right, onPathsChange, settings, onSettingsCha
   const [excluded, setExcluded] = useState<Set<number>>(new Set());
   const [filter, setFilter] = useState<OpFilter>("all");
   const [sort, setSort] = useState<{ key: SortKey; desc: boolean }>({ key: "plan", desc: false });
-  // bc5:sync-matrix — multi-selection (by relPath) and the actions picked for rows.
+  // multi-selection (by relPath) and the actions picked for rows.
   const [selection, setSelection] = useState<Set<string>>(new Set());
   const anchor = useRef<number | null>(null);
   const [overrides, setOverrides] = useState<Record<string, SyncAction>>({});
@@ -369,7 +366,7 @@ export function FolderSync({ left, right, onPathsChange, settings, onSettingsCha
     });
   }, [cfg.compare, cfg.exclude, cfg.includeHidden]);
 
-  // bc5:sync-matrix — what planning needs besides the mode, compare options and conflicts.
+  // what planning needs besides the mode, compare options and conflicts.
   const baseRules = useMemo<PlanRules>(
     () => ({
       matrix: cfg.mode === "custom" ? cfg.matrix : undefined,
@@ -394,7 +391,7 @@ export function FolderSync({ left, right, onPathsChange, settings, onSettingsCha
     const seq = ++planSeq.current;
     setLoading(true);
     setError(null);
-    // A rescan starts from the matrix again, like Beyond Compare's refresh (bc5:sync-matrix).
+    // A rescan starts from the matrix again, like a refresh.
     setOverrides({});
     try {
       const next = await syncApi.plan(left, right, cfg.mode, compare, cfg.conflicts, baseRules);
@@ -411,7 +408,7 @@ export function FolderSync({ left, right, onPathsChange, settings, onSettingsCha
   }, [left, right, cfg.mode, cfg.conflicts, compare, baseRules]);
 
   /**
-   * bc5:sync-matrix — sets (or, with null, resets) the action of `paths` and re-plans from the
+   * sets (or, with null, resets) the action of `paths` and re-plans from the
    * comparison already made: only those rows change, unticked operations stay unticked.
    */
   const setRowAction = async (paths: string[], action: SyncAction | null) => {
@@ -592,7 +589,7 @@ export function FolderSync({ left, right, onPathsChange, settings, onSettingsCha
     syncApi.cancel(job.key).catch((e) => setError(errorMessage(e)));
   };
 
-  // bc5:file-ops — Pause / Resume a running sync.
+  // Pause / Resume a running sync.
   const togglePause = () => {
     if (!job) return;
     const paused = !job.paused;
@@ -601,12 +598,12 @@ export function FolderSync({ left, right, onPathsChange, settings, onSettingsCha
   };
 
   const openPair = (op: SyncOp) => {
-    // bc5:file-ops — aligned pairs have their own name on the left.
+    // aligned pairs have their own name on the left.
     if (onOpenFiles && plan && op.overwrite)
       onOpenFiles(joinPath(plan.leftRoot, op.leftRelPath ?? op.relPath), joinPath(plan.rightRoot, op.relPath));
   };
 
-  // bc5:sync-matrix — click selects, Ctrl/Cmd+click toggles, Shift+click extends.
+  // click selects, Ctrl/Cmd+click toggles, Shift+click extends.
   const clickRow = (i: number, e: { shiftKey: boolean; metaKey: boolean; ctrlKey: boolean }) => {
     const path = rowPath(rows[i]);
     if (e.shiftKey && anchor.current != null) {
@@ -626,7 +623,7 @@ export function FolderSync({ left, right, onPathsChange, settings, onSettingsCha
 
   const selectedRows = useMemo(() => rows.filter((r) => selection.has(rowPath(r))), [rows, selection]);
 
-  /** The row actions for `targets`, each applied where it can be (bc5:sync-matrix). */
+  /** The row actions for `targets`, each applied where it can be. */
   const actionItems = (targets: Row[]): MenuItems => {
     const paths = targets.map(rowPath);
     const anySet = paths.some((p) => p in overrides);
@@ -751,11 +748,11 @@ export function FolderSync({ left, right, onPathsChange, settings, onSettingsCha
   }, [plan]);
 
   const baseMode = MODES.find((m) => m.value === cfg.mode) ?? MODES[0];
-  // bc5:sync-matrix — a custom matrix deletes if any of its cells do.
+  // a custom matrix deletes if any of its cells do.
   const mode = cfg.mode === "custom" ? { ...baseMode, deletes: matrixDeletes(cfg.matrix) } : baseMode;
   const ModeIcon = mode.icon;
 
-  /** bc5:sync-matrix — switching to Custom starts from the mode in use unless the matrix was already customised. */
+  /** switching to Custom starts from the mode in use unless the matrix was already customised. */
   const pickMode = (next: SyncMode) => {
     if (next !== "custom") return update({ mode: next });
     const seed = cfg.mode !== "custom" && presetOf(cfg.matrix) ? PRESET_MATRICES[cfg.mode] : cfg.matrix;
@@ -780,7 +777,6 @@ export function FolderSync({ left, right, onPathsChange, settings, onSettingsCha
             ))}
           </select>
         </label>
-        {/* bc5:sync-matrix */}
         {cfg.mode === "custom" && (
           <button onClick={() => setMatrixOpen(true)} disabled={running} title="Choose the action for each kind of difference">
             <Grid3x3 size={14} /> Matrix…
@@ -826,7 +822,7 @@ export function FolderSync({ left, right, onPathsChange, settings, onSettingsCha
           />
           Hidden files
         </label>
-        {/* bc5:sync-matrix — BC's "Sync empty folders" */}
+        {/* "Sync empty folders" */}
         <label className="check" title="Create folders that hold no files (or only filtered-out ones) on the other side">
           <input
             type="checkbox"
@@ -860,7 +856,7 @@ export function FolderSync({ left, right, onPathsChange, settings, onSettingsCha
                 left,
                 right,
                 mode: cfg.mode,
-                matrix: cfg.mode === "custom" ? cfg.matrix : PRESET_MATRICES[cfg.mode], // bc5:sync-matrix
+                matrix: cfg.mode === "custom" ? cfg.matrix : PRESET_MATRICES[cfg.mode],
                 skipEmptyFolders: cfg.skipEmptyFolders,
                 conflicts: cfg.conflicts,
                 compare,
@@ -910,7 +906,7 @@ export function FolderSync({ left, right, onPathsChange, settings, onSettingsCha
         <button onClick={() => setVisible(false)} disabled={!plan?.ops.length} title="Exclude every operation shown">
           <ListX size={14} /> Select none
         </button>
-        {/* bc5:sync-matrix — the selected rows' action (also on the right-click menu) */}
+        {/* the selected rows' action (also on the right-click menu) */}
         <span className="sep" />
         <div className="seg-control sync-actions" role="group" aria-label="Action for the selected rows">
           {ROW_ACTIONS.map((a) => {
@@ -946,7 +942,7 @@ export function FolderSync({ left, right, onPathsChange, settings, onSettingsCha
         <span className="muted sync-hint">{mode.hint}</span>
       </div>
 
-      {/* bc5:remote-write — remote sides sync too, but without a Recycle Bin. */}
+      {/* remote sides sync too, but without a Recycle Bin. */}
       {remote && (
         <div className="banner info sync-banner">
           A side is on a remote profile. Files deleted or overwritten there are removed permanently (remote folders have
@@ -1026,7 +1022,7 @@ export function FolderSync({ left, right, onPathsChange, settings, onSettingsCha
         </div>
       )}
 
-      {/* bc5:sync-matrix — "Synchronize selection" from Folder Compare */}
+      {/* "Synchronize selection" from Folder Compare */}
       {cfg.scope && (
         <div className="banner info sync-banner sync-subtle">
           <Info size={13} /> Only the {count(cfg.scope.length, "item")} selected in Folder Compare (and their contents) are
@@ -1117,7 +1113,6 @@ export function FolderSync({ left, right, onPathsChange, settings, onSettingsCha
         />
       )}
 
-      {/* bc5:sync-matrix */}
       {matrixOpen && (
         <SyncMatrixDialog
           value={cfg.matrix}
@@ -1154,7 +1149,7 @@ export function FolderSync({ left, right, onPathsChange, settings, onSettingsCha
   );
 }
 
-/** bc5:sync-matrix — edits Custom mode's matrix. */
+/** edits Custom mode's matrix. */
 function SyncMatrixDialog({
   value,
   onApply,
@@ -1331,7 +1326,7 @@ function SyncProgressPanel({ job, onCancel, onPause }: { job: RunningJob; onCanc
   const pct = p ? (p.bytesTotal > 0 ? (p.bytesDone / p.bytesTotal) * 100 : p.total > 0 ? (p.done / p.total) * 100 : 0) : 0;
   let phase = "Synchronizing…";
   if (job.cancelling) phase = "Cancelling…";
-  else if (p?.phase === "paused" || job.paused) phase = p?.phase === "paused" ? "Paused" : "Pausing…"; // bc5:file-ops
+  else if (p?.phase === "paused" || job.paused) phase = p?.phase === "paused" ? "Paused" : "Pausing…";
   else if (p?.phase === "retrying")
     // `attempt` is the try that just failed; the wait is for the next one.
     phase = `Waiting to retry — ${lowerFirst(FAILURE_LABELS[p.waitingOn ?? "other"])} (attempt ${p.attempt + 1} of ${
@@ -1356,7 +1351,6 @@ function SyncProgressPanel({ job, onCancel, onPause }: { job: RunningJob; onCanc
         {p && p.failed > 0 && <span className="s-error-fg">{p.failed} failed</span>}
         {p && p.deferred > 0 && <span className="sync-deferred">{p.deferred} deferred</span>}
         <span className="spacer" />
-        {/* bc5:file-ops */}
         <button onClick={onPause} disabled={job.cancelling} title="Hold the sync between files; resume continues where it stopped">
           {job.paused ? "Resume" : "Pause"}
         </button>

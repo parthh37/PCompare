@@ -10,7 +10,7 @@ export type PathKind = "file" | "directory" | "missing";
 export type WhitespaceMode = "compare" | "ignoreTrailing" | "ignoreChanges" | "ignoreAll";
 export type DiffAlgorithm = "patience" | "myers";
 
-// bc5:text-engine — alignment, grammar, column, page, replacement and manual rules
+// alignment, grammar, column, page, replacement and manual rules
 /** How lines inside a block of differences are paired: most similar first, by position, or not at all. */
 export type Alignment = "similar" | "positional" | "unaligned";
 /** 1-based inclusive character columns; `end: null` runs to the end of the line. */
@@ -68,12 +68,10 @@ export interface TextDiffOptions {
   breaks: LinePair[];
   /** Isolated lines per side: they match nothing and the rest aligns around them (absent = none). */
   isolated?: { left: LineRange[]; right: LineRange[] };
-  // araxis:text-engine
   /** Numbers compare by value, within a tolerance (absent = off). */
   numericTolerance?: import("./textApi").NumericTolerance;
   /** Begin/end regex pairs bounding wholly unimportant blocks of lines. */
   ignoreBlocks?: import("./textApi").BlockPattern[];
-  // araxis:text-engine end
 }
 
 export const DEFAULT_TEXT_OPTIONS: TextDiffOptions = {
@@ -105,7 +103,7 @@ export interface Segment {
 }
 
 /**
- * A grammar token of one line (bc5:text-engine). `start`/`end` are UTF-16 offsets into the
+ * A grammar token of one line. `start`/`end` are UTF-16 offsets into the
  * line's full text (its segments joined), sorted and non-overlapping.
  */
 export interface TokenSpan {
@@ -160,7 +158,7 @@ export interface TextDiffResult {
   identical: boolean;
   /** Moved blocks; their rows carry `leftMove` / `rightMove`. Absent from older commands. */
   moves?: MovedBlock[];
-  /** Grammar id used per side (bc5:text-engine); absent from older commands. */
+  /** Grammar id used per side; absent from older commands. */
   leftGrammar?: string | null;
   rightGrammar?: string | null;
 }
@@ -233,18 +231,17 @@ export interface FolderCompareOptions {
   followLinks: boolean;
   timeToleranceSecs: number;
   ignoreDstShift: boolean;
-  // araxis:folder — files above the threshold (bytes) use `largeFileMethod` instead of `content`.
+  // files above the threshold (bytes) use `largeFileMethod` instead of `content`.
   largeFileThreshold?: number | null;
   largeFileMethod?: LargeFileMethod;
-  // araxis:folder end
 }
 
-/** araxis:folder — how content comparison treats files above the size threshold. */
+/** how content comparison treats files above the size threshold. */
 export type LargeFileMethod = "binary" | "size" | "sizeTimestamp";
 
 export type EntryStatus = "same" | "similar" | "different" | "leftOnly" | "rightOnly" | "typeMismatch" | "error";
 /**
- * `StatusDetail` in pcompare-core: the status at Beyond Compare's
+ * `StatusDetail` in pcompare-core: the status at a finer
  * granularity. `sameDiff` = same contents, but size or timestamp differ;
  * `unknown` = not compared yet.
  */
@@ -395,7 +392,7 @@ export interface HexChunk {
   right: number[];
 }
 
-// bc5:hex — editable, aligned hex sessions (src-tauri/src/hex.rs; wrappers in hexApi.ts)
+// editable, aligned hex sessions (src-tauri/src/hex.rs; wrappers in hexApi.ts)
 export type HexRowFilter = "all" | "differences" | "context";
 export type HexAlignMode = "aligned" | "offset";
 
@@ -560,7 +557,7 @@ export const api = {
   pathKind: (path: string) => invoke<PathKind>("path_kind", { path }),
   /** Free space on the volume of a local folder; null for remote, archive and VCS paths. */
   diskFree: (path: string) => invoke<{ free: number; volume: string } | null>("disk_free", { path }),
-  /** bc5:reports-script — paths plus viewer / title / read-only switches (see cliApi.ts). */
+  /** paths plus viewer / title / read-only switches (see cliApi.ts). */
   launchArgs: () => invoke<import("./cliApi").LaunchOptions>("launch_args"),
   /** "Select Left Side for Compare" — shared with the Explorer context menu. */
   getLeftSelection: () => invoke<string | null>("get_left_selection"),
@@ -581,7 +578,7 @@ export const api = {
     options: FolderCompareOptions,
     runKey?: string,
     onProgress?: (p: ScanProgress) => void,
-    expandArchives?: boolean, // bc5:archives — list archives in the trees as folders
+    expandArchives?: boolean, // list archives in the trees as folders
     onLevels?: (levels: FolderLevel[]) => void,
     scan?: FolderScanRef,
   ) => {

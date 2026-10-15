@@ -1,4 +1,4 @@
-// The docked Operations panel of Folder Compare (bc5:file-ops): every
+// The docked Operations panel of Folder Compare: every
 // background file operation with its progress, a Pause / Resume and Cancel
 // per operation, name-clash questions, and errors once it is done.
 import { ChevronDown, ChevronRight, CircleAlert, CircleCheck, CircleX, Hourglass, Pause, Play, X } from "lucide-react";

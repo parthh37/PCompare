@@ -1,4 +1,4 @@
-// araxis:text-view — Text Compare without vertical padding: each side shows only
+// Text Compare without vertical padding: each side shows only
 // its own lines, both panes scroll together so corresponding blocks meet at a
 // focus line, and the middle gutter links every difference's left lines to
 // its right lines with a curved band (plus dashed lines for sync points).

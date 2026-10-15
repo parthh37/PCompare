@@ -1,28 +1,28 @@
 // Hide the console window on Windows release builds.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-mod archive; // bc5:archives
+mod archive;
 mod automation; // automation:shell
 mod close_guard;
-mod convert; // bc5:converters
+mod convert;
 mod db;
-mod fileops; // bc5:file-ops
-mod folder; // bc5:folder-engine
-mod hex; // bc5:hex
+mod fileops;
+mod folder;
+mod hex;
 mod merge;
 mod meta;
-mod patch; // bc5:editor-patch
+mod patch;
 mod picture;
-mod remote; // bc5:remote-write
+mod remote;
 mod sync;
 mod table;
-mod text_compare; // bc5:text-engine
+mod text_compare;
 mod watch;
-mod workspace; // bc5:app-shell
-mod cli; // bc5:reports-script
-mod report; // bc5:reports-script
-mod review; // araxis:text-review
-mod vcs; // araxis:vcs
+mod workspace;
+mod cli;
+mod report;
+mod review;
+mod vcs;
 mod explorer;
 mod import;
 
@@ -101,7 +101,7 @@ struct TextFileCompare {
 
 #[tauri::command]
 async fn path_kind(app: AppHandle, path: String) -> PathKind {
-    // bc5:archives — inside archives and snapshots, and svn: repositories
+    // inside archives and snapshots, and svn: repositories
     if pcompare_remote::is_container_path(&path) {
         return archive::path_kind(app, path).await;
     }
@@ -161,7 +161,7 @@ fn read_left_selection() -> Option<String> {
 /// Turns the command line into what to open. Plain paths pass through;
 /// `--compare-to <path>` pairs `path` with the remembered left side (or opens
 /// it alone when nothing was selected) and consumes the selection.
-/// bc5:reports-script — parsed by cli.rs, so BC switches (`/fv=`, `/title1=`,
+/// parsed by cli.rs, so /switches (`/fv=`, `/title1=`,
 /// `/readonly`, `/mergeoutput=`…) come along and are never taken for paths.
 fn resolve_launch_args(args: &[String], left_selection: Option<String>) -> cli::LaunchOptions {
     cli::resolve(cli::gui_options(args), left_selection)
@@ -254,7 +254,7 @@ async fn compare_text_files(
     .await
 }
 
-// Folder Compare commands live in folder.rs. // bc5:folder-engine
+// Folder Compare commands live in folder.rs.
 
 // ---------- auto-refresh ----------
 
@@ -269,7 +269,7 @@ fn unwatch_paths(app: AppHandle, id: String) {
     state(&app).watchers.unwatch(&id);
 }
 
-// bc5:hex — hex_summary / hex_chunk / hex_next_difference moved to hex.rs
+// hex_summary / hex_chunk / hex_next_difference moved to hex.rs
 
 // ---------- saved sessions ----------
 
@@ -447,24 +447,21 @@ fn main() {
     if let Some(code) = explorer::run_early(args.get(1..).unwrap_or_default()) {
         std::process::exit(code);
     }
-    // bc5:reports-script — `@script`, `/qc` and `--help` run without a window.
+    // `@script`, `/qc` and `--help` run without a window.
     if let Some(code) = cli::run_headless(args.get(1..).unwrap_or_default()) {
         std::process::exit(code);
     }
-    // araxis:vcs — `--wait` (git difftool / mergetool) blocks here until the tab closes.
+    // `--wait` (git difftool / mergetool) blocks here until the tab closes.
     if let Some(code) = vcs::run_wait_mode(args.get(1..).unwrap_or_default()) {
         std::process::exit(code);
     }
-    // araxis:vcs end
     let _ = LAUNCH_OPTIONS.set(resolve_launch_paths(args.get(1..).unwrap_or_default()));
-    // araxis:vcs
     if let Some(token) = LAUNCH_OPTIONS.get().and_then(|o| o.wait_token.as_deref()) {
         vcs::register(token);
     }
-    // araxis:vcs end
 
     tauri::Builder::default()
-        // bc5:app-shell — must be the first plugin: a second launch hands its
+        // must be the first plugin: a second launch hands its
         // paths to this window and exits before creating its own.
         .plugin(tauri_plugin_single_instance::init(|app, argv, cwd| {
             workspace::on_second_instance(app, argv, cwd)
@@ -473,7 +470,7 @@ fn main() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
-        // bc5:text-ui — clipboard text as a Text Compare side.
+        // clipboard text as a Text Compare side.
         .plugin(tauri_plugin_clipboard_manager::init())
         // automation:shell — desktop notifications and start at login (hidden, in the tray).
         .plugin(tauri_plugin_notification::init())
@@ -500,13 +497,13 @@ fn main() {
                 db_cancel: AtomicBool::new(false),
                 index: open_index(&data_dir),
             });
-            app.manage(workspace::ShellState::new(&config_dir)); // bc5:app-shell
+            app.manage(workspace::ShellState::new(&config_dir));
             close_guard::manage(app.handle());
             #[cfg(target_os = "macos")]
             if let Err(e) = close_guard::install_app_menu(app.handle()) {
                 eprintln!("app menu: {e}");
             }
-            remote::install_prompter(app.handle()); // bc5:remote-write
+            remote::install_prompter(app.handle());
             explorer::ensure_on_startup();
             // automation:shell — after AppState: the scheduler uses its scan database.
             // Also shows the main window (created hidden for `--background`).
@@ -526,24 +523,23 @@ fn main() {
             import::import_read,
             import::import_commit,
             compare_text_files,
-            folder::compare_folders, // bc5:folder-engine (moved to folder.rs)
+            folder::compare_folders, // engine (moved to folder.rs)
             folder::compare_file_contents,
-            // bc5:archives — archive / snapshot / svn: sides, snapshots (archive.rs)
+            // archive / snapshot / svn: sides, snapshots (archive.rs)
             archive::archive_side_info,
             archive::snapshot_save,
-            // araxis:text-review — comparison archives (review.rs)
+            // comparison archives (review.rs)
             review::review_save,
             review::review_open,
             review::review_save_bookmarks,
             review::review_read_file,
-            // araxis:text-review end
             folder::compare_folders_cancel,
             folder::restage_folders,
             folder::forget_folder_scan,
             folder::compare_folder_entries,
             watch_paths,
             unwatch_paths,
-            // bc5:hex — hex compare (hex.rs)
+            // hex compare (hex.rs)
             hex::hex_summary,
             hex::hex_chunk,
             hex::hex_next_difference,
@@ -579,7 +575,7 @@ fn main() {
             open_in_default_app,
             reveal_in_file_manager,
             remote_list,
-            // bc5:remote-write — remote browser writes + SSH sign-in prompts
+            // remote browser writes + SSH sign-in prompts
             remote::remote_mkdir,
             remote::remote_delete,
             remote::remote_rename,
@@ -592,16 +588,16 @@ fn main() {
             merge::load_merge,
             // --- table compare (table.rs) ---
             table::compare_tables,
-            table::compare_table_sheets, // bc5:table
+            table::compare_table_sheets,
             // --- picture compare (picture.rs) ---
             picture::picture_load,
             picture::picture_diff,
-            picture::picture_probe, // bc5:picture-registry
+            picture::picture_probe,
             // --- folder sync + folder merge (sync.rs) ---
             sync::sync_plan,
             sync::sync_execute,
             sync::sync_cancel,
-            sync::sync_pause, // bc5:file-ops
+            sync::sync_pause,
             sync::sync_preflight,
             sync::sync_interrupted,
             sync::sync_resume,
@@ -617,9 +613,9 @@ fn main() {
             sync::folder_merge_execute,
             // --- registry / version / mp3 (meta.rs) ---
             meta::compare_registry,
-            meta::registry_save, // bc5:picture-registry
-            meta::registry_live_plan, // bc5:picture-registry
-            meta::registry_apply_live, // bc5:picture-registry
+            meta::registry_save,
+            meta::registry_live_plan,
+            meta::registry_apply_live,
             meta::compare_versions,
             meta::compare_audio,
             // --- database compare (db.rs) ---
@@ -636,7 +632,7 @@ fn main() {
             db::db_data_script,
             db::db_cancel,
             db::db_execute_script,
-            // --- bc5:app-shell — prefs, workspaces, recent sessions (workspace.rs) ---
+            // --- prefs, workspaces, recent sessions (workspace.rs) ---
             workspace::prefs_load,
             workspace::prefs_save,
             workspace::workspace_list,
@@ -650,40 +646,38 @@ fn main() {
             workspace::recent_remove,
             workspace::recent_clear,
             workspace::session_autosave,
-            // --- bc5:text-engine — Text Compare encodings, grammars, backups (text_compare.rs) ---
+            // --- Text Compare encodings, grammars, backups (text_compare.rs) ---
             text_compare::text_load_pair,
             text_compare::text_load,
             text_compare::text_diff,
             text_compare::text_save,
             text_compare::text_encodings,
             text_compare::text_grammars,
-            // --- bc5:editor-patch — Patch Viewer (patch.rs) ---
+            // --- Patch Viewer (patch.rs) ---
             patch::patch_load,
             patch::patch_check,
             patch::patch_apply_file,
-            // araxis:merge
             patch::patch_write_selected,
-            // araxis:merge end
-            // --- bc5:converters — file format rules, external tools (convert.rs) ---
+            // --- file format rules, external tools (convert.rs) ---
             convert::convert_config_load,
             convert::convert_config_save,
             convert::convert_config_defaults,
             convert::convert_tools_for,
             convert::convert_launch_tool,
             convert::convert_source_text,
-            // --- bc5:file-ops — Folder Compare file operations (fileops.rs) ---
+            // --- Folder Compare file operations (fileops.rs) ---
             fileops::fileop_start,
             fileops::fileop_pause,
             fileops::fileop_cancel,
             fileops::fileop_answer,
-            // --- bc5:reports-script — text / folder / table reports (report.rs) ---
+            // --- text / folder / table reports (report.rs) ---
             report::report_text,
             report::report_folder,
             report::report_folder_save,
             report::report_table,
             report::report_write,
             report::report_open_in_browser,
-            // araxis:vcs — wait mode, git setup, tool snippets, revision picker (vcs.rs)
+            // wait mode, git setup, tool snippets, revision picker (vcs.rs)
             vcs::vcs_wait_done,
             vcs::vcs_git_setup_preview,
             vcs::vcs_git_setup_apply,
@@ -691,7 +685,6 @@ fn main() {
             vcs::vcs_detect,
             vcs::vcs_revisions,
             vcs::vcs_blame,
-            // araxis:vcs end
             // automation:shell — sync automation + notification channels (automation.rs)
             automation::automation_tasks,
             automation::automation_new_task,

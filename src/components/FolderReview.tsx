@@ -1,4 +1,4 @@
-// araxis:text-review — review features for Folder Compare, as one hook so the
+// review features for Folder Compare, as one hook so the
 // view only places what it returns: toolbar buttons (Comments, Statistics,
 // Archive), the Bookmarks & comments panel, the dialogs, row marks and
 // context-menu items. Rows are bookmarked by relative path.

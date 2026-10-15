@@ -1,4 +1,4 @@
-// araxis:text-review — comparison archives (.pcmpz) and review comments.
+// comparison archives (.pcmpz) and review comments.
 // Mirrors src-tauri/src/review.rs and pcompare-review (serde camelCase).
 import { invoke } from "@tauri-apps/api/core";
 import { open, save } from "@tauri-apps/plugin-dialog";

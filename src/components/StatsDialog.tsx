@@ -1,4 +1,4 @@
-// araxis:text-review — the comparison Statistics window for Text and Folder Compare.
+// the comparison Statistics window for Text and Folder Compare.
 import { Copy } from "lucide-react";
 import { useMemo, useState } from "react";
 import type { DiffRow, EntryStatus, FolderEntry, Hunk } from "../lib/api";

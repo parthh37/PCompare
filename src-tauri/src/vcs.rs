@@ -1,4 +1,4 @@
-//! Source-control integration (araxis:vcs): `--wait` for difftool /
+//! Source-control integration: `--wait` for difftool /
 //! mergetool launches, the Settings page that sets PCompare up as git's
 //! diff and merge tool (with snippets for Mercurial, Perforce and
 //! Subversion), and the revision picker behind `git:` / `hg:` sides.

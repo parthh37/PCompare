@@ -114,14 +114,13 @@ fn absolutize(paths: Vec<String>, cwd: &str) -> Vec<String> {
     paths
         .into_iter()
         .map(|p| {
-            // araxis:vcs — `git:repo@HEAD~1` anchors the working-tree path inside.
+            // `git:repo@HEAD~1` anchors the working-tree path inside.
             if pcompare_archive::vcs::is_vcs(&p) {
                 let anchored = (!cwd.is_empty())
                     .then(|| pcompare_archive::vcs::with_base_dir(&p, Path::new(cwd)))
                     .flatten();
                 return anchored.unwrap_or(p);
             }
-            // araxis:vcs end
             // `remote://…`, `db://…` and other URLs are never file-relative.
             if p.contains("://") || Path::new(&p).is_absolute() || cwd.is_empty() {
                 p
@@ -136,7 +135,7 @@ fn absolutize(paths: Vec<String>, cwd: &str) -> Vec<String> {
 /// window forward and hands the new launch's paths to the frontend, which
 /// opens them in a new tab exactly like startup arguments.
 pub fn on_second_instance(app: &AppHandle, argv: Vec<String>, cwd: String) {
-    // bc5:reports-script — the full launch options (viewer, titles, read-only), not just paths.
+    // the full launch options (viewer, titles, read-only), not just paths.
     let mut launch = crate::resolve_launch_paths(argv.get(1..).unwrap_or_default());
     launch.paths = absolutize(launch.paths, &cwd);
     launch.merge_output = launch.merge_output.and_then(|o| absolutize(vec![o], &cwd).pop());
@@ -145,13 +144,12 @@ pub fn on_second_instance(app: &AppHandle, argv: Vec<String>, cwd: String) {
         let _ = window.show();
         let _ = window.set_focus();
     }
-    // araxis:vcs — this window answers for a `--wait` launch.
+    // this window answers for a `--wait` launch.
     if let Some(token) = launch.wait_token.as_deref() {
         crate::vcs::register(token);
     }
-    // araxis:vcs end
     if !launch.paths.is_empty() {
-        let _ = app.emit(OPEN_PATHS_EVENT, launch); // bc5:reports-script
+        let _ = app.emit(OPEN_PATHS_EVENT, launch);
     }
 }
 

@@ -14,12 +14,12 @@ similar = "2"
 regex = "1"
 crc32fast = "1"
 encoding_rs = "0.8"
-# bc5:text-engine — legacy/MBCS encoding auto-detection for text files
+# legacy/MBCS encoding auto-detection for text files
 chardetng = "0.1"
 globset = "0.4"
 rayon = "1"
-memchr = "2" # bc5:hex
-# bc5:folder-engine — exe/dll version compare (pure Rust, no mmap) and NFC/NFD name alignment
+memchr = "2"
+# exe/dll version compare (pure Rust, no mmap) and NFC/NFD name alignment
 pelite = { version = "0.10.0", default-features = false, features = ["std"] }
 unicode-normalization = "0.1"
 # Sealed config files (vault.rs). Pure Rust, so the crate stays C-free.

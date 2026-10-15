@@ -12,7 +12,7 @@ interface Props {
   onReplacement: (r: string) => void;
   options: FindOptions;
   onOptions: (o: FindOptions) => void;
-  /** bc5:editor-patch — optional: one-pane views (Text Edit) have no sides to pick. */
+  /** optional: one-pane views (Text Edit) have no sides to pick. */
   scope?: FindScope;
   onScope?: (s: FindScope) => void;
   /** Show the replace row (Ctrl+H). */
@@ -83,7 +83,7 @@ export function FindBar(p: Props) {
         {toggle("matchCase", "Match case", CaseSensitive)}
         {toggle("wholeWord", "Whole word", WholeWord)}
         {toggle("regex", "Regular expression", Regex)}
-        {p.onScope && ( // bc5:editor-patch
+        {p.onScope && (
           <div className="seg-control fb-scope" title="Which side to search">
             {(["left", "both", "right"] as FindScope[]).map((s) => (
               <button key={s} className={p.scope === s ? "active" : ""} onClick={() => p.onScope?.(s)}>

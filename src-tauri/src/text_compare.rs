@@ -32,7 +32,7 @@ pub struct TextDocument {
     binary: bool,
     /// The encoding was guessed statistically (no BOM, not UTF-8).
     encoding_guessed: bool,
-    /// bc5:converters — the file format rule applied to this side, if any.
+    /// the file format rule applied to this side, if any.
     #[serde(skip_serializing_if = "Option::is_none")]
     conversion: Option<crate::convert::Conversion>,
 }
@@ -66,7 +66,7 @@ fn load_document(local: &Path, display: String, encoding: Option<&str>) -> pcomp
             trailing_newline: false,
             binary: true,
             encoding_guessed: false,
-            conversion: None, // bc5:converters
+            conversion: None,
         });
     }
     let loaded = textfile::load_text_as(local, encoding)?;
@@ -88,11 +88,11 @@ fn load_document(local: &Path, display: String, encoding: Option<&str>) -> pcomp
         trailing_newline,
         binary: false,
         encoding_guessed: loaded.guessed,
-        conversion: None, // bc5:converters
+        conversion: None,
     })
 }
 
-// bc5:converters — loading through the first matching file format rule.
+// loading through the first matching file format rule.
 /// Loads a side like [`load_document`], unless a file format rule converts
 /// it (Word, PDF, external command...) or marks it read-only / sets a grammar.
 fn load_side(
@@ -159,9 +159,9 @@ pub async fn text_load_pair(
         let (lp, rp) = crate::with_remote(&app, [&left, &right], |r| {
             Ok((r.local_copy(&left, true)?, r.local_copy(&right, true)?))
         })?;
-        let rules = crate::convert::rules(&app); // bc5:converters
+        let rules = crate::convert::rules(&app);
         Ok(TextPair {
-            // bc5:converters — file format rules apply per side.
+            // file format rules apply per side.
             left: load_side(&rules, &lp, left, left_encoding.as_deref())?,
             right: load_side(&rules, &rp, right, right_encoding.as_deref())?,
         })
@@ -174,7 +174,7 @@ pub async fn text_load_pair(
 pub async fn text_load(app: AppHandle, path: String, encoding: Option<String>) -> CmdResult<TextDocument> {
     crate::blocking(move || {
         let local = crate::with_remote(&app, [&path, ""], |r| r.local_copy(&path, true))?;
-        // bc5:converters — file format rules apply.
+        // file format rules apply.
         load_side(&crate::convert::rules(&app), &local, path, encoding.as_deref())
     })
     .await
@@ -264,7 +264,7 @@ pub async fn text_save(
         return Err(format!("{path}: remote files are read-only"));
     }
     if pcompare_remote::is_inside_container(&path) {
-        return Err(pcompare_remote::read_only_inside(&path)); // bc5:archives
+        return Err(pcompare_remote::read_only_inside(&path));
     }
     crate::blocking(move || save_with_backup(&path, &text, &format, backup)).await
 }

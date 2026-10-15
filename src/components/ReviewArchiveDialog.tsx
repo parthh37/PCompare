@@ -1,4 +1,4 @@
-// araxis:text-review — "Save comparison archive…": packs the comparison in
+// "Save comparison archive…": packs the comparison in
 // front (texts or folder tree, options, bookmarks and comments) into a .pcmpz.
 import { Archive } from "lucide-react";
 import { useState } from "react";

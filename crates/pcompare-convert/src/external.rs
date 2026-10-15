@@ -216,7 +216,7 @@ mod tests {
         assert_eq!(c.program, r"C:\Tools\Diff.exe");
         assert_eq!(c.args, vec![r"/left:C:\a b.psd", "/r.psd"]);
         // Without placeholders the paths are appended.
-        let c = expand_tool_command("meld", "l", "r").unwrap();
+        let c = expand_tool_command("difftool", "l", "r").unwrap();
         assert_eq!(c.args, vec!["l", "r"]);
         assert!(expand_tool_command("  ", "l", "r").is_err());
     }

@@ -27,7 +27,7 @@ use crate::baseline::Snap;
 use crate::failure::{FailureKind, LockHolder, OpError};
 use crate::fsops::{self, Deleter};
 use crate::journal::Journal;
-use crate::remote::{Partial, Root}; // bc5:remote-write
+use crate::remote::{Partial, Root};
 use crate::sync::{Direction, OpKind, SyncOp};
 
 /// What to do with a file that is still locked after all retries.
@@ -72,16 +72,16 @@ pub struct ExecOptions {
     /// Stored with the job so a rollback knows where to look.
     pub disposal: Disposal,
     /// Copy NTFS owners and access control lists along with local files and
-    /// folders (Windows; best effort, see [`fsops::copy_security`]) (bc5:file-ops).
+    /// folders (Windows; best effort, see [`fsops::copy_security`]).
     pub copy_acls: bool,
     /// Carry DOS 8.3 short names over (Windows; needs administrator rights).
     pub copy_short_names: bool,
     /// Give copies the source's creation date as well (Windows and macOS;
-    /// BC's "Copy creation dates") (bc5:sync-matrix).
+    /// "Copy creation dates").
     pub copy_created: bool,
     /// Give folders the run creates their source folder's dates once
     /// everything inside them is copied (copying into a folder changes its
-    /// modification time) (bc5:sync-matrix).
+    /// modification time).
     pub preserve_folder_times: bool,
 }
 
@@ -139,7 +139,7 @@ pub enum Phase {
     Retrying,
     /// Working through operations deferred because their files were locked.
     Deferred,
-    /// Held by the user; continues where it stopped (bc5:file-ops).
+    /// Held by the user; continues where it stopped.
     Paused,
     Finished,
 }
@@ -257,7 +257,7 @@ fn pause(d: Duration, cancel: &AtomicBool) -> bool {
     !cancel.load(Ordering::Relaxed)
 }
 
-/// Blocks while `pause` is set (bc5:file-ops). `on_change(true)` is called
+/// Blocks while `pause` is set. `on_change(true)` is called
 /// when the hold starts and `on_change(false)` when it ends. Returns false
 /// if the run was cancelled meanwhile.
 pub(crate) fn hold(pause: &AtomicBool, cancel: &AtomicBool, mut on_change: impl FnMut(bool)) -> bool {
@@ -297,13 +297,13 @@ pub(crate) struct Runner<'a> {
     pub(crate) deleter: &'a dyn Deleter,
     pub(crate) journal: &'a mut dyn Journal,
     pub(crate) cancel: &'a AtomicBool,
-    /// Set while the user holds the run (bc5:file-ops).
+    /// Set while the user holds the run.
     pub(crate) pause: &'a AtomicBool,
     pub(crate) progress: &'a mut dyn FnMut(&ExecProgress),
     pub(crate) state: ExecProgress,
     pub(crate) last_tick: Option<Instant>,
     /// Remote transfers cut short by a network failure, kept so the retry
-    /// continues instead of starting over (bc5:remote-write).
+    /// continues instead of starting over.
     pub(crate) partials: HashMap<u32, Partial<'a>>,
 }
 
@@ -394,7 +394,7 @@ impl<'a> Runner<'a> {
             let progress = &mut *self.progress;
             let last_tick = &mut self.last_tick;
             let mut on_bytes = |n: u64| {
-                // A pause holds a large copy mid-file (bc5:file-ops).
+                // A pause holds a large copy mid-file.
                 let mut before = state.phase;
                 let held = hold(pause, cancel, |paused| {
                     if paused {
@@ -428,7 +428,7 @@ impl<'a> Runner<'a> {
             return self.run_once_remote(op, src_root, dst_root);
         };
         let (src_root, dst_root) = (src_root.to_path_buf(), dst_root.to_path_buf());
-        // bc5:file-ops — aligned pairs have a different name on the left.
+        // aligned pairs have a different name on the left.
         let dst = fsops::resolve(&dst_root, op.dst_rel())?;
         match op.kind {
             OpKind::Mkdir => {
@@ -449,7 +449,7 @@ impl<'a> Runner<'a> {
     }
 
     /// Copies ACLs / short names onto a local `dst` as configured, noting
-    /// what couldn't be copied (bc5:file-ops).
+    /// what couldn't be copied.
     fn with_extras(&self, src: &Path, dst: &Path, mut done: Done) -> Done {
         let mut notes = fsops::copy_extras(src, dst, self.opts.copy_acls, self.opts.copy_short_names);
         // Folders get theirs after the run (settle_folder_times), when nothing changes them any more.
@@ -578,8 +578,8 @@ impl<'a> Runner<'a> {
     }
 
     /// Gives the folders this run created their source folder's dates,
-    /// deepest first so setting a folder's doesn't disturb its parent's
-    /// (bc5:sync-matrix). Local sides only; what can't be set is noted on
+    /// deepest first so setting a folder's doesn't disturb its parent's.
+    ///Local sides only; what can't be set is noted on
     /// the folder's result.
     fn settle_folder_times(&self, ops: &[SyncOp], report: &mut ExecReport) {
         let (times, created) = (self.opts.preserve_folder_times, self.opts.copy_created);
@@ -703,8 +703,7 @@ pub fn execute_on(
 
 /// [`execute_on`] that can also be paused: while `pause` is set the run
 /// holds between operations and inside large copies, reporting
-/// [`Phase::Paused`], and continues where it stopped once it is cleared
-/// (bc5:file-ops).
+/// [`Phase::Paused`], and continues where it stopped once it is cleared.
 #[allow(clippy::too_many_arguments)]
 pub fn execute_ctl(
     left: Root,
@@ -1492,7 +1491,7 @@ mod tests {
 
     #[test]
     fn pause_holds_the_run_until_resumed() {
-        // bc5:file-ops — Pause / Resume in the sync progress panel.
+        // Pause / Resume in the sync progress panel.
         let (p, plan) = mirror_with_two_deletes();
         let pause = std::sync::Arc::new(AtomicBool::new(true));
         let release = {

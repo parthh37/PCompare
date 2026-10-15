@@ -301,7 +301,7 @@ pub struct FolderReportOptions {
     /// Report heading; empty for "Folder Compare".
     pub title: String,
     /// Folders whose contents are listed; `None` lists everything. Scripts
-    /// use this for Beyond Compare's "expand" semantics.
+    /// use this for "expand" semantics.
     #[serde(skip)]
     pub expanded: Option<HashSet<String>>,
 }

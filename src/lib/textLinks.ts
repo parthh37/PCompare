@@ -1,4 +1,4 @@
-// araxis:text-view — pure helpers for Text Compare's linked (unpadded) layout,
+// pure helpers for Text Compare's linked (unpadded) layout,
 // synchronization points, edit markers and line-ending glyphs. No React here:
 // everything works on diff rows, display items and line arrays.
 import type { DiffRow, LineEnding, LinePair, LineRange, RowKind } from "./api";

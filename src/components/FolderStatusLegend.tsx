@@ -124,7 +124,7 @@ export function countsSummary(e: FolderEntry): string {
 const FOLDER_PATH =
   "M1 3.2a1 1 0 0 1 1-1h3.6l1.5 1.5H14a1 1 0 0 1 1 1V12a1 1 0 0 1-1 1H2a1 1 0 0 1-1-1z";
 
-/** A folder glyph filled with one band per tone (Beyond Compare's combination folder icons). */
+/** A folder glyph filled with one band per tone (combination folder icons). */
 export function FolderMix({
   tones,
   size = 14,

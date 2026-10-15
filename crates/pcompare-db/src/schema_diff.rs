@@ -1,5 +1,5 @@
 //! Schema Compare: matches objects of two [`Schema`]s and lists every
-//! difference, SQL Delta style.
+//! difference.
 //!
 //! The structured table diff ([`TableDiff`]) is shared with [`crate::script`],
 //! so "what differs" is decided in exactly one place for both the UI and the

@@ -10,11 +10,11 @@ members = [
     "crates/pcompare-meta",
     "crates/pcompare-index",
     "crates/pcompare-db",
-    "crates/pcompare-convert", # bc5:converters
-    "crates/pcompare-report", # bc5:reports-script
-    "crates/pcompare-script", # bc5:reports-script
-    "crates/pcompare-archive", # bc5:archives
-    "crates/pcompare-review", # araxis:text-review
+    "crates/pcompare-convert",
+    "crates/pcompare-report",
+    "crates/pcompare-script",
+    "crates/pcompare-archive",
+    "crates/pcompare-review",
     "crates/pcompare-shell",
     "crates/pcompare-import",
     "crates/pcompare-notify", # automation

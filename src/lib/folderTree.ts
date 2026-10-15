@@ -421,7 +421,7 @@ function countFiles(entries: FolderEntry[], stats: FolderStats) {
 
 const emptyStats = (): FolderStats => ({ same: 0, similar: 0, different: 0, leftOnly: 0, rightOnly: 0, errors: 0 });
 
-// ---- "Select…": rows matching criteria (Araxis Merge's Select Files) ----
+// ---- "Select…": rows matching criteria ----
 
 /** Status buckets the Select dialog offers; differing pairs split by which side is newer. */
 export type SelectStatus =

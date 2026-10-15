@@ -1,4 +1,4 @@
-// araxis:vcs — picks a revision of a working-tree file or folder for a path
+// picks a revision of a working-tree file or folder for a path
 // field: the result is a read-only `git:<path>@<rev>` / `hg:<path>@<rev>` side.
 import { open } from "@tauri-apps/plugin-dialog";
 import { FolderOpen } from "lucide-react";

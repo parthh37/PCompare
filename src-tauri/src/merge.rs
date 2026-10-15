@@ -105,7 +105,7 @@ pub async fn save_text_file(path: String, text: String, format: TextFormat) -> C
         return Err(format!("{path}: remote files are read-only"));
     }
     if pcompare_remote::is_inside_container(&path) {
-        return Err(pcompare_remote::read_only_inside(&path)); // bc5:archives
+        return Err(pcompare_remote::read_only_inside(&path));
     }
     crate::blocking(move || textfile::save_text(&path, &text, &format)).await
 }
@@ -127,7 +127,7 @@ pub struct MergeLoad {
 
 /// Loads the inputs of a Text Merge session and merges them: three-way
 /// against `base`, or two-way when `base` is empty. `rules` defaults to
-/// Beyond Compare's (2 conflict scan lines).
+/// 2 conflict scan lines.
 #[tauri::command]
 pub async fn load_merge(
     app: AppHandle,
@@ -164,7 +164,7 @@ pub async fn load_merge(
             )));
         }
 
-        // bc5:folder-merge — without a base every difference is a conflict to resolve.
+        // without a base every difference is a conflict to resolve.
         let (merge, trailing) = match &base {
             Some(base) => (
                 pcompare_merge::merge3(&base.lines, &left.lines, &right.lines, &options, &rules)?,

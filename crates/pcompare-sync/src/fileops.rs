@@ -1,4 +1,4 @@
-//! File operations on a Folder Compare selection (bc5:file-ops): copy or
+//! File operations on a Folder Compare selection: copy or
 //! move to the other side or to any folder, delete (Recycle Bin / Trash or
 //! permanently), rename, new folder, change attributes and touch — on local
 //! folders and remote ones alike, through [`Root`].
@@ -127,7 +127,7 @@ pub struct FileOpOptions {
     pub recursive: bool,
     pub touch: TouchTime,
     /// Copy and move: leave out what's inside selected folders that these
-    /// filters hide in the comparison (Beyond Compare's default, with its
+    /// filters hide in the comparison (the default, with
     /// "Include filtered items" off). `None`: everything is copied.
     pub filter: Option<ItemFilter>,
 }

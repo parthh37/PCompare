@@ -241,7 +241,7 @@ export function ExecOptionsForm({ value: o, onChange }: { value: ExecOptions; on
         </label>
       </fieldset>
 
-      {/* bc5:sync-matrix — dates on copies */}
+      {/* dates on copies */}
       <fieldset>
         <legend>Dates</legend>
         <label className="field check">
@@ -261,7 +261,7 @@ export function ExecOptionsForm({ value: o, onChange }: { value: ExecOptions; on
         </small>
       </fieldset>
 
-      {/* bc5:file-ops — NTFS extras (Windows only) */}
+      {/* NTFS extras (Windows only) */}
       {navigator.userAgent.includes("Windows") && (
         <fieldset>
           <legend>Windows</legend>

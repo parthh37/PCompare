@@ -1,4 +1,4 @@
-// araxis:vcs — the "Getting started" overview: shown once on Home at first
+// the "Getting started" overview: shown once on Home at first
 // run (until dismissed, a pref), and again from Home or the Help panel.
 import { FolderSync, GitBranch, GitCompare, GitMerge, Keyboard } from "lucide-react";
 import type { ReactNode } from "react";

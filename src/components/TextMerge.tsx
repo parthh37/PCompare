@@ -42,7 +42,7 @@ import { PathField } from "./PathField";
 import { TextRulesDialog } from "./TextRulesDialog";
 import { VirtualList, type VirtualListHandle } from "./VirtualList";
 import "./TextMerge.css";
-import { isComposing } from "../lib/ime"; // araxis:text-view araxis:text-view end
+import { isComposing } from "../lib/ime";
 
 const ROW_HEIGHT = 20;
 const CHAR_WIDTH = 7.8;
@@ -59,7 +59,7 @@ export interface MergeSettings {
   split: number;
   /** What the output starts as: merged automatically (default) or the base only. */
   start?: StartMode;
-  /** Left and right changes with fewer unchanged lines than this between them conflict (BC's default: 2). */
+  /** Left and right changes with fewer unchanged lines than this between them conflict (default: 2). */
   conflictScanLines?: number;
 }
 
@@ -909,7 +909,7 @@ export function TextMerge({
     const onKey = (e: KeyboardEvent) => {
       // Inactive tabs stay mounted but hidden; only the visible session reacts.
       if (e.defaultPrevented || !root.current?.offsetParent) return;
-      if (isComposing(e)) return; // araxis:text-view — keys belong to an open IME composition araxis:text-view end
+      if (isComposing(e)) return; // keys belong to an open IME composition view end
       const mod = e.ctrlKey || e.metaKey;
       const inOutput = e.target === textarea.current;
       const t = e.target as HTMLElement | null;
@@ -1416,7 +1416,7 @@ export function TextMerge({
                     setOutScroll({ top: e.currentTarget.scrollTop, left: e.currentTarget.scrollLeft })
                   }
                   onKeyDown={(e) => {
-                    if (isComposing(e)) return; // araxis:text-view araxis:text-view end
+                    if (isComposing(e)) return;
                     if (e.key === "Tab" && !e.shiftKey && !e.ctrlKey && !e.altKey && !e.metaKey) {
                       e.preventDefault();
                       document.execCommand("insertText", false, "\t");

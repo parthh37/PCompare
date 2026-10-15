@@ -145,7 +145,7 @@ export function copyRows(
 export interface Bookmark {
   side: Side;
   line: number;
-  /** araxis:text-review — review comment shown on hover and in the Comments panel. */
+  /** review comment shown on hover and in the Comments panel. */
   comment?: string;
 }
 
@@ -174,7 +174,7 @@ export function shiftBookmarks(
     const key = `${m.side}:${line}`;
     if (line >= 1 && !seen.has(key)) {
       seen.add(key);
-      out.push({ ...m, line }); // araxis:text-review — keeps the comment
+      out.push({ ...m, line }); // keeps the comment
     }
   }
   return out;
@@ -198,7 +198,7 @@ export function indexAtColumn(text: string, col: number, tabSize: number): numbe
   return text.length;
 }
 
-// araxis:text-view — block indent / outdent (Text Edit and Text Compare share these).
+// block indent / outdent (Text Edit and Text Compare share these).
 
 /** Indentation the file already uses: tabs, else spaces (tabs for a file with none). */
 export function indentUnitOf(lines: string[], tabSize: number): string {
@@ -235,4 +235,3 @@ export function indentRange(lines: string[], start: number, end: number, dir: 1 
   }
   return changed ? next : lines;
 }
-// araxis:text-view end

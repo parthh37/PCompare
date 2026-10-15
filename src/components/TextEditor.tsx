@@ -1,4 +1,4 @@
-// Text Edit: a standalone editor for one text file (Beyond Compare's "Text
+// Text Edit: a standalone editor for one text file (the "Text
 // Edit" session). It is line based like the Text Compare panes: the file is a
 // virtualized list of lines (VarList), and a single floating textarea edits
 // the caret line, so files of 100k+ lines stay responsive. Structural edits
@@ -52,10 +52,9 @@ import { loadBackups, textApi, type TextDocument } from "../lib/textApi";
 import {
   columnOf,
   indexAtColumn,
-  // araxis:text-view — shared block indent helpers
+  // shared block indent helpers
   indentRange,
   indentUnitOf,
-  // araxis:text-view end
   insertAt,
   joinWithNext,
   joinWithPrevious,
@@ -64,7 +63,7 @@ import {
   splitText,
   type EditResult,
 } from "../lib/textEdit";
-import { isComposing } from "../lib/ime"; // araxis:text-view araxis:text-view end
+import { isComposing } from "../lib/ime";
 import { composeRuns, displayWidth, visualLines, wrapRuns, type Run, type StyledRange } from "../lib/textRuns";
 import { FindBar } from "./FindBar";
 import { PathField } from "./PathField";
@@ -478,7 +477,7 @@ export function TextEditor({ left: path, onPathsChange, settings, onSettingsChan
   /** Tab / Shift+Tab over the selected lines (or the caret line). */
   const indentLines = (dir: 1 | -1) => {
     const [a, b] = pickRange();
-    const next = indentRange(lines, a, b, dir, indentUnitOf(lines, TAB_SIZE), TAB_SIZE); // araxis:text-view araxis:text-view end
+    const next = indentRange(lines, a, b, dir, indentUnitOf(lines, TAB_SIZE), TAB_SIZE);
     const shift = next[caret.line].length - lines[caret.line].length;
     commit(next, { line: caret.line, col: Math.max(0, caret.col + shift) });
   };
@@ -789,7 +788,7 @@ export function TextEditor({ left: path, onPathsChange, settings, onSettingsChan
   };
 
   const onEditorKey = (e: ReactKeyboardEvent<HTMLTextAreaElement>) => {
-    if (isComposing(e)) return; // araxis:text-view — Enter/Tab/arrows pick IME candidates araxis:text-view end
+    if (isComposing(e)) return; // Enter/Tab/arrows pick IME candidates view end
     const ta = e.currentTarget;
     const { selectionStart: s, selectionEnd: end, value } = ta;
     const line = caret.line;
@@ -887,7 +886,7 @@ export function TextEditor({ left: path, onPathsChange, settings, onSettingsChan
     const onKey = (e: KeyboardEvent) => {
       // Inactive tabs stay mounted but hidden; only the visible session reacts.
       if (e.defaultPrevented || !root.current?.offsetParent) return;
-      if (isComposing(e)) return; // araxis:text-view araxis:text-view end
+      if (isComposing(e)) return;
       const t = e.target as HTMLElement | null;
       const inEditor = !!t && t === editorEl.current;
       const inField = !!t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.tagName === "SELECT");
@@ -1149,7 +1148,7 @@ export function TextEditor({ left: path, onPathsChange, settings, onSettingsChan
               onChange={(e) => setGotoText(e.target.value)}
               onFocus={(e) => e.currentTarget.select()}
               onKeyDown={(e) => {
-                if (isComposing(e)) return; // araxis:text-view araxis:text-view end
+                if (isComposing(e)) return;
                 if (e.key === "Enter") gotoLine();
                 else if (e.key === "Escape") setGotoOpen(false);
                 else return;

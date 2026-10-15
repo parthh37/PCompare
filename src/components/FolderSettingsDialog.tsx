@@ -47,7 +47,7 @@ const LARGE_FILE_METHODS: { value: LargeFileMethod; label: string }[] = [
   { value: "sizeTimestamp", label: "Size and timestamp" },
 ];
 
-/** Beyond Compare-style session settings: comparison, filters, text rules. */
+/** Session settings: comparison, filters, text rules. */
 export function FolderSettingsDialog({ value, onApply, onClose, initialPage = "comparison" }: Props) {
   const [s, setS] = useState<CompareSettings>(value);
   const [page, setPage] = useState<Page>(initialPage);
@@ -261,7 +261,6 @@ export function FolderSettingsDialog({ value, onApply, onClose, initialPage = "c
             <small className="muted">
               When off, links are listed as links (marked with a link icon) and compared by where they point.
             </small>
-            {/* bc5:archives */}
             <label className="field check">
               <input
                 type="checkbox"
