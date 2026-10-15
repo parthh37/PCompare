@@ -46,6 +46,8 @@ export interface Prefs {
   /** Text Compare pads the shorter side of a difference with blank rows (off = linked lines). */
   textPadding: boolean;
   // araxis:text-view end
+  /** Text Compare draws the left pane's gutter (copy arrow + line number) at its right edge, by the right pane's. */
+  textLeftGutterRight: boolean;
   // araxis:folder — Folder Compare's split view (file comparison below the folder list).
   folderSplitView: boolean;
   /** Share of the height the folder list keeps (0.15–0.85). */
@@ -75,6 +77,7 @@ export const DEFAULT_PREFS: Prefs = {
   keys: {},
   gettingStartedDismissed: false, // araxis:vcs araxis:vcs end
   textPadding: true, // araxis:text-view araxis:text-view end
+  textLeftGutterRight: false,
   folderSplitView: false, // araxis:folder
   folderSplitRatio: 0.5, // araxis:folder
   // araxis:reports
@@ -130,6 +133,7 @@ export function sanitizePrefs(raw: unknown): Prefs {
     keys: stringRecord(r.keys),
     gettingStartedDismissed: bool(r.gettingStartedDismissed, d.gettingStartedDismissed), // araxis:vcs araxis:vcs end
     textPadding: bool(r.textPadding, d.textPadding), // araxis:text-view araxis:text-view end
+    textLeftGutterRight: bool(r.textLeftGutterRight, d.textLeftGutterRight),
     // araxis:folder
     folderSplitView: bool(r.folderSplitView, d.folderSplitView),
     folderSplitRatio:

@@ -1,7 +1,7 @@
 // araxis:text-view — pure helpers for Text Compare's linked (unpadded) layout,
 // synchronization points, edit markers and line-ending glyphs. No React here:
 // everything works on diff rows, display items and line arrays.
-import type { DiffRow, LineEnding, LinePair, RowKind } from "./api";
+import type { DiffRow, LineEnding, LinePair, LineRange, RowKind } from "./api";
 import type { Side } from "./textEdit";
 
 /** A displayed row, or a run of identical rows hidden by the Context/Diffs view. */
@@ -134,6 +134,30 @@ export function shiftLinePairs(pairs: LinePair[], side: Side, start: number, rem
     const idx = p[side] - 1;
     if (idx >= start + removed) out.push({ ...p, [side]: p[side] + inserted - removed });
     else if (idx < start + inserted) out.push(p);
+  }
+  return out;
+}
+
+/**
+ * Line ranges (1-based, inclusive) of `side` after `removed` lines at 0-based
+ * `start` were replaced by `inserted` lines: later ranges move, a range ending
+ * inside the replaced lines is cut to the new ones, and one that lay wholly
+ * inside lines that are now gone is dropped.
+ */
+export function shiftLineRanges(ranges: LineRange[], start: number, removed: number, inserted: number): LineRange[] {
+  if (removed === inserted || !ranges.length) return ranges;
+  const delta = inserted - removed;
+  const out: LineRange[] = [];
+  for (const r of ranges) {
+    const [s0, e0] = [r.start - 1, r.end - 1];
+    if (e0 < start) out.push(r);
+    else if (s0 >= start + removed) out.push({ start: r.start + delta, end: r.end + delta });
+    else {
+      // Overlaps the replaced lines: keep what lies outside them plus the new lines it covers.
+      const first = Math.min(s0, start);
+      const last = e0 >= start + removed ? e0 + delta : Math.min(e0, start + inserted - 1);
+      if (last >= first && last >= 0) out.push({ start: first + 1, end: last + 1 });
+    }
   }
   return out;
 }
