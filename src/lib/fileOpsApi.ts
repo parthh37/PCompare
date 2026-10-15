@@ -144,6 +144,8 @@ export interface FileOp {
   action: FileAction;
   srcRoot: string;
   dstRoot: string | null;
+  /** What was asked, so views can tell which of their rows it changed. */
+  request: FileOpRequest;
   progress: FileOpProgress | null;
   report: FileOpReport | null;
   /** The operation couldn't start (e.g. a remote didn't connect). */
@@ -185,6 +187,7 @@ export const fileOps = {
         action: request.action,
         srcRoot,
         dstRoot,
+        request,
         progress: null,
         report: null,
         error: null,

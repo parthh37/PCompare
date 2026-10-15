@@ -594,6 +594,100 @@ impl FolderScan {
     pub fn listed_dirs(&self) -> usize {
         self.listings.iter().map(|side| locked(side).len()).sum()
     }
+
+    /// Drops everything remembered about `path` and what's below it on
+    /// `side` — listings, link targets, "containing" results and content
+    /// verdicts — so it's read afresh. A verdict's size and timestamp check
+    /// can't catch a copy that kept both.
+    fn forget(&self, side: Side, path: &str) {
+        let at = Chain::index(side);
+        let under = |p: &str| {
+            p.strip_prefix(path)
+                .is_some_and(|rest| rest.is_empty() || rest.starts_with(['/', '\\']))
+        };
+        locked(&self.listings[at]).retain(|(_, p), _| !under(p));
+        locked(&self.canonical[at]).retain(|p, _| !under(p));
+        locked(&self.contains).retain(|(s, p, _), _| *s != at || !under(p));
+        locked(&self.verdicts).retain(|(lp, rp, ..), _| !under(if at == 0 { lp } else { rp }));
+    }
+
+    /// Drops one folder's listing on `side`, so what was added to or
+    /// removed from it shows.
+    fn forget_listing(&self, side: Side, dir: &str) {
+        locked(&self.listings[Chain::index(side)]).retain(|(_, p), _| p != dir);
+    }
+}
+
+/// The rows a partial comparison ([`compare_entries`]) is limited to, by
+/// name within one folder: `None` compares that row in full, `Some` only
+/// the named rows below it.
+#[derive(Debug, Default)]
+struct Focus(BTreeMap<String, Option<Focus>>);
+
+impl Focus {
+    /// Adds a `/`-separated path below this folder; a row compared in full
+    /// already covers everything below it.
+    fn insert(&mut self, rel: &str) {
+        let (name, rest) = match rel.split_once('/') {
+            Some((name, rest)) => (name, Some(rest)),
+            None => (rel, None),
+        };
+        match rest {
+            None => {
+                self.0.insert(name.to_owned(), None);
+            }
+            Some(rest) => {
+                if let Some(below) = self
+                    .0
+                    .entry(name.to_owned())
+                    .or_insert_with(|| Some(Focus::default()))
+                {
+                    below.insert(rest);
+                }
+            }
+        }
+    }
+
+    fn wants(&self, name: &str) -> bool {
+        self.0.contains_key(name)
+    }
+
+    /// Whether `name` is compared in full.
+    fn is_target(&self, name: &str) -> bool {
+        matches!(self.0.get(name), Some(None))
+    }
+
+    /// Whether some row right in this folder is compared in full, so the
+    /// folder's listing has to be read afresh.
+    fn has_targets(&self) -> bool {
+        self.0.values().any(Option::is_none)
+    }
+
+    /// What to compare below `name`: `None` is everything.
+    fn below(&self, name: &str) -> Option<&Focus> {
+        self.0.get(name).and_then(Option::as_ref)
+    }
+}
+
+/// Forgets what the scan holds for the full-compare targets among `pairs`
+/// (both sides' paths below `ldir` / `rdir`).
+fn forget_targets<'p>(
+    focus: &Focus,
+    pairs: impl IntoIterator<Item = (Option<&'p Listed>, Option<&'p Listed>)>,
+    ldir: &str,
+    rdir: &str,
+    ctx: &Ctx,
+) {
+    for (l, r) in pairs {
+        if !focus.is_target(pair_name(l, r)) {
+            continue;
+        }
+        for (side, item, dir) in [(Side::Left, l, ldir), (Side::Right, r, rdir)] {
+            if let Some(x) = item {
+                ctx.scan.forget(side, &ctx.fs(side).join(dir, &x.name));
+            }
+        }
+    }
 }
 
 struct Ctx<'a> {
@@ -1399,7 +1493,7 @@ struct Descend {
 
 /// Lists an orphaned folder so its contents are visible in the tree. `rel`
 /// is the tree's relative path, `side_rel` the side's own; `filtered` is set
-/// below a folder the filters leave out.
+/// below a folder the filters leave out, `focus` limits it to some rows.
 #[allow(clippy::too_many_arguments)]
 fn orphan_tree(
     dir: &str,
@@ -1408,10 +1502,14 @@ fn orphan_tree(
     side: Side,
     chain: &Chain,
     filtered: bool,
+    focus: Option<&Focus>,
     ctx: &Ctx,
 ) -> Vec<FolderEntry> {
     let fs = ctx.fs(side);
-    let listed = match list_dir(side, dir, side_rel, ctx) {
+    if focus.is_some_and(Focus::has_targets) {
+        ctx.scan.forget_listing(side, dir);
+    }
+    let mut listed = match list_dir(side, dir, side_rel, ctx) {
         Ok(l) => l,
         Err(e) => {
             let entries = vec![error_entry("<unreadable>".into(), rel.into(), false, e)];
@@ -1419,6 +1517,14 @@ fn orphan_tree(
             return entries;
         }
     };
+    if let Some(focus) = focus {
+        listed.retain(|_, item| focus.wants(&item.name));
+        let items = listed.values().map(|item| match side {
+            Side::Left => (Some(item), None),
+            Side::Right => (None, Some(item)),
+        });
+        forget_targets(focus, items, dir, dir, ctx);
+    }
     let orphan = |item: &Listed| {
         let rel_path = join_rel(rel, &item.name);
         let own_rel = join_rel(side_rel, &item.name);
@@ -1481,8 +1587,17 @@ fn orphan_tree(
                 sub.canonical[Chain::index(side)] = canonical;
                 let own_rel = entry.left_rel_path.clone().unwrap_or_else(|| entry.rel_path.clone());
                 let inherited = entry.filtered_out();
-                entry.children =
-                    orphan_tree(&path, &entry.rel_path, &own_rel, side, &sub, inherited, ctx);
+                let focus = focus.and_then(|f| f.below(&entry.name));
+                entry.children = orphan_tree(
+                    &path,
+                    &entry.rel_path,
+                    &own_rel,
+                    side,
+                    &sub,
+                    inherited,
+                    focus,
+                    ctx,
+                );
                 entry.counts = Some(aggregate(&entry.children));
             }
             entry
@@ -1499,9 +1614,15 @@ struct DirPair<'a> {
     lrel: &'a str,
     /// The folders sit below one the filters leave out.
     filtered: bool,
+    /// Only these rows are compared (see [`compare_entries`]); `None` is all.
+    focus: Option<&'a Focus>,
 }
 
 fn compare_dirs(at: &DirPair, chain: &Chain, ctx: &Ctx) -> Result<Vec<FolderEntry>> {
+    if at.focus.is_some_and(Focus::has_targets) {
+        ctx.scan.forget_listing(Side::Left, at.ldir);
+        ctx.scan.forget_listing(Side::Right, at.rdir);
+    }
     let mut left = list_dir(Side::Left, at.ldir, at.lrel, ctx)?;
     let right = list_dir(Side::Right, at.rdir, at.rel, ctx)?;
 
@@ -1510,6 +1631,11 @@ fn compare_dirs(at: &DirPair, chain: &Chain, ctx: &Ctx) -> Result<Vec<FolderEntr
         pairs.push((left.remove(&key), Some(r)));
     }
     pairs.extend(left.into_values().map(|l| (Some(l), None)));
+    if let Some(focus) = at.focus {
+        pairs.retain(|(l, r)| focus.wants(pair_name(l.as_ref(), r.as_ref())));
+        let pairs = pairs.iter().map(|(l, r)| (l.as_ref(), r.as_ref()));
+        forget_targets(focus, pairs, at.ldir, at.rdir, ctx);
+    }
 
     if ctx.control.levels.is_some() {
         let shallow: Vec<_> = pairs
@@ -1535,8 +1661,13 @@ fn compare_dirs(at: &DirPair, chain: &Chain, ctx: &Ctx) -> Result<Vec<FolderEntr
 
 /// A pair's row before anything below it is compared: one-sided rows and
 /// type mismatches are final, two-sided ones still read `Same`.
+/// A pair's name in the tree: the right side's, as for its `rel_path`.
+fn pair_name<'a>(l: Option<&'a Listed>, r: Option<&'a Listed>) -> &'a str {
+    r.or(l).map_or("", |x| &x.name)
+}
+
 fn pair_entry(at: &DirPair, l: Option<&Listed>, r: Option<&Listed>) -> FolderEntry {
-    let name = r.or(l).map(|x| x.name.clone()).unwrap_or_default();
+    let name = pair_name(l, r).to_owned();
     let rel_path = join_rel(at.rel, &name);
     let (status, is_dir) = match (l, r) {
         (Some(l), None) => (EntryStatus::LeftOnly, l.meta.is_dir),
@@ -1600,6 +1731,7 @@ fn compare_pair(
     // folders walked only when asked to show what's in them.
     let inherited = entry.filtered_out();
     let descend = ctx.opts.recursive && (ctx.control.expand_filtered || !inherited);
+    let focus = at.focus.and_then(|f| f.below(&entry.name));
 
     match (&l, &r) {
         (Some(l), None) => {
@@ -1616,7 +1748,7 @@ fn compare_pair(
                         parent: Some(chain),
                     };
                     entry.children =
-                        orphan_tree(&path, &rel_path, &left_rel, Side::Left, &sub, inherited, ctx);
+                        orphan_tree(&path, &rel_path, &left_rel, Side::Left, &sub, inherited, focus, ctx);
                     entry.counts = Some(aggregate(&entry.children));
                 }
             }
@@ -1635,7 +1767,7 @@ fn compare_pair(
                         parent: Some(chain),
                     };
                     entry.children =
-                        orphan_tree(&path, &rel_path, &rel_path, Side::Right, &sub, inherited, ctx);
+                        orphan_tree(&path, &rel_path, &rel_path, Side::Right, &sub, inherited, focus, ctx);
                     entry.counts = Some(aggregate(&entry.children));
                 }
             }
@@ -1689,6 +1821,7 @@ fn compare_pair(
                     rel: &rel_path,
                     lrel: &left_rel,
                     filtered: inherited,
+                    focus,
                 };
                 match compare_dirs(&at, &sub, ctx) {
                     Ok(children) => {
@@ -1825,25 +1958,24 @@ pub fn compare_folders_cached(
     compare_folders_controlled(left_fs, left, right_fs, right, opts, control)
 }
 
-/// [`compare_folders_cached`] with progress reports and cancellation. With
-/// [`ScanControl::scan`], only the stages `opts` change since the scan's
-/// last run read anything (see [`FolderScan`]); the scan must belong to
-/// these two folders.
-pub fn compare_folders_controlled(
+/// Runs `f` with a comparison context over the two folders: the options
+/// checked and compiled, and `control.scan` (or a throwaway one) to list
+/// through.
+fn with_ctx<R>(
     left_fs: &dyn Vfs,
     left: &str,
     right_fs: &dyn Vfs,
     right: &str,
     opts: &FolderCompareOptions,
     control: ScanControl,
-) -> Result<FolderCompareResult> {
-    let started = Instant::now();
+    f: impl FnOnce(&Ctx, &Chain) -> Result<R>,
+) -> Result<R> {
     // Fail fast on bad regexes rather than once per file pair.
     if opts.content == ContentMethod::Rules {
         text::LineNormalizer::new(&opts.rules)?;
     }
     let ci = opts.ignore_name_case;
-    let f = &opts.filters;
+    let filters = &opts.filters;
     let transient;
     let scan = match control.scan {
         Some(scan) => scan,
@@ -1855,16 +1987,16 @@ pub fn compare_folders_controlled(
     let ctx = Ctx {
         opts,
         exclude: build_globset(&opts.exclude, ci)?,
-        include_files: build_globset(&f.include_files, ci)?,
-        exclude_files: build_globset(&f.exclude_files, ci)?,
-        exclude_folders: build_globset(&f.exclude_folders, ci)?,
-        include_containing: containing_regex(&f.include_containing, f)?,
-        exclude_containing: containing_regex(&f.exclude_containing, f)?,
+        include_files: build_globset(&filters.include_files, ci)?,
+        exclude_files: build_globset(&filters.exclude_files, ci)?,
+        exclude_folders: build_globset(&filters.exclude_folders, ci)?,
+        include_containing: containing_regex(&filters.include_containing, filters)?,
+        exclude_containing: containing_regex(&filters.exclude_containing, filters)?,
         containing_key: fingerprint(&(
-            &f.include_containing,
-            &f.exclude_containing,
-            f.containing_regex,
-            f.containing_match_case,
+            &filters.include_containing,
+            &filters.exclude_containing,
+            filters.containing_regex,
+            filters.containing_match_case,
         )),
         rules_key: fingerprint(&serde_json::to_string(&opts.rules).unwrap_or_default()),
         aligner: Aligner::new(&opts.align, ci)?,
@@ -1886,34 +2018,119 @@ pub fn compare_folders_controlled(
         compared: AtomicUsize::new(0),
         dirs_read: AtomicUsize::new(0),
     };
-    // Only once the options are known to be valid.
-    let needs = control.scan.map(|scan| scan.restage(opts));
     let root = Chain {
         canonical: ctx.roots.clone(),
         parent: None,
     };
-    let at = DirPair {
-        ldir: left,
-        rdir: right,
-        rel: "",
-        lrel: "",
-        filtered: false,
+    f(&ctx, &root)
+}
+
+/// [`compare_folders_cached`] with progress reports and cancellation. With
+/// [`ScanControl::scan`], only the stages `opts` change since the scan's
+/// last run read anything (see [`FolderScan`]); the scan must belong to
+/// these two folders.
+pub fn compare_folders_controlled(
+    left_fs: &dyn Vfs,
+    left: &str,
+    right_fs: &dyn Vfs,
+    right: &str,
+    opts: &FolderCompareOptions,
+    control: ScanControl,
+) -> Result<FolderCompareResult> {
+    let started = Instant::now();
+    with_ctx(left_fs, left, right_fs, right, opts, control, |ctx, root| {
+        // Only once the options are known to be valid.
+        let needs = control.scan.map(|scan| scan.restage(opts));
+        let at = DirPair {
+            ldir: left,
+            rdir: right,
+            rel: "",
+            lrel: "",
+            filtered: false,
+            focus: None,
+        };
+        let entries = compare_dirs(&at, root, ctx)?;
+        // Folders below the top level record a cancellation as their own error.
+        ctx.check_cancel()?;
+        let mut stats = FolderStats::default();
+        tally(&entries, &mut stats);
+        stats.counts = aggregate(&entries);
+        stats.checksums_reused = ctx.reused.load(Ordering::Relaxed);
+        stats.dirs_read = ctx.dirs_read.load(Ordering::Relaxed);
+        Ok(FolderCompareResult {
+            left_root: left.to_owned(),
+            right_root: right.to_owned(),
+            entries,
+            stats,
+            elapsed_ms: started.elapsed().as_millis(),
+            needs,
+        })
+    })
+}
+
+/// Compares just the rows at `rels` — relative paths in the tree, `/`
+/// separated, with the right side's names as in [`FolderEntry::rel_path`]
+/// — each with everything below it, exactly as a full comparison with the
+/// same options and `control` would report them: alignment, filters, links
+/// and the checksum cache all apply. `None` where a full comparison would
+/// have no such row (gone on both sides, or filtered out and not kept).
+///
+/// For after a file operation: swap each row into the old tree with
+/// [`FolderCompareResult::replace_entry`] instead of rescanning. Only the
+/// folders on the way down are listed (from [`ScanControl::scan`] when it
+/// has them), and what the scan remembers about each row and the listing of
+/// the folder holding it is dropped first, so changes there show. When an
+/// operation creates or removes a folder on one side, pass that folder, not
+/// just what's inside it: its own row changes. `levels` aren't reported.
+pub fn compare_entries(
+    left_fs: &dyn Vfs,
+    left: &str,
+    right_fs: &dyn Vfs,
+    right: &str,
+    rels: &[String],
+    opts: &FolderCompareOptions,
+    control: ScanControl,
+) -> Result<Vec<Option<FolderEntry>>> {
+    let mut focus = Focus::default();
+    for rel in rels {
+        if rel.split('/').any(str::is_empty) {
+            return Err(CoreError::Other(format!(
+                "\"{rel}\" isn't a path below the compared folders"
+            )));
+        }
+        focus.insert(rel);
+    }
+    let control = ScanControl {
+        levels: None,
+        ..control
     };
-    let entries = compare_dirs(&at, &root, &ctx)?;
-    // Folders below the top level record a cancellation as their own error.
-    ctx.check_cancel()?;
-    let mut stats = FolderStats::default();
-    tally(&entries, &mut stats);
-    stats.counts = aggregate(&entries);
-    stats.checksums_reused = ctx.reused.load(Ordering::Relaxed);
-    stats.dirs_read = ctx.dirs_read.load(Ordering::Relaxed);
-    Ok(FolderCompareResult {
-        left_root: left.to_owned(),
-        right_root: right.to_owned(),
-        entries,
-        stats,
-        elapsed_ms: started.elapsed().as_millis(),
-        needs,
+    with_ctx(left_fs, left, right_fs, right, opts, control, |ctx, root| {
+        let at = DirPair {
+            ldir: left,
+            rdir: right,
+            rel: "",
+            lrel: "",
+            filtered: false,
+            focus: Some(&focus),
+        };
+        // Only the paths down to each row: their folders' statuses are
+        // partial and dropped.
+        let spine = compare_dirs(&at, root, ctx)?;
+        ctx.check_cancel()?;
+        Ok(rels.iter().map(|rel| find_entry(&spine, rel).cloned()).collect())
+    })
+}
+
+/// The row at `rel` in a tree.
+fn find_entry<'a>(entries: &'a [FolderEntry], rel: &str) -> Option<&'a FolderEntry> {
+    entries.iter().find_map(|e| {
+        if e.rel_path == rel {
+            Some(e)
+        } else if e.is_dir && rel.strip_prefix(e.rel_path.as_str()).is_some_and(|r| r.starts_with('/')) {
+            find_entry(&e.children, rel)
+        } else {
+            None
+        }
     })
 }
 
@@ -2736,14 +2953,14 @@ mod staged_tests {
 
     /// The local file system, counting folder listings and file opens.
     #[derive(Default)]
-    struct CountingFs {
+    pub(super) struct CountingFs {
         listed: AtomicUsize,
         opened: AtomicUsize,
     }
 
     impl CountingFs {
         /// Listings and opens since the last call.
-        fn take(&self) -> (usize, usize) {
+        pub(super) fn take(&self) -> (usize, usize) {
             (self.listed.swap(0, Ordering::Relaxed), self.opened.swap(0, Ordering::Relaxed))
         }
     }
@@ -2987,5 +3204,285 @@ mod staged_tests {
         let mut ignoring = rules.clone();
         ignoring.rules.ignore_case = true;
         assert!(compare_needs(&rules, &ignoring).content);
+    }
+}
+
+#[cfg(test)]
+mod partial_tests {
+    use super::staged_tests::CountingFs;
+    use super::*;
+    use std::fs;
+    use std::path::{Path, PathBuf};
+    use std::time::{Duration, SystemTime};
+
+    fn write(root: &Path, rel: &str, contents: &[u8], modified_s: u64) {
+        let p = root.join(rel);
+        fs::create_dir_all(p.parent().unwrap()).unwrap();
+        fs::write(&p, contents).unwrap();
+        stamp(root, rel, modified_s);
+    }
+
+    fn stamp(root: &Path, rel: &str, modified_s: u64) {
+        let t = SystemTime::UNIX_EPOCH + Duration::from_secs(modified_s);
+        fs::File::options()
+            .write(true)
+            .open(root.join(rel))
+            .unwrap()
+            .set_modified(t)
+            .unwrap();
+    }
+
+    /// A comparison on screen, kept up to date row by row the way the
+    /// folder view does after file operations.
+    struct View {
+        _dir: tempfile::TempDir,
+        l: PathBuf,
+        r: PathBuf,
+        fs: CountingFs,
+        scan: FolderScan,
+        opts: FolderCompareOptions,
+        res: FolderCompareResult,
+    }
+
+    impl View {
+        fn sides(&self) -> (String, String) {
+            (
+                self.l.to_string_lossy().into_owned(),
+                self.r.to_string_lossy().into_owned(),
+            )
+        }
+
+        fn control(&self) -> ScanControl<'_> {
+            ScanControl {
+                scan: Some(&self.scan),
+                keep_filtered: true,
+                ..Default::default()
+            }
+        }
+
+        /// Compares `rels` alone, swaps them in, and checks the tree and
+        /// totals against a fresh full comparison.
+        fn refresh(&mut self, rels: &[&str]) {
+            let (l, r) = self.sides();
+            let owned: Vec<String> = rels.iter().map(|s| s.to_string()).collect();
+            let rows =
+                compare_entries(&self.fs, &l, &self.fs, &r, &owned, &self.opts, self.control())
+                    .unwrap();
+            for (rel, row) in rels.iter().zip(rows) {
+                assert!(self.res.replace_entry(rel, row), "{rel}: parent not in the tree");
+            }
+            let fresh = compare_folders_controlled(
+                &LocalFs,
+                &l,
+                &LocalFs,
+                &r,
+                &self.opts,
+                ScanControl {
+                    keep_filtered: true,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+            assert_eq!(
+                tree_json(&self.res.entries),
+                tree_json(&fresh.entries),
+                "after refreshing {rels:?}"
+            );
+            let totals = |s: &FolderStats| {
+                (
+                    s.same,
+                    s.similar,
+                    s.different,
+                    s.left_only,
+                    s.right_only,
+                    s.errors,
+                    s.filtered,
+                    s.counts,
+                )
+            };
+            assert_eq!(totals(&self.res.stats), totals(&fresh.stats), "totals after {rels:?}");
+        }
+
+        fn row(&self, rel: &str) -> Option<&FolderEntry> {
+            find_entry(&self.res.entries, rel)
+        }
+    }
+
+    /// Every row as JSON, minus folders' own timestamps: a change inside a
+    /// folder moves them, and [`compare_entries`] leaves the rows above the
+    /// ones it compares as they were listed.
+    fn tree_json(entries: &[FolderEntry]) -> serde_json::Value {
+        fn strip(v: &mut serde_json::Value) {
+            if let Some(rows) = v.as_array_mut() {
+                for row in rows {
+                    if row["isDir"] == true {
+                        for side in ["left", "right"] {
+                            if let Some(meta) = row[side].as_object_mut() {
+                                meta.remove("modifiedMs");
+                            }
+                        }
+                    }
+                    strip(&mut row["children"]);
+                }
+            }
+        }
+        let mut v = serde_json::to_value(entries).unwrap();
+        strip(&mut v);
+        v
+    }
+
+    fn view() -> View {
+        let dir = tempfile::tempdir().unwrap();
+        let (l, r) = (dir.path().join("l"), dir.path().join("r"));
+        write(&l, "a/b/changed.txt", b"old", 1_000);
+        write(&r, "a/b/changed.txt", b"new!", 2_000);
+        write(&l, "a/b/orphan.txt", b"o", 1_000);
+        write(&l, "a/b/left-dir/x.txt", b"x", 1_000);
+        write(&l, "a/keep.txt", b"k", 1_000);
+        write(&r, "a/keep.txt", b"k", 1_000);
+        // Filtered out, reported because the view keeps such rows.
+        write(&l, "a/run.log", b"one", 1_000);
+        write(&r, "a/run.log", b"two", 1_000);
+        // Differently named folders, paired by an alignment rule.
+        write(&l, "Apples/2024.csv", b"1", 1_000);
+        write(&r, "Bananas/2024.csv", b"22", 1_000);
+        write(&l, "same.bin", b"abcd", 1_000);
+        write(&r, "same.bin", b"abcd", 1_000);
+        write(&r, "ronly/inner/deep.txt", b"d", 1_000);
+        // Differs only in what the filters leave out.
+        write(&l, "logs/x.log", b"1", 1_000);
+        write(&r, "logs/x.log", b"22", 2_000);
+        write(&l, "logs/ok.txt", b"ok", 1_000);
+        write(&r, "logs/ok.txt", b"ok", 1_000);
+        let opts = FolderCompareOptions {
+            ignore_name_case: false,
+            content: ContentMethod::Binary,
+            align: align::AlignOptions {
+                rules: vec![align::AlignRule {
+                    left: "Apples*".into(),
+                    right: "Bananas*".into(),
+                }],
+                ..Default::default()
+            },
+            filters: FolderFilters {
+                exclude_files: vec!["*.log".into()],
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let mut v = View {
+            _dir: dir,
+            l,
+            r,
+            fs: CountingFs::default(),
+            scan: FolderScan::new(),
+            opts,
+            res: FolderCompareResult {
+                left_root: String::new(),
+                right_root: String::new(),
+                entries: Vec::new(),
+                stats: FolderStats::default(),
+                elapsed_ms: 0,
+                needs: None,
+            },
+        };
+        let (l, r) = v.sides();
+        v.res = compare_folders_controlled(&v.fs, &l, &v.fs, &r, &v.opts, v.control()).unwrap();
+        v.fs.take();
+        v
+    }
+
+    #[test]
+    fn one_row_refreshed_matches_a_rescan() {
+        let mut v = view();
+        assert_eq!(v.row("a/b/changed.txt").unwrap().detail, StatusDetail::RightNewer);
+
+        // Copy left → right, keeping the date: only a/b is listed again.
+        write(&v.r, "a/b/changed.txt", b"old", 1_000);
+        v.refresh(&["a/b/changed.txt"]);
+        assert_eq!(v.fs.take().0, 2, "a/b on both sides, nothing else");
+        assert_eq!(v.row("a/b/changed.txt").unwrap().status, EntryStatus::Same);
+
+        // Delete an orphan: its row goes.
+        fs::remove_file(v.l.join("a/b/orphan.txt")).unwrap();
+        v.refresh(&["a/b/orphan.txt"]);
+        assert!(v.row("a/b/orphan.txt").is_none());
+
+        // A new folder on the right: inserted in order.
+        fs::create_dir(v.r.join("a/b/new-folder")).unwrap();
+        v.refresh(&["a/b/new-folder"]);
+        assert_eq!(v.row("a/b/new-folder").unwrap().status, EntryStatus::RightOnly);
+
+        // An orphaned folder copied across: the subtree is replaced.
+        write(&v.r, "a/b/left-dir/x.txt", b"x", 1_000);
+        v.refresh(&["a/b/left-dir"]);
+        assert_eq!(v.row("a/b/left-dir/x.txt").unwrap().status, EntryStatus::Same);
+
+        // Then deleted on the left: the folder turns right-only.
+        fs::remove_dir_all(v.l.join("a/b/left-dir")).unwrap();
+        v.refresh(&["a/b/left-dir"]);
+        assert_eq!(v.row("a/b/left-dir").unwrap().status, EntryStatus::RightOnly);
+    }
+
+    #[test]
+    fn alignment_filters_and_kept_verdicts_hold() {
+        let mut v = view();
+        // A row below aligned folders goes by the right side's names.
+        write(&v.r, "Bananas/2024.csv", b"1", 1_000);
+        v.refresh(&["Bananas/2024.csv"]);
+        let csv = v.row("Bananas/2024.csv").unwrap();
+        assert_eq!(
+            (csv.status, csv.left_rel_path.as_deref()),
+            (EntryStatus::Same, Some("Apples/2024.csv"))
+        );
+
+        // Same size and date, other bytes: the kept verdict must not be reused.
+        write(&v.r, "same.bin", b"abce", 1_000);
+        v.refresh(&["same.bin"]);
+        assert_eq!(v.row("same.bin").unwrap().status, EntryStatus::Different);
+
+        // A filtered row stays marked and out of the counts.
+        write(&v.l, "a/run.log", b"three", 3_000);
+        v.refresh(&["a/run.log"]);
+        assert_eq!(v.row("a/run.log").unwrap().filtered, Some(Filtered::Both));
+        assert_eq!(v.row("a").unwrap().status, EntryStatus::Different, "b/ still differs");
+        write(&v.r, "logs/ok.txt", b"ok", 1_000);
+        v.refresh(&["logs/ok.txt"]);
+        assert_eq!(v.row("logs").unwrap().status, EntryStatus::Same, "x.log doesn't count");
+
+        // Touched: the same bytes with another date.
+        stamp(&v.l, "a/keep.txt", 5_000);
+        v.refresh(&["a/keep.txt"]);
+        assert_eq!(v.row("a/keep.txt").unwrap().detail, StatusDetail::SameDiff);
+    }
+
+    #[test]
+    fn folders_created_by_a_copy_refresh_from_the_top_one() {
+        let mut v = view();
+        // Copying a file out of a right-only folder creates its folders on
+        // the left: the topmost one's row changes, so that's what's refreshed.
+        write(&v.l, "ronly/inner/deep.txt", b"d", 1_000);
+        v.refresh(&["ronly"]);
+        assert_eq!(v.row("ronly").unwrap().status, EntryStatus::Same);
+
+        // Several rows at once, one inside another and one gone.
+        write(&v.l, "ronly/inner/more.txt", b"m", 1_000);
+        fs::remove_file(v.l.join("same.bin")).unwrap();
+        fs::remove_file(v.r.join("same.bin")).unwrap();
+        v.refresh(&["ronly/inner", "ronly/inner/more.txt", "same.bin"]);
+        assert!(v.row("same.bin").is_none());
+    }
+
+    #[test]
+    fn paths_must_be_below_the_roots() {
+        let v = view();
+        let (l, r) = v.sides();
+        for bad in ["", "a//b", "/a"] {
+            let rels = [bad.to_string()];
+            assert!(
+                compare_entries(&LocalFs, &l, &LocalFs, &r, &rels, &v.opts, v.control()).is_err(),
+                "{bad:?}"
+            );
+        }
     }
 }

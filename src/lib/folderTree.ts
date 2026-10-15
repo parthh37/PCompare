@@ -563,6 +563,38 @@ export class LiveTree {
     }
   }
 
+  /**
+   * Takes `tree`, which {@link replaceEntry} made by swapping the row at
+   * `relPath`, as settled: the folders on the way down to it get their new
+   * rows, and its own folders replace whatever was kept below it.
+   */
+  patch(tree: FolderEntry[], relPath: string) {
+    for (const rel of [...this.levels.keys()]) {
+      if (rel === relPath || rel.startsWith(`${relPath}/`)) {
+        this.levels.delete(rel);
+        this.settled.delete(rel);
+      }
+    }
+    const keep = (rel: string, rows: FolderEntry[]) => {
+      this.levels.set(rel, rows);
+      this.settled.add(rel);
+    };
+    const below = (e: FolderEntry) => {
+      if (!e.isDir) return;
+      keep(e.relPath, e.children);
+      e.children.forEach(below);
+    };
+    let rows = tree;
+    let rel = "";
+    for (;;) {
+      keep(rel, rows);
+      const next = rows.find((e) => e.isDir && (relPath === e.relPath || relPath.startsWith(`${e.relPath}/`)));
+      if (!next) return;
+      if (next.relPath === relPath) return below(next);
+      [rows, rel] = [next.children, next.relPath];
+    }
+  }
+
   /** The tree so far. Rows are shared with the previous call, children re-linked. */
   tree(): FolderEntry[] {
     const link = (rel: string): FolderEntry[] => {
