@@ -24,6 +24,8 @@ export type DiffColorKey =
 export interface Prefs {
   /** Check GitHub Releases for updates in the background. */
   autoUpdate: boolean;
+  /** Pop up the "new version available" dialog (again on every hourly check until installed). */
+  updateReminders: boolean;
   /** Reopen the tabs from the previous run at startup. */
   restoreWorkspace: boolean;
   /** Closing a tab updates its saved session, or adds it to Recent sessions. */
@@ -61,6 +63,7 @@ export interface Prefs {
 
 export const DEFAULT_PREFS: Prefs = {
   autoUpdate: true,
+  updateReminders: true,
   restoreWorkspace: false,
   autoSaveSessions: true,
   theme: "dark",
@@ -115,6 +118,7 @@ export function sanitizePrefs(raw: unknown): Prefs {
   const str = (v: unknown) => (typeof v === "string" ? v.trim() : "");
   return {
     autoUpdate: bool(r.autoUpdate, d.autoUpdate),
+    updateReminders: bool(r.updateReminders, d.updateReminders),
     restoreWorkspace: bool(r.restoreWorkspace, d.restoreWorkspace),
     autoSaveSessions: bool(r.autoSaveSessions, d.autoSaveSessions),
     theme: r.theme === "light" || r.theme === "system" || r.theme === "dark" ? r.theme : d.theme,

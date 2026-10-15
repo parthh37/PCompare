@@ -1,5 +1,5 @@
 import { getCurrentWebview } from "@tauri-apps/api/webview";
-import { CircleQuestionMark, Globe, Layers, Plus, Save, Settings, X } from "lucide-react";
+import { CircleArrowUp, CircleQuestionMark, Globe, Layers, Plus, Save, Settings, X } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { AppSettingsDialog } from "./components/AppSettingsDialog";
 import { DbCompare } from "./components/DbCompare";
@@ -39,6 +39,7 @@ import {
 } from "./lib/sessions";
 import { ShellContext } from "./lib/shell";
 import { useUpdater } from "./lib/useUpdater";
+import { UpdatePrompt } from "./components/UpdatePrompt";
 // bc5:app-shell — prefs/theme, keymap, workspaces, recent sessions, help
 import { HelpPanel } from "./components/HelpPanel";
 import { SaveWorkspaceDialog } from "./components/SaveWorkspaceDialog";
@@ -807,6 +808,15 @@ export default function App() {
           >
             <CalendarClock size={14} /> Automation
           </button>
+          {updater.pending && (
+            <button
+              className="tab-action update-badge"
+              title={`PCompare ${updater.phase.kind === "available" ? updater.phase.update.version : ""} is available`}
+              onClick={updater.showPrompt}
+            >
+              <CircleArrowUp size={14} /> Update
+            </button>
+          )}
           <button
             className="tab-action"
             title={`Settings: fonts, colors, keyboard and updates (${shortcutLabel("app.settings")})`}
@@ -825,45 +835,7 @@ export default function App() {
           </button>
         </nav>
 
-        {updater.bannerVisible && (
-          <div className="update-banner">
-            {updater.phase.kind === "downloading" ? (
-              <>
-                <span>
-                  Downloading PCompare {updater.phase.update.version}
-                  {updater.phase.total
-                    ? ` — ${Math.round((updater.phase.done / updater.phase.total) * 100)}%`
-                    : "…"}
-                </span>
-                <progress value={updater.phase.done} max={updater.phase.total ?? undefined} />
-              </>
-            ) : updater.phase.kind === "available" ? (
-              <>
-                <span>
-                  <b>PCompare {updater.phase.update.version}</b> is available (you have {updater.version}).
-                </span>
-                {updater.phase.update.body && (
-                  <span className="muted update-notes" title={updater.phase.update.body}>
-                    {updater.phase.update.body.split("\n")[0]}
-                  </span>
-                )}
-                <span className="spacer" />
-                <label className="check muted">
-                  <input
-                    type="checkbox"
-                    checked={updater.autoCheck}
-                    onChange={(e) => updater.setAutoCheck(e.target.checked)}
-                  />
-                  Check automatically
-                </label>
-                <button onClick={updater.dismiss}>Later</button>
-                <button className="primary" onClick={updater.install}>
-                  Install &amp; restart
-                </button>
-              </>
-            ) : null}
-          </div>
-        )}
+        <UpdatePrompt updater={updater} />
 
         {/* bc5:app-shell — the help panel docks to the right of the sessions. */}
         <div className="workarea">
