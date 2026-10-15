@@ -225,7 +225,9 @@ pub async fn data_script(
         if cancel.load(Ordering::Relaxed) {
             return Err(CoreError::Other("cancelled".into()));
         }
-        diffs.push(diff_table(&mut lc, &mut rc, plan, cmp).await?);
+        let mut diff = diff_table(&mut lc, &mut rc, plan, cmp).await?;
+        script::keep_picked_rows(&mut diff, opts);
+        diffs.push(diff);
     }
     let target = match opts.direction {
         SyncDirection::LeftToRight => &rs,

@@ -241,6 +241,8 @@ export interface ScriptOptions {
   includeUpdates: boolean;
   transactional: boolean;
   disableForeignKeys: boolean;
+  /** Data: table id → keys of the only rows to sync there (as `DataRow.key`). */
+  rows?: Record<string, Cell[][]>;
 }
 
 export const DEFAULT_SCRIPT_OPTIONS: ScriptOptions = {

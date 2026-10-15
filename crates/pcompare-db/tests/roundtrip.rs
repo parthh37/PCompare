@@ -189,3 +189,58 @@ async fn mysql_live() {
 async fn postgres_live() {
     live("PCOMPARE_LIVE_POSTGRES", Engine::Postgres).await;
 }
+
+/// What the Database Compare arrows do: a few objects copied each way, then
+/// single rows copied each way, every other difference left alone.
+#[tokio::test]
+async fn sqlite_mixed_picks_touch_only_picked_items() {
+    let dir = tempfile::tempdir().unwrap();
+    let (l, r) = sqlite_pair(&dir);
+    pcompare_db::execute_script(&l, &fixture(Engine::Sqlite, true), true).await.unwrap();
+    pcompare_db::execute_script(&r, &fixture(Engine::Sqlite, false), true).await.unwrap();
+    let cmp = SchemaCompareOptions::default();
+    let target = |dir| if dir == SyncDirection::LeftToRight { &r } else { &l };
+    let apply_schema = |ids: &[&str], direction| {
+        let opts = ScriptOptions { direction, ids: ids.iter().map(|s| s.to_string()).collect(), ..Default::default() };
+        let (l, r, cmp) = (&l, &r, &cmp);
+        async move {
+            let s = pcompare_db::schema_script(l, r, cmp, &opts).await.unwrap();
+            pcompare_db::execute_script(target(direction), &s.statements, s.transactional).await.unwrap();
+        }
+    };
+    // → customers and orders, ← the view; legacy_audit stays right-only.
+    apply_schema(&["table:customers", "table:orders"], SyncDirection::LeftToRight).await;
+    apply_schema(&["view:big_orders"], SyncDirection::RightToLeft).await;
+    let after = pcompare_db::compare_schemas(&l, &r, &cmp).await.unwrap();
+    assert_eq!(differing(&after.objects), ["table:legacy_audit RightOnly []"]);
+    let view = after.objects.iter().find(|o| o.id == "view:big_orders").unwrap();
+    assert!(view.left_ddl.as_deref().unwrap().contains("500"), "the left view now has the right's body");
+
+    // Rows, each with the customer it references: order 12 + customer 3 →
+    // right, order 13 + customer 4 ← left. Order 11 and customer 2 differ
+    // and stay as they are.
+    let data_opts = DataCompareOptions::default();
+    let cancel = AtomicBool::new(false);
+    let key = |k: &str| vec![vec![Some(k.to_string())]];
+    for (order, customer, direction) in [("12", "3", SyncDirection::LeftToRight), ("13", "4", SyncDirection::RightToLeft)] {
+        let opts = ScriptOptions {
+            direction,
+            ids: vec!["orders".into(), "customers".into()],
+            rows: [("orders".to_string(), key(order)), ("customers".to_string(), key(customer))].into(),
+            ..Default::default()
+        };
+        let s = pcompare_db::data_script(&l, &r, &data_opts, &opts, &cancel).await.unwrap();
+        assert_eq!(s.statements.iter().filter(|x| x.starts_with("INSERT")).count(), 2, "{}", s.text);
+        assert!(!s.statements.iter().any(|x| x.starts_with("UPDATE") || x.starts_with("DELETE")), "{}", s.text);
+        pcompare_db::execute_script(target(direction), &s.statements, s.transactional)
+            .await
+            .unwrap_or_else(|e| panic!("{e}\n{}", s.text));
+    }
+    let data = pcompare_db::compare_data(&l, &r, &data_opts, &|_| {}, &cancel).await.unwrap();
+    let counts = |id: &str| {
+        let t = data.tables.iter().find(|t| t.id == id).unwrap();
+        (t.same, t.different, t.left_only, t.right_only)
+    };
+    assert_eq!(counts("orders"), (3, 1, 0, 0));
+    assert_eq!(counts("customers").2 + counts("customers").3, 0);
+}
