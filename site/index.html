@@ -1,0 +1,362 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>PCompare: fast, free file, folder & database comparison for Windows and macOS</title>
+  <meta name="description" content="PCompare is a free, open-source Beyond Compare alternative: text, folder, table, picture, hex and database compare, 3-way merge, fail-safe folder sync and scheduled sync automation, built with Rust and Tauri.">
+  <meta name="theme-color" content="#0b1120">
+  <meta property="og:title" content="PCompare: compare anything, merge with confidence">
+  <meta property="og:description" content="Free, open-source file, folder and database comparison for Windows and macOS. Built with Rust + Tauri.">
+  <meta property="og:type" content="website">
+  <meta property="og:image" content="screenshots/bc5/text-compare.png">
+  <link rel="icon" type="image/svg+xml" href="favicon.svg">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+<svg xmlns="http://www.w3.org/2000/svg" style="display:none">
+  <symbol id="i-globe" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20"/><path d="M2 12h20"/></symbol>
+  <symbol id="i-calendar-clock" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 14v2.2l1.6 1"/><path d="M16 2v3"/><path d="M21 7.338V5a2 2 0 00-2-2H5a2 2 0 00-2 2v14a2 2 0 002 2h2.338"/><path d="M3 9h5.859"/><path d="M8 2v3"/><circle cx="16" cy="16" r="6"/></symbol>
+  <symbol id="i-file-text" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 22a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h8a2.4 2.4 0 0 1 1.704.706l3.588 3.588A2.4 2.4 0 0 1 20 8v12a2 2 0 0 1-2 2z"/><path d="M14 2v5a1 1 0 0 0 1 1h5"/><path d="M10 9H8"/><path d="M16 13H8"/><path d="M16 17H8"/></symbol>
+  <symbol id="i-git-merge" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="18" cy="18" r="3"/><circle cx="6" cy="6" r="3"/><path d="M6 21V9a9 9 0 0 0 9 9"/></symbol>
+  <symbol id="i-table-2" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 9h18"/><path d="M9 3v18"/><rect x="3" y="3" width="18" height="18" rx="2"/></symbol>
+  <symbol id="i-image" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="18" x="3" y="3" rx="2" ry="2"/><circle cx="9" cy="9" r="2"/><path d="m21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21"/></symbol>
+  <symbol id="i-folders" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 5a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2H9a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h2.5a1.5 1.5 0 0 1 1.2.6l.6.8a1.5 1.5 0 0 0 1.2.6z"/><path d="M3 8.268a2 2 0 0 0-1 1.738V19a2 2 0 0 0 2 2h11a2 2 0 0 0 1.732-1"/></symbol>
+  <symbol id="i-folder-sync" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 20H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h3.9a2 2 0 0 1 1.69.9l.81 1.2a2 2 0 0 0 1.67.9H20a2 2 0 0 1 2 2v.5"/><path d="M12 10v4h4"/><path d="m12 14 1.535-1.605a5 5 0 0 1 8 1.5"/><path d="M22 22v-4h-4"/><path d="m22 18-1.535 1.605a5 5 0 0 1-8-1.5"/></symbol>
+  <symbol id="i-folder-git-2" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 19a5 5 0 0 1-5-5v8"/><path d="M9 20H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h3.9a2 2 0 0 1 1.69.9l.81 1.2a2 2 0 0 0 1.67.9H20a2 2 0 0 1 2 2v5"/><circle cx="13" cy="12" r="2"/><circle cx="20" cy="19" r="2"/></symbol>
+  <symbol id="i-binary" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="14" y="14" width="4" height="6" rx="2"/><rect x="6" y="4" width="4" height="6" rx="2"/><path d="M6 20h4"/><path d="M14 10h4"/><path d="M6 14h2v6"/><path d="M14 4h2v6"/></symbol>
+  <symbol id="i-network" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="16" y="16" width="6" height="6" rx="1"/><rect x="2" y="16" width="6" height="6" rx="1"/><rect x="9" y="2" width="6" height="6" rx="1"/><path d="M5 16v-3a1 1 0 0 1 1-1h12a1 1 0 0 1 1 1v3"/><path d="M12 12V8"/></symbol>
+  <symbol id="i-cpu" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20v2"/><path d="M12 2v2"/><path d="M17 20v2"/><path d="M17 2v2"/><path d="M2 12h2"/><path d="M2 17h2"/><path d="M2 7h2"/><path d="M20 12h2"/><path d="M20 17h2"/><path d="M20 7h2"/><path d="M7 20v2"/><path d="M7 2v2"/><rect x="4" y="4" width="16" height="16" rx="2"/><rect x="8" y="8" width="8" height="8" rx="1"/></symbol>
+  <symbol id="i-music" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></symbol>
+  <symbol id="i-database" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5V19A9 3 0 0 0 21 19V5"/><path d="M3 12A9 3 0 0 0 21 12"/></symbol>
+  <symbol id="i-file-pen" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12.659 22H18a2 2 0 0 0 2-2V8a2.4 2.4 0 0 0-.706-1.706l-3.588-3.588A2.4 2.4 0 0 0 14 2H6a2 2 0 0 0-2 2v9.34"/><path d="M14 2v5a1 1 0 0 0 1 1h5"/><path d="M10.378 12.622a1 1 0 0 1 3 3.003L8.36 20.637a2 2 0 0 1-.854.506l-2.867.837a.5.5 0 0 1-.62-.62l.836-2.869a2 2 0 0 1 .506-.853z"/></symbol>
+  <symbol id="i-file-diff" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 22a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h8a2.4 2.4 0 0 1 1.704.706l3.588 3.588A2.4 2.4 0 0 1 20 8v12a2 2 0 0 1-2 2z"/><path d="M9 10h6"/><path d="M12 13V7"/><path d="M9 17h6"/></symbol>
+  <symbol id="i-package" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 21.73a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73z"/><path d="M12 22V12"/><polyline points="3.29 7 12 12 20.71 7"/><path d="m7.5 4.27 9 5.15"/></symbol>
+  <symbol id="i-shield-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z"/><path d="m9 12 2 2 4-4"/></symbol>
+  <symbol id="i-terminal" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19h8"/><path d="m4 17 6-6-6-6"/></symbol>
+  <symbol id="i-cloud" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17.5 19H9a7 7 0 1 1 6.71-9h1.79a4.5 4.5 0 1 1 0 9Z"/></symbol>
+  <symbol id="i-download" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 15V3"/><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="m7 10 5 5 5-5"/></symbol>
+  <symbol id="i-monitor" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="20" height="14" x="2" y="3" rx="2"/><line x1="8" x2="16" y1="21" y2="21"/><line x1="12" x2="12" y1="17" y2="21"/></symbol>
+  <symbol id="i-zap" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15.914 4a1.5 1.5 0 00-2.474-1.561l-9 9A1.5 1.5 0 005.5 14h4.002a.5.5 0 01.471.666L8.086 20a1.5 1.5 0 002.475 1.56l9-9A1.5 1.5 0 0018.5 10h-3.997a.5.5 0 01-.472-.667z"/></symbol>
+  <symbol id="i-git-branch" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 6a9 9 0 0 0-9 9V3"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/></symbol>
+  <symbol id="i-archive" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="20" height="5" x="2" y="3" rx="1"/><path d="M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8"/><path d="M10 12h4"/></symbol>
+  <symbol id="i-arrow-right" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="m12 5 7 7-7 7"/></symbol>
+  <symbol id="i-arrow-left" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m12 19-7-7 7-7"/><path d="M19 12H5"/></symbol>
+  <symbol id="i-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></symbol>
+  <symbol id="i-rotate-ccw-clock" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M12 7v5l4 2"/></symbol>
+  <symbol id="i-lock" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="11" x="3" y="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></symbol>
+  <symbol id="i-bell" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.268 21a2 2 0 0 0 3.464 0"/><path d="M3.262 15.326A1 1 0 0 0 4 17h16a1 1 0 0 0 .74-1.673C19.41 13.956 18 12.499 18 8A6 6 0 0 0 6 8c0 4.499-1.411 5.956-2.738 7.326"/></symbol>
+  <symbol id="i-file-search" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 22a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h8a2.4 2.4 0 0 1 1.704.706l3.588 3.588A2.4 2.4 0 0 1 20 8v12a2 2 0 0 1-2 2z"/><path d="M14 2v5a1 1 0 0 0 1 1h5"/><circle cx="11.5" cy="14.5" r="2.5"/><path d="M13.3 16.3 15 18"/></symbol>
+  <symbol id="i-keyboard" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 8h.01"/><path d="M12 12h.01"/><path d="M14 8h.01"/><path d="M16 12h.01"/><path d="M18 8h.01"/><path d="M6 8h.01"/><path d="M7 16h10"/><path d="M8 12h.01"/><rect width="20" height="16" x="2" y="4" rx="2"/></symbol>
+  <symbol id="i-refresh-cw" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M8 16H3v5"/></symbol>
+  <symbol id="i-undo-2" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 14 4 9l5-5"/><path d="M4 9h10.5a5.5 5.5 0 0 1 5.5 5.5a5.5 5.5 0 0 1-5.5 5.5H11"/></symbol>
+  <symbol id="i-layers" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12.83 2.18a2 2 0 0 0-1.66 0L2.6 6.08a1 1 0 0 0 0 1.83l8.58 3.91a2 2 0 0 0 1.66 0l8.58-3.9a1 1 0 0 0 0-1.83z"/><path d="M2 12a1 1 0 0 0 .58.91l8.6 3.91a2 2 0 0 0 1.65 0l8.58-3.9A1 1 0 0 0 22 12"/><path d="M2 17a1 1 0 0 0 .58.91l8.6 3.91a2 2 0 0 0 1.65 0l8.58-3.9A1 1 0 0 0 22 17"/></symbol>
+  <symbol id="i-sun-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2v2"/><path d="M14.837 16.385a6 6 0 1 1-7.223-7.222c.624-.147.97.66.715 1.248a4 4 0 0 0 5.26 5.259c.589-.255 1.396.09 1.248.715"/><path d="M16 12a4 4 0 0 0-4-4"/><path d="m19 5-1.256 1.256"/><path d="M20 12h2"/></symbol>
+  <symbol id="i-file-type" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 22a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h8a2.4 2.4 0 0 1 1.704.706l3.588 3.588A2.4 2.4 0 0 1 20 8v12a2 2 0 0 1-2 2z"/><path d="M14 2v5a1 1 0 0 0 1 1h5"/><path d="M11 18h2"/><path d="M12 12v6"/><path d="M9 13v-.5a.5.5 0 0 1 .5-.5h5a.5.5 0 0 1 .5.5v.5"/></symbol>
+  <symbol id="i-scroll-text" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 12h-5"/><path d="M15 8h-5"/><path d="M19 17V5a2 2 0 0 0-2-2H4"/><path d="M8 21h12a2 2 0 0 0 2-2v-1a1 1 0 0 0-1-1H11a1 1 0 0 0-1 1v1a2 2 0 1 1-4 0V5a2 2 0 1 0-4 0v2a1 1 0 0 0 1 1h3"/></symbol>
+  <symbol id="i-rocket" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 15v5s3.03-.55 4-2c1.08-1.62 0-5 0-5"/><path d="M4.5 16.5c-1.5 1.26-2 5-2 5s3.74-.5 5-2c.71-.84.7-2.13-.09-2.91a2.18 2.18 0 0 0-2.91-.09"/><path d="M9 12a22 22 0 0 1 2-3.95A12.88 12.88 0 0 1 22 2c0 2.72-.78 7.5-6 11a22.4 22.4 0 0 1-4 2z"/><path d="M9 12H4s.55-3.03 2-4c1.62-1.08 5 .05 5 .05"/></symbol>
+  <symbol id="i-plug" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22v-5"/><path d="M15 8V2"/><path d="M17 8a1 1 0 0 1 1 1v4a4 4 0 0 1-4 4h-4a4 4 0 0 1-4-4V9a1 1 0 0 1 1-1z"/><path d="M9 8V2"/></symbol>
+  <symbol id="i-eye" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2.062 12.348a1 1 0 0 1 0-.696 10.75 10.75 0 0 1 19.876 0 1 1 0 0 1 0 .696 10.75 10.75 0 0 1-19.876 0"/><circle cx="12" cy="12" r="3"/></symbol>
+  <symbol id="i-laptop" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 5a2 2 0 0 1 2 2v8.526a2 2 0 0 0 .212.897l1.068 2.127a1 1 0 0 1-.9 1.45H3.62a1 1 0 0 1-.9-1.45l1.068-2.127A2 2 0 0 0 4 15.526V7a2 2 0 0 1 2-2z"/><path d="M20.054 15.987H3.946"/></symbol>
+</svg>
+
+<header class="nav">
+  <div class="wrap nav-inner">
+    <a class="brand" href="#top"><img src="favicon.svg" alt="" width="28" height="28"> PCompare</a>
+    <nav class="nav-links" aria-label="Sections">
+      <a href="#viewers">Viewers</a>
+      <a href="#tour">Tour</a>
+      <a href="#sync">Sync</a>
+      <a href="#database">Database</a>
+      <a href="#remote">Cloud</a>
+      <a href="#cli">Command line</a>
+    </nav>
+    <div class="nav-cta">
+      <a class="btn ghost small" href="https://github.com/parthh37/PCompare" rel="noopener">GitHub</a>
+      <a class="btn primary small" href="#download">Download</a>
+    </div>
+  </div>
+</header>
+
+<main id="top">
+
+  <!-- Hero -->
+  <section class="hero">
+    <div class="wrap hero-grid">
+      <div class="hero-copy">
+        <p class="eyebrow"><span class="pill" data-version>v1.6</span> Free &amp; open source · Windows · macOS</p>
+        <h1>Spot every difference.<br><span class="grad">Keep only the right ones.</span></h1>
+        <div class="mini-diff" aria-hidden="true">
+          <div class="del"><span>−</span>closed-source, per-seat, one machine at a time</div>
+          <div class="add"><span>+</span>PCompare: fast, free, scriptable, open source</div>
+        </div>
+        <p class="lede">A modern Beyond Compare alternative for files, folders, archives, cloud drives and databases. Compare, merge and sync with previews before anything changes, all in a native app built on Rust.</p>
+        <div class="hero-actions">
+          <a class="btn primary" id="hero-download" href="https://github.com/parthh37/PCompare/releases/latest">
+            <svg class="i"><use href="#i-download"/></svg><span data-dl-label>Download PCompare</span>
+          </a>
+          <a class="btn ghost" href="#tour">Take the tour <svg class="i"><use href="#i-arrow-right"/></svg></a>
+        </div>
+        <p class="hero-note" data-dl-note>Windows 10/11 installer · macOS for Apple Silicon and Intel · signed automatic updates</p>
+      </div>
+      <figure class="hero-shot window">
+        <img src="screenshots/bc5/text-compare.png" alt="PCompare Text Compare: side-by-side diff of two Rust files with word-level highlights" width="1600" height="1000">
+      </figure>
+    </div>
+
+    <div class="wrap stats">
+      <div><b>15</b><span>comparison viewers</span></div>
+      <div><b>4</b><span>database engines</span></div>
+      <div><b>12</b><span>cloud &amp; remote backends</span></div>
+      <div><b>BC</b><span>compatible scripts &amp; exit codes</span></div>
+    </div>
+  </section>
+
+  <!-- Viewers -->
+  <section id="viewers" class="section">
+    <div class="wrap">
+      <header class="section-head">
+        <p class="eyebrow">One app, every kind of compare</p>
+        <h2>Drop two things on the window. PCompare picks the right viewer.</h2>
+        <p>Text, folders, spreadsheets, images, binaries, registry keys, executables, audio tags and live databases, plus merge, sync and review tools around them.</p>
+      </header>
+      <div class="viewer-grid">
+        <article class="viewer" style="--c:#5b9cff"><svg class="vi"><use href="#i-file-text"/></svg><h3>Text Compare</h3><p>Editable side-by-side diff with word-level highlights, Patience or Myers, ignore rules for whitespace, case and regex-defined text. Saves with the original encoding, BOM and line endings.</p></article>
+        <article class="viewer" style="--c:#a78bfa"><svg class="vi"><use href="#i-git-merge"/></svg><h3>Text Merge</h3><p>2- or 3-way merge against a common ancestor. Non-conflicting changes merge automatically; take left, right, both or base per conflict. Works as a <code>git mergetool</code>.</p></article>
+        <article class="viewer" style="--c:#fbbf24"><svg class="vi"><use href="#i-folders"/></svg><h3>Folder Compare</h3><p>Parallel recursive scans that stream rows in as they are found. Quick tests by size and timestamp, then binary, CRC-32 or rules-based content compare.</p></article>
+        <article class="viewer" style="--c:#2dd4bf"><svg class="vi"><use href="#i-folder-sync"/></svg><h3>Folder Sync</h3><p>Update, mirror or two-way sync with history. Every copy and delete is previewed, journaled and reversible.</p></article>
+        <article class="viewer" style="--c:#fb923c"><svg class="vi"><use href="#i-folder-git-2"/></svg><h3>Folder Merge</h3><p>3-way merge of whole folder trees: changes, additions, deletions and conflicts each get a proposed action, and text conflicts open in Text Merge.</p></article>
+        <article class="viewer" style="--c:#34d399"><svg class="vi"><use href="#i-table-2"/></svg><h3>Table Compare</h3><p>Cell-by-cell CSV/TSV, Excel and ODS workbooks and HTML tables. Align rows on key columns, ignore columns, set a numeric tolerance.</p></article>
+        <article class="viewer" style="--c:#f472b6"><svg class="vi"><use href="#i-image"/></svg><h3>Picture Compare</h3><p>PNG, JPEG, GIF, BMP, TIFF, WebP and more. Side-by-side, difference, blend and swipe views with per-channel tolerance and synced zoom.</p></article>
+        <article class="viewer" style="--c:#94a3b8"><svg class="vi"><use href="#i-binary"/></svg><h3>Hex Compare</h3><p>Streams files of any size, aligns inserted bytes and jumps straight to the next differing block.</p></article>
+        <article class="viewer" style="--c:#a3e635"><svg class="vi"><use href="#i-database"/></svg><h3>Database Compare</h3><p>Schema and data compare for SQL Server, MySQL/MariaDB, PostgreSQL and SQLite. Pick changes with arrows and review them in plain English.</p></article>
+        <article class="viewer" style="--c:#60a5fa"><svg class="vi"><use href="#i-network"/></svg><h3>Registry Compare</h3><p><code>.reg</code> exports (REGEDIT4 and v5) or live keys such as <code>HKLM\Software\Vendor</code>, value by value.</p></article>
+        <article class="viewer" style="--c:#c084fc"><svg class="vi"><use href="#i-cpu"/></svg><h3>Version Compare</h3><p>Version resources of <code>.exe</code> and <code>.dll</code> files plus PE facts: architecture, timestamp, ASLR/DEP/CFG and signatures.</p></article>
+        <article class="viewer" style="--c:#f87171"><svg class="vi"><use href="#i-music"/></svg><h3>MP3 Compare</h3><p>ID3, APE, Vorbis and MP4 tags of MP3, FLAC, M4A, OGG/Opus, WAV and AIFF, with audio properties and cover art.</p></article>
+        <article class="viewer" style="--c:#818cf8"><svg class="vi"><use href="#i-file-pen"/></svg><h3>Text Edit</h3><p>Edit a single file with syntax colours, find &amp; replace, bookmarks, encodings and line endings.</p></article>
+        <article class="viewer" style="--c:#e879f9"><svg class="vi"><use href="#i-file-diff"/></svg><h3>Patch Viewer</h3><p>Browse a <code>.patch</code> or <code>.diff</code> file by file, then apply it to a folder and compare the result.</p></article>
+        <article class="viewer" style="--c:#facc15"><svg class="vi"><use href="#i-package"/></svg><h3>Comparison Archive</h3><p>Save a comparison with its bookmarks and comments as a <code>.pcmpz</code> and hand it to a reviewer, read-only.</p></article>
+        <article class="viewer more"><svg class="vi"><use href="#i-file-type"/></svg><h3>Documents too</h3><p>Word (<code>.docx</code>, <code>.doc</code>), OpenDocument, RTF and PDF are converted to text and compared like any other file. Zip, tar and 7z open as folders.</p></article>
+      </div>
+    </div>
+  </section>
+
+  <!-- Tour -->
+  <section id="tour" class="section alt">
+    <div class="wrap">
+      <header class="section-head">
+        <p class="eyebrow">Product tour</p>
+        <h2>See it in action</h2>
+      </header>
+      <div class="tour" role="tablist" aria-label="Screenshots">
+        <button role="tab" aria-selected="true" data-shot="0">Text</button>
+        <button role="tab" data-shot="1">Folders</button>
+        <button role="tab" data-shot="2">Sync preview</button>
+        <button role="tab" data-shot="3">Database</button>
+        <button role="tab" data-shot="4">Automation</button>
+        <button role="tab" data-shot="5">Hex</button>
+        <button role="tab" data-shot="6">Archives</button>
+        <button role="tab" data-shot="7">Git revisions</button>
+        <button role="tab" data-shot="8">Patches</button>
+      </div>
+      <figure class="tour-stage window">
+        <img id="tour-img" src="screenshots/bc5/text-compare.png" alt="" width="1600" height="1000">
+      </figure>
+      <p class="tour-caption" id="tour-caption"></p>
+    </div>
+  </section>
+
+  <!-- Highlights -->
+  <section class="section">
+    <div class="wrap">
+      <header class="section-head">
+        <p class="eyebrow">Made for daily work</p>
+        <h2>The details that save you an afternoon</h2>
+      </header>
+      <div class="feature-grid">
+        <div class="feature"><svg class="i"><use href="#i-eye"/></svg><h3>Similar isn't different</h3><p>Rules-based compare treats encoding, line-ending, whitespace and regex-matched changes as <em>unimportant</em>, so only real edits show in red.</p></div>
+        <div class="feature"><svg class="i"><use href="#i-refresh-cw"/></svg><h3>Live re-compare</h3><p>Folder, text and hex sessions refresh themselves when either side changes on disk. Remote sides are polled every 30 seconds.</p></div>
+        <div class="feature"><svg class="i"><use href="#i-zap"/></svg><h3>Huge folders, instantly</h3><p>Rows appear while the scan runs. A CRC cache in an embedded scan database lets rescans skip files that haven't changed.</p></div>
+        <div class="feature"><svg class="i"><use href="#i-layers"/></svg><h3>Sessions &amp; workspaces</h3><p>Save any comparison with its view settings (Ctrl+Shift+S), or save every open tab as a workspace. Closed comparisons are kept as recent sessions.</p></div>
+        <div class="feature"><svg class="i"><use href="#i-scroll-text"/></svg><h3>Reports</h3><p>HTML, text, CSV or unified-patch reports of text, folder and table comparisons, to save, copy as rich text or print.</p></div>
+        <div class="feature"><svg class="i"><use href="#i-keyboard"/></svg><h3>Your shortcuts</h3><p>Every shortcut can be rebound. F1 opens help for the view in front, and a getting-started guide covers the essentials.</p></div>
+        <div class="feature"><svg class="i"><use href="#i-sun-moon"/></svg><h3>Light, dark, yours</h3><p>Light and dark themes, custom colour schemes and syntax highlighting for common languages.</p></div>
+        <div class="feature"><svg class="i"><use href="#i-monitor"/></svg><h3>Explorer integration</h3><p>“Select left side” and “Compare to…” in the Windows Explorer menu. Multi-select two items and compare them in one click.</p></div>
+        <div class="feature"><svg class="i"><use href="#i-rocket"/></svg><h3>Signed updates</h3><p>Checks GitHub Releases at startup and every six hours. Install and restart in one click; every package is signature-verified.</p></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Sync -->
+  <section id="sync" class="section alt">
+    <div class="wrap split">
+      <div>
+        <p class="eyebrow">Folder Sync</p>
+        <h2>Sync that's afraid of losing your files</h2>
+        <p>Every sync shows a preview of each copy, delete and new folder, with a checkbox per item and per-row overrides. Then the executor treats your data like it's the only copy.</p>
+        <ul class="checks">
+          <li><svg class="i"><use href="#i-check"/></svg><span><b>Pre-flight checks</b> for free space, write access and nested folders, and a warning before mirroring from an empty (unmounted?) folder.</span></li>
+          <li><svg class="i"><use href="#i-check"/></svg><span><b>Atomic copies</b> flushed to disk and swapped into place, with optional read-back checksum verification.</span></li>
+          <li><svg class="i"><use href="#i-check"/></svg><span><b>Never overwrites surprises.</b> Files changed since the preview are left alone; sources modified mid-copy are retried.</span></li>
+          <li><svg class="i"><use href="#i-check"/></svg><span><b>Locked files</b> are retried with backoff, then deferred, skipped or stop the run. On Windows the report names the program holding the file.</span></li>
+          <li><svg class="i"><use href="#i-check"/></svg><span><b>Journaled runs.</b> Resume or roll back after a crash, retry failed items, or undo a finished sync. Deleted files go to the Recycle Bin, Trash or a versioning folder.</span></li>
+          <li><svg class="i"><use href="#i-check"/></svg><span><b>Two-way with history.</b> Deletions propagate; edits on both sides become conflicts you settle by rule: skip, newer wins, left or right wins.</span></li>
+        </ul>
+      </div>
+      <figure class="window"><img src="screenshots/sync-preview-row-overrides.png" alt="Folder Sync preview listing each copy, delete and new folder with per-item checkboxes" loading="lazy" width="1280" height="560"></figure>
+    </div>
+  </section>
+
+  <!-- Automation -->
+  <section id="automation" class="section">
+    <div class="wrap split reverse">
+      <figure class="window"><img src="screenshots/automation-page.png" alt="Sync Automation page with scheduled tasks, triggers, status and run history" loading="lazy" width="1440" height="900"></figure>
+      <div>
+        <p class="eyebrow">Sync Automation</p>
+        <h2>Set it once. Get told when it breaks.</h2>
+        <p>Turn any folder sync into a task that runs on its own from the system tray, starting quietly with your computer.</p>
+        <ul class="checks">
+          <li><svg class="i"><use href="#i-calendar-clock"/></svg><span><b>Triggers:</b> daily or weekday schedules, every N minutes, cron expressions, at startup, or real-time when files change.</span></li>
+          <li><svg class="i"><use href="#i-shield-check"/></svg><span><b>Safety policies</b> abort a run that would delete most of a folder, and catch up on missed runs.</span></li>
+          <li><svg class="i"><use href="#i-bell"/></svg><span><b>Alerts</b> to Microsoft Teams, Slack, email (SMTP), webhooks or the desktop, with secrets kept in the OS keychain.</span></li>
+          <li><svg class="i"><use href="#i-rotate-ccw-clock"/></svg><span><b>Run history</b> with retries, conflicts, bytes copied and the full message for every failure.</span></li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <!-- Database -->
+  <section id="database" class="section alt">
+    <div class="wrap split">
+      <div>
+        <p class="eyebrow">Database Compare</p>
+        <h2>Schema and data diffs without writing a single script</h2>
+        <p>Point PCompare at two databases and see every table, view, procedure, function, trigger and sequence side by side with its DDL, and every row matched by primary key with cell-level differences.</p>
+        <div class="engines"><span>SQL Server</span><span>MySQL / MariaDB</span><span>PostgreSQL</span><span>SQLite</span></div>
+        <ul class="checks">
+          <li><svg class="i"><use href="#i-arrow-right"/></svg><span><b>Pick with arrows.</b> Copy an object, a group, a table or a single row left or right with ← / →.</span></li>
+          <li><svg class="i"><use href="#i-file-search"/></svg><span><b>Review in plain English.</b> “Update the table customers to match Dev: column email will be added”. Destructive steps are flagged before you apply.</span></li>
+          <li><svg class="i"><use href="#i-lock"/></svg><span><b>Runs all-or-nothing</b> in the target's own dialect, dependency-ordered and transactional. The SQL stays one click away under “Show SQL”.</span></li>
+          <li><svg class="i"><use href="#i-plug"/></svg><span>Saved connections with passwords in the OS keychain, SQL Server Windows authentication and named instances.</span></li>
+        </ul>
+      </div>
+      <figure class="window"><img src="screenshots/db-arrows-schema-review.jpg" alt="Database Compare review dialog describing schema changes in plain English" loading="lazy" width="800" height="600"></figure>
+    </div>
+  </section>
+
+  <!-- Remote -->
+  <section id="remote" class="section">
+    <div class="wrap">
+      <header class="section-head">
+        <p class="eyebrow">Cloud &amp; remote</p>
+        <h2>Either side can live anywhere</h2>
+        <p>Save a connection profile once, then use <code>remote://&lt;profile&gt;/path</code> (or the globe button) on either side of any compare or sync. Secrets stay in the OS keychain and saved profiles are encrypted with AES-256-GCM.</p>
+      </header>
+      <div class="chips">
+        <span>Amazon S3</span><span>Cloudflare R2</span><span>MinIO</span><span>Wasabi</span><span>Azure Blob</span><span>Google Cloud Storage</span><span>Backblaze B2</span><span>FTP / FTPS</span><span>SFTP</span><span>WebDAV</span><span>OneDrive</span><span>SharePoint</span><span>Dropbox &amp; Dropbox Teams</span><span>Google Drive</span><span>GitHub repositories</span>
+      </div>
+      <div class="feature-grid three">
+        <div class="feature"><svg class="i"><use href="#i-cloud"/></svg><h3>One-click sign-in</h3><p>Microsoft, Google and Dropbox sign in through the browser with PKCE. No keys to copy around.</p></div>
+        <div class="feature"><svg class="i"><use href="#i-git-branch"/></svg><h3>Branches as folders</h3><p>Compare two branches of a GitHub repository without cloning, or any local revision with <code>git:</code>, <code>hg:</code> and <code>svn:</code> sides.</p></div>
+        <div class="feature"><svg class="i"><use href="#i-archive"/></svg><h3>Archives &amp; snapshots</h3><p>Zip, tar and 7z browse and edit like folders. Save a folder as a <code>.pcsnap</code> snapshot and compare against it later.</p></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- CLI -->
+  <section id="cli" class="section alt">
+    <div class="wrap split">
+      <div>
+        <p class="eyebrow">Command line &amp; scripting</p>
+        <h2>Drop-in for your Beyond Compare workflows</h2>
+        <p>PCompare speaks Beyond Compare's switches, script language and exit codes, so CI jobs, hooks and nightly scripts written for BC run unchanged.</p>
+        <ul class="checks">
+          <li><svg class="i"><use href="#i-terminal"/></svg><span><code>pcompare @nightly.txt</code> runs BC scripts headlessly: load, filter, select, compare, sync, reports, snapshots and more.</span></li>
+          <li><svg class="i"><use href="#i-zap"/></svg><span><code>/qc</code> quick compare and <code>/automerge</code> merge without opening a window.</span></li>
+          <li><svg class="i"><use href="#i-git-merge"/></svg><span>One click sets PCompare up as git's difftool and mergetool, with <code>--wait</code>. Snippets for Mercurial, Perforce and Subversion.</span></li>
+          <li><svg class="i"><use href="#i-download"/></svg><span>Import saved sessions from Beyond Compare 3/4/5, WinMerge, FreeFileSync and Meld.</span></li>
+        </ul>
+      </div>
+      <div class="terminal">
+        <div class="term-bar"><i></i><i></i><i></i><span>Terminal</span></div>
+<pre><code><span class="c"># compare two folders, or a past revision</span>
+<span class="p">$</span> pcompare ./site ./backup
+<span class="p">$</span> pcompare git:src/app.rs@HEAD~3 src/app.rs
+
+<span class="c"># CI: did anything really change?</span>
+<span class="p">$</span> pcompare /qc=rules build/ expected/
+<span class="o">rules-based same: only line endings differ</span>
+<span class="p">$</span> echo $?
+<span class="o">2</span>
+
+<span class="c"># 3-way merge, open only the conflicts</span>
+<span class="p">$</span> pcompare "$LOCAL" "$REMOTE" "$BASE" "$MERGED" \
+    /automerge /reviewconflicts
+
+<span class="c"># run a Beyond Compare script, no window</span>
+<span class="p">$</span> pcompare @nightly.txt "D:/work" "E:/backup"</code></pre>
+      </div>
+    </div>
+  </section>
+
+  <!-- Download -->
+  <section id="download" class="section download">
+    <div class="wrap">
+      <header class="section-head center">
+        <img src="favicon.svg" alt="" width="72" height="72">
+        <h2>Get PCompare</h2>
+        <p>Free and MIT licensed. <span data-release-line>Every release is built by GitHub Actions and published on GitHub.</span></p>
+      </header>
+      <div class="dl-grid">
+        <a class="dl" data-asset="win-exe" href="https://github.com/parthh37/PCompare/releases/latest">
+          <svg class="i"><use href="#i-monitor"/></svg>
+          <div><b>Windows</b><span>Installer (.exe) · Windows 10/11, x64</span></div>
+        </a>
+        <a class="dl" data-asset="mac-arm" href="https://github.com/parthh37/PCompare/releases/latest">
+          <svg class="i"><use href="#i-laptop"/></svg>
+          <div><b>macOS · Apple Silicon</b><span>Disk image (.dmg) · M1 and later</span></div>
+        </a>
+        <a class="dl" data-asset="mac-x64" href="https://github.com/parthh37/PCompare/releases/latest">
+          <svg class="i"><use href="#i-laptop"/></svg>
+          <div><b>macOS · Intel</b><span>Disk image (.dmg) · x64</span></div>
+        </a>
+      </div>
+      <p class="dl-foot">
+        <a data-asset="win-msi" href="https://github.com/parthh37/PCompare/releases/latest">Windows .msi (for managed deployment)</a> ·
+        <a href="https://github.com/parthh37/PCompare/releases">All releases &amp; release notes</a> ·
+        <a href="https://github.com/parthh37/PCompare#development">Build from source</a>
+      </p>
+      <p class="dl-hint">macOS builds are ad-hoc signed: on first launch, right-click the app and choose <b>Open</b>. Unsigned Windows installers may show a SmartScreen prompt; choose <b>More info → Run anyway</b>.</p>
+    </div>
+  </section>
+
+  <!-- Roadmap -->
+  <section class="section alt">
+    <div class="wrap split roadmap">
+      <div>
+        <p class="eyebrow">What's next</p>
+        <h2>On the roadmap</h2>
+        <p>PCompare already covers Beyond Compare's feature set. These go beyond it:</p>
+      </div>
+      <ul class="todo">
+        <li>Structural diff for JSON, YAML and XML (key-order-insensitive)</li>
+        <li>Semantic, AST-aware code diff</li>
+        <li>Moved-block detection</li>
+        <li>Blame-aware text view</li>
+        <li>AI-generated summary of a diff</li>
+      </ul>
+    </div>
+  </section>
+
+</main>
+
+<footer class="footer">
+  <div class="wrap footer-inner">
+    <span><img src="favicon.svg" alt="" width="20" height="20"> PCompare · MIT License</span>
+    <span>Built with Rust, Tauri 2 and React · <a href="https://github.com/parthh37/PCompare">Source on GitHub</a> · <a href="https://github.com/parthh37/PCompare/issues">Report an issue</a></span>
+  </div>
+</footer>
+
+<script src="app.js" defer></script>
+</body>
+</html>
