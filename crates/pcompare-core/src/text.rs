@@ -11,6 +11,9 @@ use similar::algorithms::{myers, Capture};
 use similar::{capture_diff_slices, Algorithm, ChangeTag, DiffOp, TextDiff};
 use std::borrow::Cow;
 
+mod moves;
+pub use moves::MovedBlock;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum WhitespaceMode {
@@ -230,6 +233,13 @@ pub struct DiffRow {
     pub left_eol: Option<LineEnding>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub right_eol: Option<LineEnding>,
+    /// The [`MovedBlock`] this side's line belongs to: a left-only line that
+    /// reappears elsewhere on the right, or a right-only line that came from
+    /// elsewhere on the left. The row's kind is unchanged.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub left_move: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub right_move: Option<u32>,
 }
 
 /// A contiguous block of rows that are neither `Equal` nor `Unimportant`.
@@ -248,6 +258,9 @@ pub struct DiffStats {
     pub changed: usize,
     pub left_only: usize,
     pub right_only: usize,
+    /// Lines in moved blocks (counted once per side; they are also in
+    /// `left_only` / `right_only`).
+    pub moved: usize,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -257,6 +270,8 @@ pub struct TextDiffResult {
     pub hunks: Vec<Hunk>,
     pub stats: DiffStats,
     pub identical: bool,
+    /// Blocks that moved; their rows carry `left_move` / `right_move`.
+    pub moves: Vec<MovedBlock>,
     /// The grammar id used for each side, if any.
     pub left_grammar: Option<&'static str>,
     pub right_grammar: Option<&'static str>,
@@ -1067,14 +1082,19 @@ pub fn diff_sides(
             right_spans: r.map(|j| spans(&rp, j)).unwrap_or_default(),
             left_eol: l.and_then(|i| eol(&left, i)),
             right_eol: r.and_then(|j| eol(&right, j)),
+            left_move: None,
+            right_move: None,
         });
     }
 
+    let moves = moves::detect(&mut rows, &lp.keys, &rp.keys, ltext);
+    stats.moved = moves.iter().map(|m| m.len).sum();
     let hunks = collect_hunks(&rows);
     Ok(TextDiffResult {
         identical: hunks.is_empty() && stats.unimportant == 0,
         rows,
         hunks,
+        moves,
         stats,
         left_grammar: lp.grammar.map(|g| g.id),
         right_grammar: rp.grammar.map(|g| g.id),
