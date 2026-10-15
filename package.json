@@ -9,7 +9,8 @@
     "typecheck": "tsc -b",
     "tauri": "tauri",
     "version:bump": "node scripts/version.mjs bump",
-    "version:check": "node scripts/version.mjs check"
+    "version:check": "node scripts/version.mjs check",
+    "site:build": "node scripts/build-site.mjs"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.12.3",
