@@ -12,7 +12,9 @@ use crate::data_diff::TableDataDiff;
 use crate::dialect::Dialect;
 use crate::model::*;
 use crate::schema_diff::{dialect_for, SchemaCompareOptions};
+use crate::value::Value;
 use serde::{Deserialize, Serialize};
+use std::collections::{HashMap, HashSet};
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -39,6 +41,10 @@ pub struct ScriptOptions {
     pub transactional: bool,
     /// Data: disable FK checks while applying rows (where the engine allows).
     pub disable_foreign_keys: bool,
+    /// Data: table id → keys of the only rows to sync in that table, each key
+    /// as the row's display values (`null` = SQL NULL, as `DataRow.key`
+    /// serializes). Tables without an entry sync every differing row.
+    pub rows: HashMap<String, Vec<Vec<Option<String>>>>,
 }
 
 impl Default for ScriptOptions {
@@ -51,8 +57,19 @@ impl Default for ScriptOptions {
             include_updates: true,
             transactional: true,
             disable_foreign_keys: true,
+            rows: HashMap::new(),
         }
     }
+}
+
+/// Drops the rows of `diff` that `opts.rows` doesn't pick for its table.
+pub fn keep_picked_rows(diff: &mut TableDataDiff, opts: &ScriptOptions) {
+    let Some(keys) = opts.rows.get(&diff.summary.id) else { return };
+    let picked: HashSet<&[Option<String>]> = keys.iter().map(Vec::as_slice).collect();
+    diff.rows.retain(|row| {
+        let key: Vec<Option<String>> = row.key.iter().map(Value::display_text).collect();
+        picked.contains(key.as_slice())
+    });
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -630,5 +647,20 @@ mod tests {
         let only = ScriptOptions { ids: vec!["dbo.orders".into()], ..Default::default() };
         let s = data_script_in(&[orders_diff(), customers_diff()], &shop(), &only, &AnsiDialect);
         assert!(s.statements.iter().all(|x| x.contains("ORDERS")));
+    }
+
+    #[test]
+    fn picked_rows_limit_a_table_to_those_keys() {
+        let mut diff = customers_diff();
+        let id = diff.summary.id.clone();
+        let opts = ScriptOptions { rows: HashMap::from([(id, vec![vec![Some("9".into())]])]), ..Default::default() };
+        keep_picked_rows(&mut diff, &opts);
+        assert_eq!(diff.rows.len(), 1);
+        assert_eq!(diff.rows[0].key, [Int(9)]);
+        // Tables without an entry keep every row.
+        let mut other = orders_diff();
+        let before = other.rows.len();
+        keep_picked_rows(&mut other, &opts);
+        assert_eq!(other.rows.len(), before);
     }
 }

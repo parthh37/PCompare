@@ -400,7 +400,7 @@ impl<'a> Planner<'a> {
             }
         }
         out.push(d.drop_table(&t.name));
-        out.push(d.rename_table(&tmp, &t.name.name));
+        out.extend(d.rebuild_rename(&tmp, &t.name.name));
         out.extend(s.indexes.iter().filter(|i| !i.constraint).map(|i| d.create_index(&t.name, i)));
         out.extend(triggers.iter().flat_map(|tr| d.create_object(tr)));
         out.extend(d.enable_foreign_keys(tables));

@@ -147,6 +147,17 @@ impl Dialect for SqliteDialect {
     fn disable_foreign_keys(&self, _tables: &[ObjectName]) -> Vec<String> {
         vec!["PRAGMA defer_foreign_keys = ON".into()]
     }
+
+    /// A modern RENAME re-checks every view and trigger, and those still
+    /// naming the dropped table fail it. The legacy rename skips that check;
+    /// they are valid again once the copy has the name.
+    fn rebuild_rename(&self, from: &ObjectName, to_name: &str) -> Vec<String> {
+        vec![
+            "PRAGMA legacy_alter_table = ON".into(),
+            self.rename_table(from, to_name),
+            "PRAGMA legacy_alter_table = OFF".into(),
+        ]
+    }
 }
 
 /// The trait's provided `literal`, for the cases SQLite doesn't change.
