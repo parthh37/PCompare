@@ -6,7 +6,7 @@
 //! [`VfsWrite`] Folder Sync can write to, or a local cached copy for the
 //! text and hex engines.
 
-mod containers; // bc5:archives
+mod containers;
 mod dropbox;
 mod github_fs;
 mod graph_fs;
@@ -61,7 +61,7 @@ pub fn is_remote(path: &str) -> bool {
 }
 
 pub use github_fs::{decode_ref as decode_github_ref, encode_ref as encode_github_ref};
-pub use containers::{is_container_path, is_inside_container, read_only_inside}; // bc5:archives
+pub use containers::{is_container_path, is_inside_container, read_only_inside};
 
 /// Errors from a remote byte stream: anything but a clear refusal means the
 /// link failed, which callers retry (and resume) rather than give up on.
@@ -123,7 +123,7 @@ pub struct RemoteManager {
     /// the same file don't write the same partial file.
     downloads: Mutex<HashMap<PathBuf, Arc<Mutex<()>>>>,
     /// Archives, snapshots and svn: repositories (containers.rs).
-    containers: containers::Containers, // bc5:archives
+    containers: containers::Containers,
     /// The sign-in waiting for the browser, if any: its number and the
     /// switch that cancels it (sending, or dropping the sender, cancels).
     sign_in: Mutex<Option<(u64, tokio::sync::oneshot::Sender<()>)>>,
@@ -151,7 +151,7 @@ impl RemoteManager {
         Self {
             profiles: ProfileStore::new(config_dir.join("profiles.json"), secrets),
             conns: Mutex::new(HashMap::new()),
-            containers: containers::Containers::new(cache_dir.join("archives")), // bc5:archives
+            containers: containers::Containers::new(cache_dir.join("archives")),
             cache_dir,
             prompter: Mutex::new(None),
             downloads: Mutex::new(HashMap::new()),
@@ -249,7 +249,7 @@ impl RemoteManager {
 
     /// Resolves any path — local or `remote://` — to a file system + path.
     pub fn target(&self, path: &str) -> Result<(Arc<dyn Vfs>, String)> {
-        // bc5:archives — inside archives, snapshots and svn: repositories
+        // inside archives, snapshots and svn: repositories
         if let Some(r) = self.resolve_container(path, false)? {
             return Ok((r.fs, r.path));
         }
@@ -262,7 +262,7 @@ impl RemoteManager {
     /// The writable file system and relative path behind a `remote://` path;
     /// `None` for local paths.
     pub fn target_write(&self, path: &str) -> Result<Option<(Arc<dyn VfsWrite>, String)>> {
-        // bc5:archives — zip archives are writable, other containers refuse writes
+        // zip archives are writable, other containers refuse writes
         if let Some(r) = self.resolve_container(path, false)? {
             return Ok(Some((r.fs, r.path)));
         }
@@ -396,7 +396,7 @@ impl RemoteManager {
     /// ranged read — by the retries here after a dropped connection, and by
     /// the next call if every attempt failed.
     pub fn local_copy(&self, path: &str, refresh: bool) -> Result<PathBuf> {
-        // bc5:archives — a file inside an archive or repository
+        // a file inside an archive or repository
         if let Some(copy) = self.container_copy(path)? {
             return Ok(copy);
         }

@@ -1,8 +1,8 @@
 //! Tauri commands for Folder Sync and Folder Merge (3-way, or 2-way without a base).
 //!
 //! Planning, comparison and execution work on remote stores too (through the
-//! shared `RemoteManager`): either side of a sync may be a `remote://` folder
-//! (bc5:remote-write). Remote deletions are permanent — remotes have no
+//! shared `RemoteManager`): either side of a sync may be a `remote://` folder.
+//!Remote deletions are permanent — remotes have no
 //! Recycle Bin — which the plan warns about; Folder Merge output stays local.
 //!
 //! Every sync run is a job in the scan database (`pcompare-index`): its
@@ -29,10 +29,10 @@ use pcompare_sync::exec::{
 };
 use pcompare_sync::fsops::{self, TrashDeleter};
 use pcompare_sync::journal::{Journal, NullJournal};
-use pcompare_sync::remote::{self as remote_sync, Root}; // bc5:remote-write
+use pcompare_sync::remote::{self as remote_sync, Root};
 use pcompare_sync::merge::{
     self, FolderMergeOptions, FolderMergeResult, MergeDecision, MergeProgress, MergeReport, MergeRun,
-}; // bc5:folder-merge
+};
 use pcompare_sync::sync::{self as engine, ConflictPolicy, PlanRules, SyncMode, SyncOp, SyncPlan};
 use serde::Serialize;
 use tauri::ipc::Channel;
@@ -55,7 +55,7 @@ impl SyncJobs {
     }
 }
 
-/// Pause flags of running sync jobs, keyed like [`SyncJobs`] (bc5:file-ops).
+/// Pause flags of running sync jobs, keyed like [`SyncJobs`].
 #[derive(Default)]
 struct SyncPauses(Mutex<HashMap<String, Arc<AtomicBool>>>);
 
@@ -74,7 +74,7 @@ fn jobs(app: &AppHandle) -> tauri::State<'_, SyncJobs> {
     app.state::<SyncJobs>()
 }
 
-/// The comparisons behind the latest previews (bc5:sync-matrix), so changing
+/// The comparisons behind the latest previews, so changing
 /// a row's action re-plans from memory instead of rescanning both folders.
 /// Small: a big comparison holds every entry of both trees.
 #[derive(Default)]
@@ -115,7 +115,7 @@ fn require_existing_dir(label: &str, path: &str) -> pcompare_core::Result<()> {
     }
 }
 
-// ---------- sync sides (bc5:remote-write) ----------
+// ---------- sync sides ----------
 
 /// The writable file system behind a side, `None` for a local folder.
 type SideFs = Option<(Arc<dyn VfsWrite>, String)>;
@@ -136,7 +136,7 @@ pub(crate) fn with_roots<T>( // automation:shell
     f: impl FnOnce(Root, Root) -> pcompare_core::Result<T>,
 ) -> pcompare_core::Result<T> {
     with_remote(app, [left, right], |r| {
-        // bc5:archives — a zip archive (or read-only tar/7z/snapshot) can be a side
+        // a zip archive (or read-only tar/7z/snapshot) can be a side
         let (lfs, rfs) = (r.target_write_folder(left)?, r.target_write_folder(right)?);
         f(root(left, &lfs), root(right, &rfs))
     })
@@ -198,13 +198,13 @@ pub(crate) fn plan( // automation:shell
     mode: SyncMode,
     options: &FolderCompareOptions,
     conflicts: ConflictPolicy,
-    rules: &PlanRules, // bc5:sync-matrix
+    rules: &PlanRules,
 ) -> pcompare_core::Result<SyncPlan> {
     with_remote(app, [left, right], |r| {
-        let (lfs, lpath) = r.target_folder(left)?; // bc5:archives
+        let (lfs, lpath) = r.target_folder(left)?;
         let (rfs, rpath) = r.target_folder(right)?;
         let baseline = load_baseline(app, left, right, mode)?;
-        let cache = checksum_cache(app, [crate::archive::cache_root(left), crate::archive::cache_root(right)]); // bc5:archives
+        let cache = checksum_cache(app, [crate::archive::cache_root(left), crate::archive::cache_root(right)]);
         let plan_opts = rules.options(baseline.as_ref(), conflicts);
         let mut plan = engine::plan_sync_with(&*lfs, &lpath, &*rfs, &rpath, mode, options, &plan_opts, as_cache(&cache))?;
         if let Some(cache) = cache {
@@ -225,7 +225,7 @@ fn load_baseline(app: &AppHandle, left: &str, right: &str, mode: SyncMode) -> pc
 
 /// What every plan shown to the user gets once it's built.
 fn finish_plan(plan: &mut SyncPlan, left: &str, right: &str) {
-    // bc5:remote-write — remote deletions can't be undone; say so up front.
+    // remote deletions can't be undone; say so up front.
     let remote_warnings = remote_sync::remote_warnings(plan, pcompare_remote::is_remote(left), pcompare_remote::is_remote(right));
     plan.warnings.extend(remote_warnings);
     plan.left_root = left.to_owned();
@@ -233,7 +233,7 @@ fn finish_plan(plan: &mut SyncPlan, left: &str, right: &str) {
 }
 
 /// Re-plans from the comparison of an earlier preview of the same folders
-/// and options (bc5:sync-matrix); `None` when there is none to reuse.
+/// and options; `None` when there is none to reuse.
 fn replan_cached(
     app: &AppHandle,
     left: &str,
@@ -300,7 +300,7 @@ struct RunGuard {
     app: AppHandle,
     key: String,
     flag: Arc<AtomicBool>,
-    /// Holds the run while set (bc5:file-ops).
+    /// Holds the run while set.
     pause: Arc<AtomicBool>,
 }
 
@@ -351,7 +351,7 @@ pub(crate) struct RunSpec<'a> {
     pub(crate) mode: SyncMode,
     pub(crate) compare: &'a FolderCompareOptions,
     pub(crate) conflicts: ConflictPolicy,
-    pub(crate) rules: &'a PlanRules, // bc5:sync-matrix
+    pub(crate) rules: &'a PlanRules,
 }
 // automation:shell end
 
@@ -386,7 +386,7 @@ fn run_job(
         &*deleter,
         journal,
         cancel,
-        pause, // bc5:file-ops
+        pause,
         progress,
     );
     drop(db_journal);
@@ -398,7 +398,7 @@ fn run_job(
     let mut fresh = plan(app, spec.left, spec.right, spec.mode, spec.compare, spec.conflicts, spec.rules).ok();
     if let Some(p) = &mut fresh {
         update_baseline(app, spec.left, spec.right, p);
-        // bc5:sync-matrix — later row actions re-plan from this comparison.
+        // later row actions re-plan from this comparison.
         remember_comparison(app, spec.left, spec.right, spec.compare, p);
     }
     SyncRun {
@@ -432,12 +432,12 @@ pub async fn sync_plan(
     mode: SyncMode,
     options: FolderCompareOptions,
     conflicts: Option<ConflictPolicy>,
-    rules: Option<PlanRules>, // bc5:sync-matrix
+    rules: Option<PlanRules>,
     reuse: Option<bool>,
 ) -> CmdResult<SyncPlan> {
     let (conflicts, rules) = (conflicts.unwrap_or_default(), rules.unwrap_or_default());
     blocking(move || {
-        // bc5:sync-matrix — a changed row action needs no rescan.
+        // a changed row action needs no rescan.
         if reuse == Some(true) {
             if let Some(p) = replan_cached(&app, &left, &right, mode, &options, conflicts, &rules) {
                 return p;
@@ -556,7 +556,7 @@ pub async fn sync_execute(
     exec: ExecOptions,
     compare: FolderCompareOptions,
     conflicts: ConflictPolicy,
-    rules: Option<PlanRules>, // bc5:sync-matrix
+    rules: Option<PlanRules>,
     run_key: String,
     on_progress: Channel<ExecProgress>,
 ) -> CmdResult<SyncRun> {
@@ -583,7 +583,7 @@ pub fn sync_cancel(app: AppHandle, run_key: String) {
 }
 
 /// Holds (`paused`) or resumes a running sync between operations and inside
-/// large copies (bc5:file-ops).
+/// large copies.
 #[tauri::command]
 pub fn sync_pause(app: AppHandle, run_key: String, paused: bool) {
     if let Some(flag) = pauses(&app).get(&run_key) {
@@ -609,7 +609,7 @@ pub async fn sync_resume(
     job_id: String,
     compare: FolderCompareOptions,
     conflicts: ConflictPolicy,
-    rules: Option<PlanRules>, // bc5:sync-matrix
+    rules: Option<PlanRules>,
     run_key: String,
     on_progress: Channel<ExecProgress>,
 ) -> CmdResult<SyncRun> {
@@ -749,7 +749,7 @@ pub async fn index_clear_checksums(app: AppHandle) -> CmdResult<usize> {
 }
 
 // ---------- folder merge (3-way, or 2-way without a base) ----------
-// bc5:folder-merge — the base is optional and text files can be merged automatically.
+// the base is optional and text files can be merged automatically.
 
 #[tauri::command]
 pub async fn folder_merge_compare(
@@ -764,7 +764,7 @@ pub async fn folder_merge_compare(
     blocking(move || {
         let result = with_remote(&app, [&left, &right], |r| {
             // An empty base means a two-way merge.
-            // bc5:archives — archives and snapshots open as folders here too
+            // archives and snapshots open as folders here too
             let base_target = if base.is_empty() { None } else { Some(r.target_folder(&base)?) };
             let (lfs, lpath) = r.target_folder(&left)?;
             let (rfs, rpath) = r.target_folder(&right)?;

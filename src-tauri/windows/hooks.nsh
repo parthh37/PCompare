@@ -1,4 +1,4 @@
-; Explorer context menu, like Beyond Compare's shell extension:
+; Explorer context menu:
 ;   "Select Left Side for Compare", then "Compare to '<name>'" on another item,
 ;   or select 2-3 items -> "Compare with PCompare".
 ; The app writes the verbs itself (per user, HKCU) from the list in

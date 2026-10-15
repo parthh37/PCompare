@@ -1,19 +1,19 @@
-//! Beyond Compare's finer row statuses and per-folder status counts.
+//! Finer row statuses and per-folder status counts.
 //!
-//! [`EntryStatus`] says what a row *is*; [`StatusDetail`] adds what Beyond
-//! Compare's `TDirCompareStatus` adds on top: which side of a differing pair
+//! [`EntryStatus`] says what a row *is*; [`StatusDetail`] adds the finer detail on
+//! top: which side of a differing pair
 //! is newer, "same contents but the quick tests differ", and "not compared
-//! yet". Folders carry [`StatusCounts`] of everything below them (BC's
-//! status counts), so a folder can say "orphans *and* right-newer files" at
+//! yet". Folders carry [`StatusCounts`] of everything below them (status
+//! counts), so a folder can say "orphans *and* right-newer files" at
 //! once. Counts are sums of each row's contribution, so a change to one row
 //! updates its ancestors by taking the old contribution out and putting the
-//! new one in ([`replace_entry`], BC's `UpdateParentStatus`): no rescan and
+//! new one in ([`replace_entry`]): no rescan and
 //! no walk over siblings.
 
 use super::{tally, EntryStatus, FolderCompareResult, FolderEntry, FolderStats, Side};
 use serde::Serialize;
 
-/// A row's status at Beyond Compare's granularity.
+/// A row's status at a finer granularity.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub enum StatusDetail {
@@ -169,7 +169,7 @@ impl StatusCounts {
         StatusDetail::ALL.iter().map(|&d| self.get(d)).sum()
     }
 
-    /// The statuses present (BC's `TDirCompareStatusSet`).
+    /// The statuses present.
     pub fn set(&self) -> StatusSet {
         StatusDetail::ALL
             .into_iter()

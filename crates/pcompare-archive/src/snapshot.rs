@@ -1,7 +1,6 @@
 //! Folder snapshots: a `.pcsnap` file records a folder tree's names, sizes,
 //! dates, attributes and (optionally) CRC-32s — but no contents — so a
-//! folder can later be compared against how it looked, like Beyond
-//! Compare's `.bcss` snapshots.
+//! folder can later be compared against how it looked.
 //!
 //! The file is gzip-compressed JSON. Opened as a Folder Compare side it is a
 //! read-only [`Vfs`]: listings work as usual, content comparisons use the

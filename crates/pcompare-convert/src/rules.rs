@@ -86,7 +86,7 @@ pub struct ConvertConfig {
 }
 
 impl Default for ConvertConfig {
-    /// The built-in document formats, like Beyond Compare's stock rules.
+    /// The built-in document formats, as stock rules.
     fn default() -> Self {
         let rule = |name: &str, mask: &str, converter| FileFormat {
             name: name.into(),

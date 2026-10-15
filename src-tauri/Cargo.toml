@@ -22,16 +22,15 @@ pcompare-index = { path = "../crates/pcompare-index" }
 pcompare-db = { path = "../crates/pcompare-db" }
 pcompare-shell = { path = "../crates/pcompare-shell" }
 pcompare-import = { path = "../crates/pcompare-import" }
-# bc5:converters — document → text converters, file format rules, external tools.
+# document → text converters, file format rules, external tools.
 pcompare-convert = { path = "../crates/pcompare-convert" }
-# bc5:reports-script — HTML/text/CSV reports and the script processor (`pcompare @script.txt`).
+# HTML/text/CSV reports and the script processor (`pcompare @script.txt`).
 pcompare-report = { path = "../crates/pcompare-report" }
 pcompare-script = { path = "../crates/pcompare-script" }
-# bc5:archives — archives, folder snapshots and svn: repositories as folders.
+# archives, folder snapshots and svn: repositories as folders.
 pcompare-archive = { path = "../crates/pcompare-archive" }
-# araxis:text-review — comparison archives (.pcmpz) with review comments.
+# comparison archives (.pcmpz) with review comments.
 pcompare-review = { path = "../crates/pcompare-review" }
-# araxis:text-review end
 # automation:shell — saved sync tasks on schedules / real-time, failure notifications.
 pcompare-automation = { path = "../crates/pcompare-automation" }
 pcompare-notify = { path = "../crates/pcompare-notify" }
@@ -47,9 +46,9 @@ tauri-plugin-dialog = "2"
 tauri-plugin-opener = "2"
 tauri-plugin-updater = "2"
 tauri-plugin-process = "2"
-# bc5:text-ui — clipboard text as a Text Compare side.
+# clipboard text as a Text Compare side.
 tauri-plugin-clipboard-manager = "2"
-# bc5:app-shell — a second launch opens a tab in the running window.
+# a second launch opens a tab in the running window.
 tauri-plugin-single-instance = "2"
 notify = "8"
 notify-debouncer-mini = "0.7"

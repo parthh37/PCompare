@@ -14,14 +14,14 @@ import { Mp3Compare } from "./components/Mp3Compare";
 import { PictureCompare } from "./components/PictureCompare";
 import { Profiles } from "./components/Profiles";
 import { RegistryCompare } from "./components/RegistryCompare";
-import { RemoteAuthPrompt } from "./components/RemoteAuthPrompt"; // bc5:remote-write
+import { RemoteAuthPrompt } from "./components/RemoteAuthPrompt";
 import { SaveSessionDialog } from "./components/SaveSessionDialog";
 import { SessionIcon } from "./components/SessionIcon";
 import { ToolIcon } from "./components/icons";
 import { TableCompare } from "./components/TableCompare";
 import { TextCompare } from "./components/TextCompare";
-import { TextEditor } from "./components/TextEditor"; // bc5:editor-patch
-import { PatchViewer } from "./components/PatchViewer"; // bc5:editor-patch
+import { TextEditor } from "./components/TextEditor";
+import { PatchViewer } from "./components/PatchViewer";
 import { TextMerge } from "./components/TextMerge";
 import { VersionCompare } from "./components/VersionCompare";
 import { api, errorMessage, type SavedSession } from "./lib/api";
@@ -40,7 +40,7 @@ import {
 import { ShellContext } from "./lib/shell";
 import { useUpdater } from "./lib/useUpdater";
 import { UpdatePrompt } from "./components/UpdatePrompt";
-// bc5:app-shell — prefs/theme, keymap, workspaces, recent sessions, help
+// prefs/theme, keymap, workspaces, recent sessions, help
 import { HelpPanel } from "./components/HelpPanel";
 import { SaveWorkspaceDialog } from "./components/SaveWorkspaceDialog";
 import { topicFor } from "./help/topics";
@@ -48,15 +48,14 @@ import { matches, shortcutLabel } from "./lib/keymap";
 import { getPrefs, prefsReady, usePref } from "./lib/prefs";
 import "./lib/theme";
 import { workspaceApi, type RecentSession, type Workspace, type WorkspaceTab } from "./lib/workspaceApi";
-import { openExternalIfAlways } from "./lib/convertApi"; // bc5:converters
-import { isContainerPath } from "./lib/archiveApi"; // bc5:archives
-import { toLaunchOptions, type LaunchOptions } from "./lib/cliApi"; // bc5:reports-script
-import { vcsApi } from "./lib/vcsApi"; // araxis:vcs
-// araxis:text-review — comparison archives (.pcmpz) open as read-only review tabs.
+import { openExternalIfAlways } from "./lib/convertApi";
+import { isContainerPath } from "./lib/archiveApi";
+import { toLaunchOptions, type LaunchOptions } from "./lib/cliApi";
+import { vcsApi } from "./lib/vcsApi";
+// comparison archives (.pcmpz) open as read-only review tabs.
 import { ReviewArchiveView } from "./components/ReviewArchiveView";
 import { isReviewArchivePath } from "./lib/reviewApi";
-// araxis:text-review end
-import { dropOnPathField, highlightPathField } from "./lib/pathDrop"; // araxis:folder
+import { dropOnPathField, highlightPathField } from "./lib/pathDrop";
 // automation:ui — the Sync Automation tab (scheduled / real-time folder syncs)
 import { CalendarClock } from "lucide-react";
 import { AutomationPage, type AutomationPrefill } from "./components/AutomationPage";
@@ -78,17 +77,17 @@ export interface Tab {
   /** Set once the tab is backed by a saved session. */
   sessionId?: string;
   sessionName?: string;
-  /** bc5:reports-script — command-line tab labels (`/title1=`, `/title2=`) and read-only sides. */
+  /** command-line tab labels (`/title1=`, `/title2=`) and read-only sides. */
   labels?: { left?: string; right?: string };
   readOnly?: { left: boolean; right: boolean };
-  /** araxis:vcs — opened by `pcompare --wait`: closing the tab lets that process exit. */
+  /** opened by `pcompare --wait`: closing the tab lets that process exit. */
   waitToken?: string;
 }
 
 /** `dbNames` titles Database Compare tabs by connection name rather than `db://` id. */
 function tabTitle(t: Tab, dbNames: Record<string, string>): string {
   if (t.sessionName) return t.sessionName;
-  // bc5:reports-script — `/title1=` / `/title2=` from the command line.
+  // `/title1=` / `/title2=` from the command line.
   if (t.labels?.left || t.labels?.right) {
     const [l, r] = [t.labels.left || basename(t.left), t.labels.right || basename(t.right)];
     return l && r && l !== r ? `${l} ↔ ${r}` : l || r;
@@ -102,9 +101,9 @@ function tabTitle(t: Tab, dbNames: Record<string, string>): string {
 }
 
 const canSaveTab = (t: Tab | undefined): t is Tab & { kind: CompareKind } =>
-  !!t && isCompareKind(t.kind) && !!t.left && (!!t.right || !!SESSIONS[t.kind].single); // bc5:editor-patch
+  !!t && isCompareKind(t.kind) && !!t.left && (!!t.right || !!SESSIONS[t.kind].single);
 
-// bc5:app-shell — a tab as stored in a workspace: everything but the runtime id.
+// a tab as stored in a workspace: everything but the runtime id.
 function toWorkspaceTab(t: Tab): WorkspaceTab {
   const { id, ...rest } = t;
   void id;
@@ -156,7 +155,7 @@ export default function App() {
     refreshSaved();
   }, [refreshSaved]);
 
-  // bc5:app-shell — workspaces, recent (auto-saved) sessions, help, startup restore.
+  // workspaces, recent (auto-saved) sessions, help, startup restore.
   const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
   const [recent, setRecent] = useState<RecentSession[]>([]);
   const [savingWorkspace, setSavingWorkspace] = useState(false);
@@ -240,18 +239,18 @@ export default function App() {
 
   /** Picks the session type from what the two paths are; `right` may be empty to open one side. */
   const openAuto = useCallback(
-    // bc5:reports-script — `extra` carries command-line titles / read-only sides.
+    // `extra` carries command-line titles / read-only sides.
     async (left: string, right: string, extra: Partial<Tab> = {}) => {
-      if (isReviewArchivePath(left) && !right) return openTab("review", left, "", extra); // araxis:text-review
+      if (isReviewArchivePath(left) && !right) return openTab("review", left, "", extra);
       // A missing side takes the other's kind, so one folder still opens a folder compare.
       const [lk, rk] = await Promise.all([api.pathKind(left), api.pathKind(right || left)]);
       if (lk === "directory" && rk === "directory") return openTab("folder", left, right, extra);
-      // bc5:archives — archives, snapshots and svn: URLs (with each other or a folder) open as folders.
+      // archives, snapshots and svn: URLs (with each other or a folder) open as folders.
       const asFolder = (p: string, k: string) => k === "directory" || isContainerPath(p);
       if (asFolder(left, lk) && asFolder(right || left, rk)) return openTab("folder", left, right, extra);
-      // bc5:converters — pairs matching an "always use" external tool open there instead.
+      // pairs matching an "always use" external tool open there instead.
       if (right && (await openExternalIfAlways(left, right))) {
-        if (extra.waitToken) vcsApi.waitDone(extra.waitToken).catch(() => {}); // araxis:vcs — no tab to wait for
+        if (extra.waitToken) vcsApi.waitDone(extra.waitToken).catch(() => {}); // no tab to wait for
         return;
       }
       let kind = sessionForFiles(left, right || left);
@@ -289,7 +288,7 @@ export default function App() {
   const updateTab = (id: number, patch: Partial<Tab>) =>
     setTabs((ts) => ts.map((t) => (t.id === id ? { ...t, ...patch } : t)));
 
-  // bc5:app-shell — "Auto-save sessions on close" (BC's default): a tab linked
+  // "Auto-save sessions on close" (the default): a tab linked
   // to a saved session writes its paths and settings back; any other compare
   // is remembered under Recent sessions on Home.
   const autoSaveOnClose = (t: Tab) => {
@@ -317,9 +316,9 @@ export default function App() {
   const closeTab = (id: number) => {
     if (dirtyTabs.current.has(id) && !window.confirm("This tab has unsaved changes. Close it and discard them?")) return;
     markDirty(id, false);
-    const closing = tabs.find((t) => t.id === id); // bc5:app-shell
+    const closing = tabs.find((t) => t.id === id);
     if (closing) autoSaveOnClose(closing);
-    if (closing?.waitToken) vcsApi.waitDone(closing.waitToken).catch((e) => setToast(errorMessage(e))); // araxis:vcs
+    if (closing?.waitToken) vcsApi.waitDone(closing.waitToken).catch((e) => setToast(errorMessage(e)));
     setTabs((ts) => {
       const idx = ts.findIndex((t) => t.id === id);
       const rest = ts.filter((t) => t.id !== id);
@@ -330,20 +329,19 @@ export default function App() {
   };
 
   // `pcompare.exe <left> <right>` from the shell or a git difftool, and
-  // `pcompare.exe <left> <right> <base> [<output>]` (Beyond Compare's order) as a git mergetool.
+  // `pcompare.exe <left> <right> <base> [<output>]` (the usual mergetool order) as a git mergetool.
   const openLaunch = useCallback(
     async (launch: LaunchOptions | string[]) => {
-      // bc5:reports-script — switches: forced viewer (`/fv=`), tab titles, read-only sides.
+      // switches: forced viewer (`/fv=`), tab titles, read-only sides.
       const o = toLaunchOptions(launch);
       const [left, right, base, output] = o.paths;
-      // araxis:vcs — `--wait` launches report back when their tab closes.
+      // `--wait` launches report back when their tab closes.
       if (!left) {
         if (o.waitToken) vcsApi.waitDone(o.waitToken).catch(() => {});
         return;
       }
       const extra: Partial<Tab> = {};
       if (o.waitToken) extra.waitToken = o.waitToken;
-      // araxis:vcs end
       if (o.titleLeft || o.titleRight) extra.labels = { left: o.titleLeft ?? undefined, right: o.titleRight ?? undefined };
       if (o.readOnlyLeft || o.readOnlyRight) extra.readOnly = { left: o.readOnlyLeft, right: o.readOnlyRight };
       if (base) Object.assign(extra, { base, output: output ?? o.mergeOutput ?? "" });
@@ -355,7 +353,7 @@ export default function App() {
     [openAuto, openTab],
   );
 
-  // bc5:app-shell — replaces the open tabs with a workspace's. Saved-session
+  // replaces the open tabs with a workspace's. Saved-session
   // links pick up renames, and links to sessions deleted since are dropped.
   const loadTabs = async (wsTabs: WorkspaceTab[], activeIndex: number) => {
     const names = await api
@@ -378,9 +376,8 @@ export default function App() {
     dirtyTabs.current.clear();
     savers.current.clear();
     reportUnsaved();
-    // araxis:vcs — replaced tabs close too, as far as `--wait` launches are concerned.
+    // replaced tabs close too, as far as `--wait` launches are concerned.
     tabs.forEach((t) => t.waitToken && vcsApi.waitDone(t.waitToken).catch(() => {}));
-    // araxis:vcs end
     setTabs(restored);
     setActive(restored[Math.min(Math.max(0, activeIndex), restored.length - 1)].id);
   };
@@ -453,12 +450,11 @@ export default function App() {
     let unlisten: (() => void) | undefined;
     getCurrentWebview()
       .onDragDropEvent((e) => {
-        // araxis:folder — hovering marks the path field under the cursor; one path dropped on it fills it.
+        // hovering marks the path field under the cursor; one path dropped on it fills it.
         const p = e.payload;
         if (p.type === "enter" || p.type === "over") highlightPathField(p.position);
         else highlightPathField(null);
         if (p.type === "drop" && p.paths.length === 1 && dropOnPathField(p.paths[0], p.position)) return;
-        // araxis:folder end
         if (e.payload.type !== "drop") return;
         const [first, second] = e.payload.paths;
         if (second) return openAuto(first, second);
@@ -496,11 +492,10 @@ export default function App() {
   const dropOne = useRef((_path: string) => {});
   dropOne.current = (path: string) => {
     const t = activeTab;
-    // araxis:text-review — a dropped .pcmpz opens as its own tab unless an empty archive tab is waiting for it.
+    // a dropped .pcmpz opens as its own tab unless an empty archive tab is waiting for it.
     if (isReviewArchivePath(path) && !(t?.kind === "review" && !t.left))
       return void openAuto(path, "").catch((e) => setToast(errorMessage(e)));
-    // araxis:text-review end
-    // bc5:editor-patch — one-file sessions take the drop only while empty and unedited.
+    // one-file sessions take the drop only while empty and unedited.
     if (t && isCompareKind(t.kind) && SESSIONS[t.kind].single) {
       if (!t.left && !dirtyTabs.current.has(t.id)) updateTab(t.id, { left: path });
       else openAuto(path, "").catch((e) => setToast(errorMessage(e)));
@@ -512,7 +507,7 @@ export default function App() {
   };
   const canSave = canSaveTab(activeTab);
 
-  // bc5:app-shell — F1 / "?" toggles the help page for the view in front.
+  // F1 / "?" toggles the help page for the view in front.
   const toggleHelp = () => {
     const id = topicFor(activeTab?.kind ?? "home").id;
     setHelpTopic((cur) => (cur === id ? null : id));
@@ -523,7 +518,7 @@ export default function App() {
   };
 
   useEffect(() => {
-    // bc5:app-shell — bindings come from keymap.ts (rebindable in Settings → Keyboard).
+    // bindings come from keymap.ts (rebindable in Settings → Keyboard).
     const onKey = (e: KeyboardEvent) => {
       if (matches(e, "app.newTab")) openTab("home");
       else if (matches(e, "app.closeTab")) closeTab(active);
@@ -546,7 +541,7 @@ export default function App() {
     return () => clearTimeout(t);
   }, [toast]);
 
-  // bc5:converters — pairs matching an "always use" external tool open there instead.
+  // pairs matching an "always use" external tool open there instead.
   const openFiles = (left: string, right: string) =>
     void openExternalIfAlways(left, right)
       .then((launched) => !launched && openTab(sessionForFiles(left, right), left, right))
@@ -613,7 +608,7 @@ export default function App() {
                 })
                 .catch((e) => setToast(errorMessage(e)))
             }
-            // bc5:app-shell — workspaces and recent (auto-saved) sessions
+            // workspaces and recent (auto-saved) sessions
             workspaces={workspaces}
             onOpenWorkspace={(w) => openWorkspace(w).catch((e) => setToast(errorMessage(e)))}
             onRenameWorkspace={(w, name) =>
@@ -673,9 +668,9 @@ export default function App() {
         return (
           <TextCompare
             {...two}
-            readOnlySides={t.readOnly} // bc5:reports-script — `/readonly`, `/lro`, `/rro`
+            readOnlySides={t.readOnly} // `/readonly`, `/lro`, `/rro`
             onOpenHex={() => updateTab(t.id, { kind: "hex" })}
-            // bc5:editor-patch — the one chosen file, edited on its own in this tab
+            // the one chosen file, edited on its own in this tab
             onOpenEditor={(p) => updateTab(t.id, { kind: "edit", left: p, right: "", settings: undefined })}
             onOpenCompare={(l, r) => openTab("text", l, r)}
             onCompareTexts={(memory) => openTab("text", "", "", { settings: { memory } })}
@@ -698,8 +693,8 @@ export default function App() {
               openTab(kind, left, right, kind === "text" ? { settings: { options: rules } } : {});
             }}
             onOpenHex={(left, right) => openTab("hex", left, right)}
-            onOpenSync={(left, right, scope) => openTab("sync", left, right, scope ? { settings: { scope } } : {})} // bc5:sync-matrix
-            onEditFile={(p) => openTab("edit", p)} // bc5:editor-patch
+            onOpenSync={(left, right, scope) => openTab("sync", left, right, scope ? { settings: { scope } } : {})}
+            onEditFile={(p) => openTab("edit", p)}
           />
         );
       case "sync":
@@ -713,7 +708,7 @@ export default function App() {
           />
         );
       case "hex":
-        return <HexCompare {...two} />; // bc5:hex
+        return <HexCompare {...two} />;
       case "registry":
         return <RegistryCompare {...two} />;
       case "version":
@@ -722,7 +717,7 @@ export default function App() {
         return <Mp3Compare {...two} />;
       case "database":
         return <DbCompare {...two} />;
-      // bc5:editor-patch — Text Edit and Patch Viewer
+      // Text Edit and Patch Viewer
       case "edit":
         return <TextEditor {...two} />;
       case "patch":
@@ -734,7 +729,7 @@ export default function App() {
           />
         );
       case "review":
-        return <ReviewArchiveView {...two} />; // araxis:text-review
+        return <ReviewArchiveView {...two} />;
     }
   };
 
@@ -790,7 +785,6 @@ export default function App() {
           >
             <Save size={14} /> Save session
           </button>
-          {/* bc5:app-shell */}
           <button
             className="tab-action"
             title={`Save workspace: all open tabs (${shortcutLabel("app.saveWorkspace") || "no shortcut"})`}
@@ -825,7 +819,6 @@ export default function App() {
           >
             <Settings size={14} /> Settings
           </button>
-          {/* bc5:app-shell */}
           <button
             className={`tab-action help-toggle${helpTopic ? " active" : ""}`}
             title={`Help for this view (${shortcutLabel("app.help")})`}
@@ -838,7 +831,7 @@ export default function App() {
 
         <UpdatePrompt updater={updater} />
 
-        {/* bc5:app-shell — the help panel docks to the right of the sessions. */}
+        {/* the help panel docks to the right of the sessions. */}
         <div className="workarea">
           {/* A session that throws while being torn down (closing its tab) lands
               here; the tab list lives above, so remounting loses nothing. */}
@@ -895,7 +888,6 @@ export default function App() {
           />
         )}
         {settingsOpen && <AppSettingsDialog updater={updater} onClose={() => setSettingsOpen(false)} />}
-        {/* bc5:app-shell */}
         {savingWorkspace && (
           <SaveWorkspaceDialog
             tabs={tabs.map(toWorkspaceTab)}
@@ -909,7 +901,7 @@ export default function App() {
             }}
           />
         )}
-        {/* bc5:remote-write — SSH servers' sign-in questions (one-time codes, passwords) */}
+        {/* SSH servers' sign-in questions (one-time codes, passwords) */}
         <RemoteAuthPrompt />
         {toast && <div className="toast">{toast}</div>}
       </div>

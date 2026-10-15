@@ -1,4 +1,4 @@
-//! Comparison archives (`.pcmpz`, araxis:text-review): saving a text or
+//! Comparison archives (`.pcmpz`, review): saving a text or
 //! folder comparison with its comments into one file, and opening one
 //! read-only. The format lives in `pcompare-review`.
 

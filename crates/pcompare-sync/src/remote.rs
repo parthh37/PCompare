@@ -251,7 +251,7 @@ fn check_upload(fs: &dyn VfsWrite, src: &Path, sent: Snap, target: &str, verify:
 impl<'a> Runner<'a> {
     /// Runs one operation where at least one side is remote. Paths come from
     /// [`SyncOp::dst_rel`] / [`SyncOp::src_rel`]: aligned pairs have a
-    /// different name on the left (bc5:file-ops).
+    /// different name on the left.
     pub(crate) fn run_once_remote(&mut self, op: &SyncOp, src: Root<'a>, dst: Root<'a>) -> Result<Done, OpError> {
         match (op.kind, dst) {
             (OpKind::Mkdir, Root::Local(root)) => {

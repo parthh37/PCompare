@@ -24,10 +24,10 @@ pub const SESSION_KINDS: &[&str] = &[
     "version",
     "mp3",
     "database",
-    // bc5:editor-patch — Text Edit (one file) and Patch Viewer
+    // Text Edit (one file) and Patch Viewer
     "edit",
     "patch",
-    "review", // araxis:text-review — a comparison archive (.pcmpz), opened read-only
+    "review", // a comparison archive (.pcmpz), opened read-only
 ];
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -84,7 +84,7 @@ pub struct SessionStore {
 /// `taken` holds the names of all *other* sessions (the one being updated is
 /// excluded). Like Explorer, a clash gets the first free ` (n)` suffix, so a
 /// save never silently replaces another session.
-// bc5:app-shell — shared with workspace names.
+// shared with workspace names.
 pub(crate) fn resolve_name_conflict(desired: &str, taken: &[&str]) -> String {
     let free = |name: &str| !taken.iter().any(|t| t.eq_ignore_ascii_case(name));
     if free(desired) {
@@ -198,7 +198,7 @@ impl SessionStore {
         write_json(&self.path, &file)
     }
 
-    // bc5:app-shell — "auto-save sessions on close".
+    // "auto-save sessions on close".
     /// Writes a closing tab's current paths and settings back into its saved
     /// session, keeping the session's name (it may have been renamed on Home
     /// meanwhile). Returns `None` when the session was deleted in between,
@@ -294,7 +294,6 @@ mod tests {
         );
     }
 
-    // bc5:app-shell
     #[test]
     fn autosave_updates_contents_but_keeps_the_name() {
         let dir = tempfile::tempdir().unwrap();

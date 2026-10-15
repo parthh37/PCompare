@@ -1,4 +1,4 @@
-//! Comparison reports for PCompare, in the spirit of Beyond Compare's
+//! Comparison reports for PCompare, as made by
 //! "Session → Report…": text compares as side-by-side or unified HTML, an
 //! HTML slideshow (one difference per slide), plain text, a unified patch, a
 //! classic `diff` listing or XML; folder compares as a summary or a detailed
@@ -34,7 +34,7 @@ pub fn format_time(ms: i64) -> String {
     }
 }
 
-/// A byte count with thousands separators, as Beyond Compare lists sizes.
+/// A byte count with thousands separators, as folder views list sizes.
 pub fn format_size(bytes: u64) -> String {
     let digits = bytes.to_string();
     let mut out = String::with_capacity(digits.len() + digits.len() / 3);

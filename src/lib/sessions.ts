@@ -18,10 +18,10 @@ import {
   Table2,
   type LucideIcon,
 } from "lucide-react";
-import { FileDiff, FilePen } from "lucide-react"; // bc5:editor-patch
-import { Package } from "lucide-react"; // araxis:text-review
+import { FileDiff, FilePen } from "lucide-react";
+import { Package } from "lucide-react";
 import { CalendarClock } from "lucide-react"; // automation:ui
-import { isArchivePath } from "./archiveApi"; // bc5:archives
+import { isArchivePath } from "./archiveApi";
 
 export type CompareKind =
   | "text"
@@ -36,10 +36,9 @@ export type CompareKind =
   | "version"
   | "mp3"
   | "database"
-  // bc5:editor-patch
   | "edit"
   | "patch"
-  | "review"; // araxis:text-review — a comparison archive (.pcmpz), read-only
+  | "review"; // a comparison archive (.pcmpz), read-only
 
 export type SessionKind = "home" | "profiles" | "automation" | CompareKind; // automation:ui — automation
 
@@ -55,7 +54,7 @@ export interface SessionInfo {
   directory?: boolean;
   /** Only meaningful on Windows (shown with a badge elsewhere). */
   windowsOnly?: boolean;
-  /** bc5:editor-patch — works on one file (`left`); `right` stays empty. */
+  /** works on one file (`left`); `right` stays empty. */
   single?: boolean;
 }
 
@@ -152,7 +151,6 @@ export const SESSIONS: Record<SessionKind, SessionInfo> = {
     color: "#a3e635",
     description: "Schema and data compare for SQL Server, MySQL, PostgreSQL and SQLite with sync scripts.",
   },
-  // bc5:editor-patch
   edit: {
     label: "Text Edit",
     icon: FilePen,
@@ -167,7 +165,7 @@ export const SESSIONS: Record<SessionKind, SessionInfo> = {
     description: "View a .patch or .diff side by side, and apply it to a folder to compare the result.",
     single: true,
   },
-  // araxis:text-review — opened from Home ("Open comparison archive…"), a dropped .pcmpz or the command line.
+  // opened from Home ("Open comparison archive…"), a dropped .pcmpz or the command line.
   review: {
     label: "Comparison Archive",
     icon: Package,
@@ -175,7 +173,6 @@ export const SESSIONS: Record<SessionKind, SessionInfo> = {
     description: "Review a saved comparison (.pcmpz) read-only, with its bookmarks and comments.",
     single: true,
   },
-  // araxis:text-review end
 };
 
 /** Order of the "new session" cards on Home. */
@@ -192,7 +189,7 @@ export const COMPARE_KINDS: CompareKind[] = [
   "version",
   "mp3",
   "database",
-  "edit", // bc5:editor-patch
+  "edit",
   "patch",
 ];
 
@@ -202,7 +199,7 @@ export const isCompareKind = (k: SessionKind): k is CompareKind =>
 /** Lower-cased extension without the dot ("" when there is none). */
 export function extension(path: string): string {
   let name = path.replace(/[\\/]+$/, "").split(/[\\/]/).pop() ?? "";
-  // araxis:vcs — `git:/x/a.png@HEAD~1`: the revision isn't part of the name.
+  // `git:/x/a.png@HEAD~1`: the revision isn't part of the name.
   if (/^(git|hg|svn):/i.test(path)) name = name.replace(/@[^@]*$/, "");
   const dot = name.lastIndexOf(".");
   return dot > 0 ? name.slice(dot + 1).toLowerCase() : "";
@@ -218,11 +215,11 @@ register("picture", "png jpg jpeg gif bmp ico tif tiff webp tga pnm pbm pgm ppm 
 register("mp3", "mp3 flac ogg opus m4a aac wav aif aiff wv ape mpc spx");
 register("version", "exe dll sys ocx cpl drv scr");
 register("registry", "reg");
-register("patch", "patch diff"); // bc5:editor-patch
+register("patch", "patch diff");
 // SQLite files open as ad-hoc Database Compare sides. Plain `.db` stays with
 // Hex (many `.db` files aren't SQLite); App sniffs those via `dbApi.isSqlite`.
 register("database", "sqlite sqlite3 db3 s3db sl3");
-// bc5:converters — PDF and Word .doc (like .docx, .rtf, .odt and binary .dfm)
+// PDF and Word .doc (like .docx, .rtf, .odt and binary .dfm)
 // open in Text Compare, converted to text by the File formats rules; Hex
 // Compare stays one click away ("Open in Hex").
 register(
@@ -238,11 +235,11 @@ register(
  * else (unknown or mismatched types) opens in Text Compare.
  */
 export function sessionForFiles(left: string, right: string): CompareKind {
-  // bc5:archives — two archives (zip, tar.gz, 7z…) compare as folders of their contents; Hex stays in the menus.
+  // two archives (zip, tar.gz, 7z…) compare as folders of their contents; Hex stays in the menus.
   if (isArchivePath(left) && isArchivePath(right)) return "folder";
   const l = VIEWER_BY_EXT[extension(left)];
   const r = VIEWER_BY_EXT[extension(right)];
-  // bc5:editor-patch — one-file viewers (a .patch) open alone; a pair of them is a text compare.
+  // one-file viewers (a .patch) open alone; a pair of them is a text compare.
   if (l && SESSIONS[l].single && left !== right) return "text";
   return l && l === r ? l : "text";
 }

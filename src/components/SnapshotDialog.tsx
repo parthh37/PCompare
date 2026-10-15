@@ -1,4 +1,4 @@
-// bc5:archives — "Save snapshot…": records a folder's names, sizes, dates,
+// "Save snapshot…": records a folder's names, sizes, dates,
 // attributes (and optionally CRCs) to a .pcsnap file, which later opens as a
 // read-only Folder Compare side.
 import { Camera } from "lucide-react";

@@ -1,4 +1,4 @@
-// "Select…" for Folder Compare (Araxis Merge's Select Files): selects the
+// "Select…" for Folder Compare: selects the
 // rows matching status, name, type, size and date criteria, replacing or
 // adding to the current multi-selection that the file operations act on.
 import { useMemo, useState } from "react";

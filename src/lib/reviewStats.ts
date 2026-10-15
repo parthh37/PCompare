@@ -1,4 +1,4 @@
-// araxis:text-review — comparison statistics (the Statistics dialog), computed
+// comparison statistics (the Statistics dialog), computed
 // from what the views already hold: the text diff rows, or the folder tree.
 import type { DiffRow, EntryStatus, FolderEntry, Hunk } from "./api";
 import { effectiveStatus } from "./folderTree";

@@ -23,7 +23,7 @@ export interface LaunchOptions {
   readOnlyRight: boolean;
   /** `/mergeoutput=` (already folded into `paths[3]` for 3-way merges). */
   mergeOutput: string | null;
-  /** araxis:vcs — a `--wait` launch: report back under this token when the tab closes. */
+  /** a `--wait` launch: report back under this token when the tab closes. */
   waitToken?: string | null;
 }
 

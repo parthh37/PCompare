@@ -1,4 +1,4 @@
-// araxis:vcs — source-control integration (mirrors src-tauri/src/vcs.rs and
+// source-control integration (mirrors src-tauri/src/vcs.rs and
 // pcompare-archive's vcs module): git:/hg: sides, `--wait` tabs, git setup.
 import { invoke } from "@tauri-apps/api/core";
 

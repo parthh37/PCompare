@@ -1,6 +1,6 @@
 [package]
 name = "pcompare-import"
-description = "Imports saved sessions from Beyond Compare, WinMerge, FreeFileSync and Meld"
+description = "Imports saved sessions from other compare and sync tools into PCompare"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

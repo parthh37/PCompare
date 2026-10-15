@@ -5,7 +5,7 @@
 //! inside a directory runs on the rayon pool, so content comparison of many
 //! files and recursion into sibling folders happen in parallel.
 //!
-//! Classification follows Beyond Compare's model: cheap *quick tests* (size,
+//! Classification is two-staged: cheap *quick tests* (size,
 //! timestamp) run on metadata, then an optional *content* pass (binary, CRC
 //! or rules-based) reads the files and, by default, overrides the quick result.
 //!
@@ -16,7 +16,7 @@
 //! wildcard rules, so a pair's two names may differ — the left one is then
 //! reported in [`FolderEntry::left_rel_path`].
 //!
-//! Like Beyond Compare's folder tree, the work is staged: folders are *listed*
+//! The work is staged: folders are *listed*
 //! once into a [`FolderScan`], and *alignment*, *filters* and *comparison*
 //! re-run over those listings. Changing a filter or a criterion therefore
 //! never reads a folder again ([`CompareNeeds`] says what has to be redone),
@@ -139,7 +139,7 @@ pub struct FolderCompareOptions {
     /// Quick test: timestamps must match (within tolerance).
     pub compare_timestamp: bool,
     pub content: ContentMethod,
-    /// Let the content result replace the quick-test result (Beyond Compare's
+    /// Let the content result replace the quick-test result (the
     /// default). When off, a pair is the same only if both agree.
     pub override_quick_tests: bool,
     /// Text rules used by [`ContentMethod::Rules`].
@@ -261,7 +261,7 @@ pub struct FolderEntry {
     pub rel_path: String,
     pub is_dir: bool,
     pub status: EntryStatus,
-    /// [`Self::status`] at Beyond Compare's granularity: newer side,
+    /// [`Self::status`] at a finer granularity: newer side,
     /// same-but-quick-tests-differ, not compared yet.
     pub detail: StatusDetail,
     /// For differing files, which side carries the newer timestamp.
@@ -404,8 +404,7 @@ pub struct ScanControl<'a> {
     pub expand_filtered: bool,
 }
 
-/// What changed options make a [`FolderScan`] redo — Beyond Compare's
-/// `TDirCompareNeeds`. Alignment, filters and quick tests run over the
+/// What changed options make a [`FolderScan`] redo. Alignment, filters and quick tests run over the
 /// listings in memory and are cheap; only `list` reads folders again, and
 /// `content` / `content_filter` read files again.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize)]
@@ -509,8 +508,8 @@ type Listings = Mutex<HashMap<(bool, String), Arc<[VfsEntry]>>>;
 /// the verdict (the text rules, for rules-based).
 type VerdictKey = (String, String, ContentMethod, u64);
 
-/// The listed tree of two folders, kept between comparisons of them —
-/// Beyond Compare's `TDirTree`. A run lists each folder through it at most
+/// The listed tree of two folders, kept between comparisons of them.
+/// A run lists each folder through it at most
 /// once; later runs with other filters, alignment or criteria re-run those
 /// stages on the listings in memory, reusing content verdicts that still
 /// hold. Every remembered result is keyed by what it depends on, so a

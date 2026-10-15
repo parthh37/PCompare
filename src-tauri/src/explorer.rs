@@ -24,8 +24,7 @@ fn flag_value<'a>(args: &'a [String], flag: &str) -> Option<Option<&'a String>> 
 /// Handles the launches that never open a window. `Some(exit code)` when
 /// `args` (without the program name) was one of them.
 pub fn run_early(args: &[String]) -> Option<i32> {
-    // "Select Left Side for Compare" records the path and exits, like Beyond
-    // Compare's shell extension; the menu's "Compare to" then names it.
+    // "Select Left Side for Compare" records the path and exits; the menu's "Compare to" then names it.
     if let Some(path) = flag_value(args, "--select-left") {
         if let Some(path) = path {
             let _ = std::fs::write(left_selection_file(), path);

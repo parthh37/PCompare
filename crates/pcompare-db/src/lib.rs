@@ -1,5 +1,5 @@
-//! Database comparison for PCompare — a SQL Delta style Schema Compare and
-//! Data Compare across SQL Server, MySQL/MariaDB, PostgreSQL and SQLite.
+//! Database comparison for PCompare: Schema Compare and Data Compare
+//! across SQL Server, MySQL/MariaDB, PostgreSQL and SQLite.
 //!
 //! Layers:
 //! - [`driver`]: live connections that introspect a server into the

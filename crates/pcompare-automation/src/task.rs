@@ -23,7 +23,7 @@ pub struct SyncTask {
     pub left: String,
     pub right: String,
     pub mode: SyncMode,
-    /// One action per category (bc5:sync-matrix). Planning uses it only in
+    /// One action per category. Planning uses it only in
     /// [`SyncMode::Custom`]; for the fixed modes it is kept equal to their
     /// preset ([`normalize_task`]) so the file says what the task does.
     /// Format 1 files have none; [`migrate_task`] fills it in.

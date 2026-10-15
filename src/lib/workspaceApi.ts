@@ -28,7 +28,7 @@ export interface Workspace {
   modifiedMs: number;
 }
 
-/** A compare closed without being saved (BC's auto-saved sessions). */
+/** A compare closed without being saved (an auto-saved session). */
 export interface RecentSession {
   id: string;
   kind: CompareKind;
@@ -61,7 +61,7 @@ export const workspaceApi = {
     invoke<SavedSession | null>("session_autosave", { id, input }),
 
   /** `pcompare <paths…>` launched while this window was already open. */
-  // bc5:reports-script — the payload is the structured launch options (cliApi.ts).
+  // the payload is the structured launch options (cliApi.ts).
   onLaunchPaths: (handler: (launch: import("./cliApi").LaunchOptions) => void): Promise<UnlistenFn> =>
     listen<import("./cliApi").LaunchOptions>("open-launch-paths", (e) => handler(e.payload)),
 };

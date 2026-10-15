@@ -1,6 +1,6 @@
 //! Runs parsed scripts: loads and compares base folders (local, archives,
 //! snapshots and — through the app's [`Host`] — remote profiles), tracks
-//! expansion and selection like Beyond Compare's folder view, writes
+//! expansion and selection like the folder view, writes
 //! reports, and changes files through pcompare-sync's fail-safe executors
 //! (sync plans, and the copy / move / rename / touch / attribute file
 //! operations).
@@ -63,13 +63,13 @@ pub struct Outcome {
     pub errors: usize,
     /// The run ended early: `option stop-on-error`, or a `load` failed.
     pub stopped: bool,
-    /// A `load` failed, which always ends a script (as in Beyond Compare).
+    /// A `load` failed, which always ends a script.
     pub load_failed: bool,
 }
 
-/// Beyond Compare's exit code for "unknown error": some commands failed.
+/// Exit code for "unknown error": some commands failed.
 pub const EXIT_FAILED: i32 = 100;
-/// Beyond Compare's "Script failed to load folders or files".
+/// Exit code for "Script failed to load folders or files".
 pub const EXIT_LOAD_FAILED: i32 = 107;
 
 impl Outcome {
@@ -329,7 +329,7 @@ fn execute(st: &mut State, env: &mut Env, cmd: &Command) -> CmdResult {
         Command::Attrib { set, clear } => attrib_selection(st, env, *set, *clear),
         Command::Snapshot(s) => snapshot(st, env, s),
         Command::Beep => {
-            // Beyond Compare beeps even with /silent.
+            // Beeps even with /silent, as scripts expect.
             let _ = env.out.write_all(b"\x07");
             let _ = env.out.flush();
             Ok(())
@@ -2085,7 +2085,7 @@ fn snapshot(st: &mut State, env: &mut Env, s: &Snapshot) -> CmdResult {
             if p.is_dir() || o.ends_with(['/', '\\']) {
                 snapshot_name(&p, &side.shown)
             } else if p.extension().is_none() {
-                p.with_extension(crate::host::BC_SNAPSHOT_EXT)
+                p.with_extension(crate::host::LEGACY_SNAPSHOT_EXT)
             } else {
                 p
             }

@@ -1,4 +1,4 @@
-// araxis:text-review — "Bookmarks & comments": a floating panel listing a
+// "Bookmarks & comments": a floating panel listing a
 // session's bookmarks with editable review comments; click one to jump to it.
 import { BookmarkX, ClipboardCopy, MessageSquare, MessageSquareText, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";

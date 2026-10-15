@@ -93,13 +93,13 @@ pub struct PlanOptions<'a> {
     /// by [`FolderEntry::rel_path`]; `None` plans everything.
     pub scope: Option<&'a [String]>,
     /// Don't create orphan folders that hold no files (empty, or emptied by
-    /// the filters) — BC's "Sync empty folders" off.
+    /// the filters) — "Sync empty folders" off.
     pub skip_empty_folders: bool,
 }
 
 /// The owned, serializable part of [`PlanOptions`] besides the baseline and
 /// conflict policy, as sessions, automation tasks and the shell pass it
-/// around (bc5:sync-matrix).
+/// around.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct PlanRules {
@@ -134,7 +134,7 @@ pub enum WarningKind {
     /// The plan deletes a large share of the files on one side.
     MassDeletion,
     /// The plan deletes or replaces files on a remote side, which has no
-    /// Recycle Bin (bc5:remote-write).
+    /// Recycle Bin.
     RemotePermanent,
 }
 
@@ -183,7 +183,7 @@ pub struct SyncOp {
     /// The left side's own relative path when alignment paired differently
     /// named items (case, NFC/NFD, ignored extensions, masks); `rel_path` is
     /// the right side's. `None` when both sides use `rel_path`
-    /// (bc5:file-ops — [`FolderEntry::left_rel_path`]).
+    /// ([`FolderEntry::left_rel_path`]).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub left_rel_path: Option<String>,
     /// The category that chose this op, for the preview's per-row actions.
@@ -363,7 +363,7 @@ struct Planner<'a> {
     skip_empty_folders: bool,
     /// Left-side relative paths of the folders being walked, innermost last,
     /// so right-only items below an aligned folder land in the left folder it
-    /// was paired with (bc5:file-ops).
+    /// was paired with.
     left_dirs: Vec<String>,
 }
 
@@ -442,7 +442,7 @@ fn copy_reason(cat: SyncCategory, why: &str, dir: Direction) -> String {
 }
 
 impl Planner<'_> {
-    /// `e`'s relative path on the left side (bc5:file-ops).
+    /// `e`'s relative path on the left side.
     fn left_rel(&self, e: &FolderEntry) -> String {
         if let Some(p) = &e.left_rel_path {
             return p.clone();
@@ -1333,7 +1333,7 @@ mod tests {
 
     #[test]
     fn aligned_pairs_sync_under_each_sides_own_names() {
-        // bc5:file-ops — the left uses NFC and `.htm`, the right NFD and
+        // the left uses NFC and `.htm`, the right NFD and
         // `.html`; alignment pairs them, and the sync must write to the name
         // each side already has instead of creating look-alike duplicates.
         let dir = tempfile::tempdir().unwrap();
@@ -1383,7 +1383,6 @@ mod tests {
         assert!(again.ops.is_empty(), "{:?}", describe(&again));
     }
 
-    // ---------- bc5:sync-matrix ----------
 
     /// One item per category, with a baseline so deletions are known:
     /// ln/rn changed on one side, lo/ro new, ld/rd deleted on one side,

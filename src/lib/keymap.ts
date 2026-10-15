@@ -50,7 +50,7 @@ export const COMMANDS: CommandDef[] = [
   { id: "text.copyToRight", label: "Copy change to right", scope: ["text"], binding: "Alt+Right", fixed: true },
   { id: "text.copyToLeft", label: "Copy change to left", scope: ["text"], binding: "Alt+Left", fixed: true },
   { id: "text.refresh", label: "Reload files", scope: ["text"], binding: "F5", fixed: true },
-  // araxis:text-view — linking, sync points, go to line, block indent, line endings, replace file, resolved
+  // linking, sync points, go to line, block indent, line endings, replace file, resolved
   { id: "text.goToLine", label: "Go to line…", scope: ["text"], binding: "Ctrl+G" },
   { id: "text.indent", label: "Indent selected lines", scope: ["text"], binding: "Tab", fixed: true },
   { id: "text.outdent", label: "Un-indent selected lines", scope: ["text"], binding: "Shift+Tab", fixed: true },
@@ -60,19 +60,16 @@ export const COMMANDS: CommandDef[] = [
   { id: "text.copyAllToRight", label: "Replace right file with left", scope: ["text"], binding: "" },
   { id: "text.copyAllToLeft", label: "Replace left file with right", scope: ["text"], binding: "" },
   { id: "text.markResolved", label: "Mark / unmark selected lines resolved", scope: ["text"], binding: "" },
-  // araxis:text-view end
 
   // ---- Text Merge ----
   { id: "merge.save", label: "Save output", scope: ["merge"], binding: "Ctrl+S", fixed: true },
   { id: "merge.nextConflict", label: "Next conflict", scope: ["merge"], binding: "Alt+Down", fixed: true },
   { id: "merge.prevConflict", label: "Previous conflict", scope: ["merge"], binding: "Alt+Up", fixed: true },
   { id: "merge.refresh", label: "Reload files", scope: ["merge"], binding: "F5", fixed: true },
-  // araxis:merge
   { id: "merge.undo", label: "Undo merge step (outside the output pane)", scope: ["merge"], binding: "Ctrl+Z", fixed: true },
   { id: "merge.redo", label: "Redo merge step (outside the output pane)", scope: ["merge"], binding: "Ctrl+Y", fixed: true },
   { id: "merge.autoMerge", label: "Automatic merge", scope: ["merge"], binding: "Ctrl+Shift+M" },
   { id: "merge.markResolved", label: "Mark selection resolved / unresolved", scope: ["merge"], binding: "Ctrl+Shift+R" },
-  // araxis:merge end
 
   // ---- Table Compare ----
   { id: "table.nextDiff", label: "Next difference", scope: ["table"], binding: "Alt+Down", fixed: true },
@@ -87,7 +84,7 @@ export const COMMANDS: CommandDef[] = [
 
   // ---- Folder Compare / Merge ----
   { id: "folder.refresh", label: "Rescan folders", scope: ["folder"], binding: "F5", fixed: true },
-  // bc5:file-ops — selection and file operations
+  // selection and file operations
   { id: "folder.selectAll", label: "Select all", scope: ["folder"], binding: "Ctrl+A" },
   { id: "folder.copyToRight", label: "Copy to right", scope: ["folder"], binding: "Ctrl+R" },
   { id: "folder.copyToLeft", label: "Copy to left", scope: ["folder"], binding: "Ctrl+L" },
@@ -102,10 +99,9 @@ export const COMMANDS: CommandDef[] = [
   { id: "folder.attributes", label: "Change attributes…", scope: ["folder"], binding: "Ctrl+Shift+A" },
   { id: "folder.touch", label: "Touch (set modified time)…", scope: ["folder"], binding: "Ctrl+Shift+T" },
   { id: "folder.operations", label: "Show / hide the Operations panel", scope: ["folder"], binding: "Ctrl+Shift+O" },
-  // araxis:folder — Select… by criteria and the split view (file comparison below)
+  // Select… by criteria and the split view (file comparison below)
   { id: "folder.selectWhere", label: "Select files by status, name, size or date…", scope: ["folder"], binding: "Ctrl+Shift+E" },
   { id: "folder.splitView", label: "Show / hide the file comparison below", scope: ["folder"], binding: "Ctrl+Shift+V" },
-  // araxis:folder end
   { id: "folderMerge.nextConflict", label: "Next conflict", scope: ["folderMerge"], binding: "Alt+Down", fixed: true },
   { id: "folderMerge.prevConflict", label: "Previous conflict", scope: ["folderMerge"], binding: "Alt+Up", fixed: true },
   { id: "folderMerge.refresh", label: "Rescan folders", scope: ["folderMerge"], binding: "F5", fixed: true },
@@ -114,7 +110,7 @@ export const COMMANDS: CommandDef[] = [
   { id: "registry.nextDiff", label: "Next difference", scope: ["registry"], binding: "Alt+Down", fixed: true },
   { id: "registry.prevDiff", label: "Previous difference", scope: ["registry"], binding: "Alt+Up", fixed: true },
   { id: "registry.refresh", label: "Recompare", scope: ["registry"], binding: "F5", fixed: true },
-  // bc5:picture-registry — registry editing
+  // registry editing
   { id: "registry.save", label: "Save edited .reg files", scope: ["registry"], binding: "Ctrl+S", fixed: true },
   { id: "registry.undo", label: "Undo unsaved edit", scope: ["registry"], binding: "Ctrl+Z", fixed: true },
   { id: "registry.copyToRight", label: "Copy key/value to right", scope: ["registry"], binding: "Alt+Right", fixed: true },
@@ -127,7 +123,7 @@ export const COMMANDS: CommandDef[] = [
   { id: "database.copyToLeft", label: "Copy selected difference to left", scope: ["database"], binding: "Alt+Left" },
   { id: "property.refresh", label: "Recompare", scope: ["version", "mp3"], binding: "F5" },
 
-  // ---- bc5:editor-patch — Text Edit ----
+  // ---- Text Edit ----
   { id: "edit.save", label: "Save", scope: ["edit"], binding: "Ctrl+S" },
   { id: "edit.saveAs", label: "Save as…", scope: ["edit"], binding: "F12" },
   { id: "edit.undo", label: "Undo", scope: ["edit"], binding: "Ctrl+Z" },
@@ -146,7 +142,7 @@ export const COMMANDS: CommandDef[] = [
   { id: "edit.moveLinesUp", label: "Move lines up", scope: ["edit"], binding: "Alt+Up" },
   { id: "edit.moveLinesDown", label: "Move lines down", scope: ["edit"], binding: "Alt+Down" },
   { id: "edit.reload", label: "Reload file", scope: ["edit"], binding: "F5" },
-  // ---- bc5:editor-patch — Patch Viewer ----
+  // ---- Patch Viewer ----
   { id: "patch.nextHunk", label: "Next hunk", scope: ["patch"], binding: "Alt+Down" },
   { id: "patch.prevHunk", label: "Previous hunk", scope: ["patch"], binding: "Alt+Up" },
   { id: "patch.nextFile", label: "Next file", scope: ["patch"], binding: "Ctrl+Down" },
@@ -154,10 +150,8 @@ export const COMMANDS: CommandDef[] = [
   { id: "patch.applyFolder", label: "Apply against folder…", scope: ["patch"], binding: "Ctrl+Shift+A" },
   { id: "patch.openCompare", label: "Open patched file in Text Compare", scope: ["patch"], binding: "Ctrl+Enter" },
   { id: "patch.reload", label: "Reload patch", scope: ["patch"], binding: "F5" },
-  // araxis:merge
   { id: "patch.toggleHunk", label: "Tick / untick the current hunk", scope: ["patch"], binding: "Space" },
   { id: "patch.applySelected", label: "Apply selected hunks to the folder", scope: ["patch"], binding: "Ctrl+Shift+Enter" },
-  // araxis:merge end
 ];
 
 const BY_ID = new Map(COMMANDS.map((c) => [c.id, c]));

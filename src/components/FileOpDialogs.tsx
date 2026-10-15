@@ -1,5 +1,5 @@
-// Confirmation and settings dialogs for Folder Compare's file operations
-// (bc5:file-ops): copy / move (to the other side or a folder), delete,
+// Confirmation and settings dialogs for Folder Compare's file operations:
+//copy / move (to the other side or a folder), delete,
 // rename, new folder, attributes and touch. They only gather choices; the
 // session builds the requests and hands them to the Operations queue.
 import { open } from "@tauri-apps/plugin-dialog";
@@ -88,7 +88,7 @@ export function TransferDialog({ action, parts, toFolder, filter, onCancel, onCo
   const [trashReplaced, setTrashReplaced] = useState(true);
   const [copyAcls, setCopyAcls] = useState(false);
   const [copyShortNames, setCopyShortNames] = useState(false);
-  // Beyond Compare's default (OpIncludeFiltered off): filtered items stay behind.
+  // The default (include filtered off): filtered items stay behind.
   const [includeFiltered, setIncludeFiltered] = useState(false);
 
   const verb = action === "copy" ? "Copy" : "Move";

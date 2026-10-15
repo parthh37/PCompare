@@ -131,7 +131,7 @@ pub async fn hex_open(
         let state = session.state(&view);
         let open = Open {
             session,
-            // bc5:archives — files inside archives open from an extracted copy: read-only too
+            // files inside archives open from an extracted copy: read-only too
             remote: [&left, &right].map(|p| pcompare_remote::is_remote(p) || pcompare_remote::is_inside_container(p)),
         };
         let mut map = SESSIONS.lock().unwrap_or_else(|e| e.into_inner());

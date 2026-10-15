@@ -3,15 +3,15 @@ const REPO = "parthh37/PCompare";
 
 // ---------------------------------------------------------------- tour
 const SHOTS = [
-  ["bc5/text-compare.png", "<b>Text Compare</b>: aligned side-by-side diff with changed words highlighted. Edit either side, copy differences across and save."],
+  ["text/side-by-side.png", "<b>Text Compare</b>: aligned side-by-side diff with changed words highlighted. Edit either side, copy differences across and save."],
   ["context-menu.png", "<b>Folder Compare</b>: orphans, newer and different files at a glance, with content compares on demand from the context menu."],
   ["sync-preview-row-overrides.png", "<b>Folder Sync</b>: every copy, delete and new folder previewed, with per-row overrides before anything runs."],
   ["db-arrows-schema-review.jpg", "<b>Database Compare</b>: pick changes with arrows, then review them in plain English before they run."],
   ["automation-page.png", "<b>Sync Automation</b>: scheduled and real-time syncs with triggers, status, run history and alerts."],
-  ["bc5/hex-aligned.png", "<b>Hex Compare</b>: byte-level differences with inserted bytes aligned, for files of any size."],
-  ["bc5/archive-folder-compare.png", "<b>Archives as folders</b>: zip, tar and 7z browsed and edited in place."],
-  ["araxis/git-side.png", "<b>Version control</b>: compare against <code>git:&lt;path&gt;@HEAD~3</code>, or any branch, tag or commit."],
-  ["bc5/patch-viewer.png", "<b>Patch Viewer</b>: browse a <code>.patch</code> file by file and apply it to a folder."],
+  ["hex/aligned.png", "<b>Hex Compare</b>: byte-level differences with inserted bytes aligned, for files of any size."],
+  ["folder/archive-as-folder.png", "<b>Archives as folders</b>: zip, tar and 7z browsed and edited in place."],
+  ["vcs/git-side.png", "<b>Version control</b>: compare against <code>git:&lt;path&gt;@HEAD~3</code>, or any branch, tag or commit."],
+  ["patch/viewer.png", "<b>Patch Viewer</b>: browse a <code>.patch</code> file by file and apply it to a folder."],
 ];
 
 const tabs = [...document.querySelectorAll(".tour [data-shot]")];

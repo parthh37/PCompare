@@ -14,7 +14,7 @@ import {
   ZoomOut,
   type LucideIcon,
 } from "lucide-react";
-import { embedInactive } from "../lib/embeddedPane"; // araxis:folder
+import { embedInactive } from "../lib/embeddedPane";
 import {
   useCallback,
   useEffect,
@@ -457,7 +457,7 @@ export function PictureCompare({ left, right, onPathsChange, settings, onSetting
     const onKey = (e: KeyboardEvent) => {
       // Inactive tabs stay mounted but hidden; only the visible one reacts.
       if (!root.current?.offsetParent) return;
-      if (embedInactive(root.current)) return; // araxis:folder — split view: the folder list has the keys
+      if (embedInactive(root.current)) return; // split view: the folder list has the keys
       const mod = e.ctrlKey || e.metaKey;
       if (mod && (e.key === "=" || e.key === "+")) zoomStep(1);
       else if (mod && e.key === "-") zoomStep(-1);
