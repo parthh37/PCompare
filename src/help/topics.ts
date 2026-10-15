@@ -94,6 +94,8 @@ In *Rules → Importance*, **Compare numbers by value** makes 1.0 match 1.00 and
 - Lines changed by editing or copying get an orange bar by their number (and in the overview strip) until the file is saved or reloaded.
 - **Mark Resolved** dims the selected lines (or the current difference) once you have dealt with them; it changes only the view, unlike *Mark unimportant*, and is saved with the session. *Unmark Resolved* undoes it.
 - **Show line endings** (pilcrow icon) shows ↵ for LF, ␍␊ for CRLF and ␍ for CR at the end of each line.
+- **Moved blocks** are tinted violet. A block of lines that left one place and reappears unchanged elsewhere still counts as a difference, but its first line carries a *moved to N* / *moved from N* link that jumps to the other end. Turn the tint off from the **…** menu.
+- **Blame** (commit icon) shows who last changed each line of a file in a Git working tree, or of a \`git:\` side at its revision: commit, author and age, with a brighter bar for newer commits. Unsaved edits show as *Not committed*. Click a commit to open its change to the file as a new comparison. Mercurial isn't supported yet.
 `, // araxis:text-view end
   },
   {
