@@ -1,5 +1,5 @@
 //! The Explorer right-click menu, as classic static verbs under
-//! `HKCU\Software\Classes`. Like Beyond Compare's:
+//! `HKCU\Software\Classes`:
 //!
 //! * "Select Left Side for Compare" remembers an item (`--select-left`),
 //! * "Compare to 'name'" pairs another item with it (`--compare-to`),
@@ -62,7 +62,7 @@ fn verb(
     ]
 }
 
-/// "Compare to …" names what it will compare against, like BC's menu.
+/// "Compare to …" names what it will compare against.
 pub fn compare_to_label(left: Option<&str>, background: bool) -> String {
     let name = left.map(|p| {
         let trimmed = p.trim_end_matches(['\\', '/']);

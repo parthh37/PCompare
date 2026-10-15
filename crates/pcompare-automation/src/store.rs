@@ -18,7 +18,7 @@ use crate::{AutomationError, Result};
 /// The file format this build writes. A file with a higher version came
 /// from a newer PCompare and is neither read nor overwritten.
 ///
-/// 2: tasks carry a sync `matrix` (bc5:sync-matrix); format 1 tasks get
+/// 2: tasks carry a sync `matrix`; format 1 tasks get
 /// their mode's preset when read.
 pub const FILE_VERSION: u32 = 2;
 /// `max_parallel` is kept within this range.

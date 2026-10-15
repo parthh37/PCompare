@@ -1,4 +1,4 @@
-// araxis:text-review — a comparison archive (.pcmpz) opened as a read-only
+// a comparison archive (.pcmpz) opened as a read-only
 // session: the embedded texts in Text Compare, or the stored folder tree,
 // with the author's bookmarks and comments. Reviewers can add comments and
 // write them back into the archive.

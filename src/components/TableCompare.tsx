@@ -1,5 +1,5 @@
 import type { DialogFilter } from "@tauri-apps/plugin-dialog";
-import { embedInactive } from "../lib/embeddedPane"; // araxis:folder
+import { embedInactive } from "../lib/embeddedPane";
 import {
   ArrowDown,
   ArrowDownWideNarrow,
@@ -43,7 +43,7 @@ import { Modal } from "./Modal";
 import { columnLetter, TableMappingDialog } from "./TableMappingDialog";
 import { PathBar } from "./PathBar";
 import { VirtualList, type VirtualListHandle } from "./VirtualList";
-// bc5:reports-script — Report… (HTML grid or CSV)
+// Report… (HTML grid or CSV)
 import { FileText } from "lucide-react";
 import { ReportDialog } from "./ReportDialog";
 import "./TableCompare.css";
@@ -219,7 +219,7 @@ export function TableCompare({ left, right, onPathsChange, settings, onSettingsC
   const [viewW, setViewW] = useState(400);
   const [showColumns, setShowColumns] = useState(false);
   const [showMapping, setShowMapping] = useState(false);
-  const [reporting, setReporting] = useState(false); // bc5:reports-script
+  const [reporting, setReporting] = useState(false);
   const [tolText, setTolText] = useState(String(options.numericTolerance ?? 0));
   const [dateText, setDateText] = useState(
     String(options.dateTolerance === null ? 0 : options.dateTolerance / unitSeconds(dateUnit)),
@@ -436,7 +436,7 @@ export function TableCompare({ left, right, onPathsChange, settings, onSettingsC
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (!root.current?.offsetParent) return; // hidden tab
-      if (embedInactive(root.current)) return; // araxis:folder — split view: the folder list has the keys
+      if (embedInactive(root.current)) return; // split view: the folder list has the keys
       if (e.altKey && e.key === "ArrowDown") goDiff(diffIdx + 1);
       else if (e.altKey && e.key === "ArrowUp") goDiff(diffIdx - 1);
       else if (e.key === "F5") run();
@@ -846,7 +846,6 @@ export function TableCompare({ left, right, onPathsChange, settings, onSettingsC
           </label>
         )}
         <span className="spacer" />
-        {/* bc5:reports-script */}
         <button
           onClick={() => setReporting(true)}
           disabled={!result}
@@ -858,7 +857,7 @@ export function TableCompare({ left, right, onPathsChange, settings, onSettingsC
           <RefreshCw size={14} /> Refresh
         </button>
       </div>
-      {/* bc5:reports-script — the engine recomputes the comparison with the view's options. */}
+      {/* the engine recomputes the comparison with the view's options. */}
       {reporting && result && (
         <ReportDialog
           source={{ kind: "table", left, right, compare: options, filter, hiddenColumns: hidden }}

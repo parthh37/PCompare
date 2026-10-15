@@ -125,7 +125,7 @@
   color: var(--warn);
 }
 
-/* ---------- bc5:text-ui: selection, bookmarks, find, syntax, wrap, clipboard ---------- */
+/* ---------- selection, bookmarks, find, syntax, wrap, clipboard ---------- */
 :root {
   --syn-kw: #c792ea;
   --syn-type: #82aaff;
@@ -284,7 +284,7 @@
   color: var(--ok);
 }
 
-/* ---------- araxis:text-view: linked lines, sync points, markers, line ends, line drag ---------- */
+/* ---------- linked lines, sync points, markers, line ends, line drag ---------- */
 :root {
   --tc-edited: #f5a35c;
   --tc-sync: #c38cf5;
@@ -472,14 +472,13 @@
   color: var(--muted);
   font-variant-numeric: tabular-nums;
 }
-/* araxis:text-view end */
 
-/* ---------- Beyond Compare-style toolbar ---------- */
-.tc-bc-toolbar {
+/* ---------- Icon toolbar ---------- */
+.tc-icon-toolbar {
   gap: 4px;
   padding: 4px 8px;
 }
-.tc-bc-toolbar .sep {
+.tc-icon-toolbar .sep {
   height: 34px;
   margin: 0 3px;
 }
@@ -487,7 +486,7 @@
   color: var(--muted);
 }
 
-/* ---------- Beyond Compare-style thumbnail ---------- */
+/* ---------- Thumbnail ---------- */
 .overview.tc-thumb {
   width: 46px;
   overflow: hidden;
@@ -509,10 +508,10 @@
   border-radius: 2px;
   pointer-events: none;
 }
-.tc-bc-toolbar .icon-btn {
+.tc-icon-toolbar .icon-btn {
   padding: 2px 5px;
 }
-.tc-bc-toolbar > .icon-btn + .icon-btn {
+.tc-icon-toolbar > .icon-btn + .icon-btn {
   margin-left: -2px;
 }
 /* ---------- moved blocks ---------- */

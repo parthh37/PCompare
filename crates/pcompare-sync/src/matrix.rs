@@ -1,5 +1,5 @@
-//! The sync matrix: one action per category of item, like Beyond Compare's
-//! custom Folder Sync (its `TDirSyncOp` per comparison result).
+//! The sync matrix: one action per category of item, as in a
+//! custom Folder Sync (one action per comparison result).
 //!
 //! Every fixed [`SyncMode`] is a preset row of this table
 //! ([`SyncMatrix::preset`]), so the planner only ever consults a matrix;
@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::sync::SyncMode;
 
-/// What to do with the items of one [`SyncCategory`] (BC's `TDirSyncOp`).
+/// What to do with the items of one [`SyncCategory`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum SyncAction {

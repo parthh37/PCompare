@@ -152,13 +152,13 @@ impl Drop for LocalHost {
     }
 }
 
-/// Beyond Compare's snapshot extension; PCompare reads its own snapshots
-/// saved under that name (scripts written for BC name them `.bcss`).
-pub const BC_SNAPSHOT_EXT: &str = "bcss";
+/// The legacy snapshot extension; PCompare reads its own snapshots saved
+/// under that name (older scripts name them `.bcss`).
+pub const LEGACY_SNAPSHOT_EXT: &str = "bcss";
 
 pub fn is_snapshot_name(path: &str) -> bool {
     Path::new(path).extension().is_some_and(|e| {
-        e.eq_ignore_ascii_case(BC_SNAPSHOT_EXT)
+        e.eq_ignore_ascii_case(LEGACY_SNAPSHOT_EXT)
             || e.eq_ignore_ascii_case(pcompare_archive::SNAPSHOT_EXT)
     })
 }

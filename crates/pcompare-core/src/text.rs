@@ -52,7 +52,7 @@ impl From<DiffAlgorithm> for Algorithm {
 #[serde(rename_all = "camelCase")]
 pub enum Alignment {
     /// Pair the most similar lines; lines with no similar partner are shown
-    /// on their own (Beyond Compare's "Normal").
+    /// on their own ("Normal").
     #[default]
     Similar,
     /// Pair lines by their position inside the block.

@@ -28,7 +28,7 @@ interface Props {
   initialPage?: RulesPage;
   onApply: (o: TextDiffOptions) => void;
   onClose: () => void;
-  /** bc5:converters — opens the File formats settings (converters, read-only, grammar per file type). */
+  /** opens the File formats settings (converters, read-only, grammar per file type). */
   onOpenFileFormats?: () => void;
 }
 
@@ -76,7 +76,7 @@ export function TextRulesDialog({
   initialPage,
   onApply,
   onClose,
-  onOpenFileFormats, // bc5:converters
+  onOpenFileFormats,
 }: Props) {
   const [o, setO] = useState<TextDiffOptions>(options);
   const [page, setPage] = useState<RulesPage>(initialPage ?? "importance");
@@ -154,7 +154,6 @@ export function TextRulesDialog({
       footer={
         <>
           {error && <span className="trd-error">{error}</span>}
-          {/* bc5:converters */}
           {onOpenFileFormats && (
             <button className="trd-formats" onClick={onOpenFileFormats} title="Per file type: convert to text, read-only, grammar">
               File formats…

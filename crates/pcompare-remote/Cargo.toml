@@ -8,7 +8,7 @@ repository.workspace = true
 
 [dependencies]
 pcompare-core = { path = "../pcompare-core" }
-pcompare-archive = { path = "../pcompare-archive" } # bc5:archives
+pcompare-archive = { path = "../pcompare-archive" }
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
@@ -41,5 +41,5 @@ chrono = { version = "0.4", default-features = false, features = ["std"] }
 tempfile = "3"
 
 [dev-dependencies]
-# bc5:remote-write — the live tests run Folder Sync against real servers.
+# the live tests run Folder Sync against real servers.
 pcompare-sync = { path = "../pcompare-sync" }

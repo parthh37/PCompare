@@ -1,12 +1,11 @@
 //! Workspaces, the automatic "recent sessions" history and app preferences.
 //!
 //! A workspace is a named snapshot of every open tab (what each compares, its
-//! view settings and which saved session it belongs to) plus the active tab,
-//! like Beyond Compare's workspaces. The store also keeps one unnamed "last"
+//! view settings and which saved session it belongs to) plus the active tab. The store also keeps one unnamed "last"
 //! workspace — the tabs that were open when the app last ran — so the next
 //! start can restore them.
 //!
-//! Recent sessions are BC's "auto-saved sessions": compares that were closed
+//! Recent sessions are "auto-saved sessions": compares that were closed
 //! without ever being saved, newest first and capped at [`RECENT_LIMIT`].
 //!
 //! Like saved sessions, tab settings and preferences are opaque JSON owned by
@@ -241,7 +240,7 @@ impl WorkspaceStore {
     }
 }
 
-/// A compare that was closed without being saved (BC's auto-saved sessions).
+/// A compare that was closed without being saved (an auto-saved session).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RecentSession {

@@ -22,7 +22,7 @@ use pcompare_core::text::TextDiffOptions;
 use tauri::ipc::Channel;
 use tauri::{AppHandle, Manager};
 
-use crate::{archive, blocking, sync, with_remote, CmdResult}; // bc5:archives
+use crate::{archive, blocking, sync, with_remote, CmdResult};
 
 /// Minimum spacing between progress messages.
 const PROGRESS_INTERVAL: Duration = Duration::from_millis(100);
@@ -177,7 +177,7 @@ fn kept_session(app: &AppHandle, id: &str, left: &str, right: &str, expand: bool
 
 /// Resolves both sides afresh, with nothing listed yet.
 fn new_session(r: &RemoteManager, left: &str, right: &str, expand: bool) -> pcompare_core::Result<Arc<ScanSession>> {
-    // bc5:archives — sides resolve in archive.rs: folders, archive /
+    // sides resolve in archive.rs: folders, archive /
     // snapshot / svn: sides, archives in the tree optionally expanded,
     // and a side with no folder chosen yet as empty.
     let sides = (archive::folder_side(r, left, expand)?, archive::folder_side(r, right, expand)?);
@@ -221,7 +221,7 @@ pub async fn compare_folders(
     options: FolderCompareOptions,
     run_key: Option<String>,
     on_progress: Channel<ScanUpdate>,
-    expand_archives: Option<bool>, // bc5:archives
+    expand_archives: Option<bool>,
     stream: Option<bool>,
     scan_id: Option<String>,
     show_filtered: Option<bool>,
@@ -324,7 +324,7 @@ async fn run(
             };
             let control = ScanControl {
                 cache: match &stored {
-                    Some(s) => Some(s as &dyn ChecksumCache), // bc5:archives
+                    Some(s) => Some(s as &dyn ChecksumCache),
                     None => cache.as_ref().map(|c| c as &dyn ChecksumCache),
                 },
                 cancel: guard.as_ref().map(|g| &*g.flag),
@@ -397,7 +397,7 @@ pub async fn compare_folder_entries(
             let stored = archive::stored_checksums(ls, rs, cache.as_ref().map(|c| c as &dyn ChecksumCache));
             let control = ScanControl {
                 cache: match &stored {
-                    Some(s) => Some(s as &dyn ChecksumCache), // bc5:archives
+                    Some(s) => Some(s as &dyn ChecksumCache),
                     None => cache.as_ref().map(|c| c as &dyn ChecksumCache),
                 },
                 scan: Some(&session.scan),
@@ -439,7 +439,7 @@ pub async fn compare_file_contents(
 ) -> CmdResult<ContentVerdict> {
     blocking(move || {
         with_remote(&app, [&left, &right], |r| {
-            // bc5:archives — checksums stored by archives and snapshots
+            // checksums stored by archives and snapshots
             if let Some(v) = archive::stored_verdict(r, &left, left_size, &right, right_size, method)? {
                 return Ok(v);
             }

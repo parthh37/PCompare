@@ -1,12 +1,12 @@
 import { open, save, type DialogFilter } from "@tauri-apps/plugin-dialog";
 import { FileArchive, FolderOpen, Globe, X } from "lucide-react";
-import { CONTAINER_FILTERS } from "../lib/archiveApi"; // bc5:archives
+import { CONTAINER_FILTERS } from "../lib/archiveApi";
 import { useEffect, useRef, useState, type KeyboardEvent } from "react";
-import { PATH_DROP_EVENT } from "../lib/pathDrop"; // araxis:folder
+import { PATH_DROP_EVENT } from "../lib/pathDrop";
 import { useShell } from "../lib/shell";
 import { RemoteBrowser } from "./RemoteBrowser";
-import { GitBranch } from "lucide-react"; // araxis:vcs
-import { VcsRevisionDialog } from "./VcsRevisionDialog"; // araxis:vcs
+import { GitBranch } from "lucide-react";
+import { VcsRevisionDialog } from "./VcsRevisionDialog";
 import { forgetPath, matchRecent, rememberPath, useRecentPaths, type PathKind } from "../lib/recentPaths";
 
 interface Props {
@@ -49,9 +49,9 @@ export function PathField({
 }: Props) {
   const shell = useShell();
   const [remote, setRemote] = useState(false);
-  const [revision, setRevision] = useState(false); // araxis:vcs
+  const [revision, setRevision] = useState(false);
 
-  // araxis:folder — a file or folder dropped onto this field fills it (see pathDrop.ts).
+  // a file or folder dropped onto this field fills it (see pathDrop.ts).
   const box = useRef<HTMLDivElement>(null);
   const pick = useRef(onPick);
   pick.current = (p: string) => {
@@ -65,7 +65,6 @@ export function PathField({
     el.addEventListener(PATH_DROP_EVENT, onDrop);
     return () => el.removeEventListener(PATH_DROP_EVENT, onDrop);
   }, []);
-  // araxis:folder end
 
   // Recent paths: a dropdown under the field while it has focus.
   const recent = useRecentPaths(history || "folder");
@@ -104,7 +103,7 @@ export function PathField({
   };
 
   return (
-    <div className="pathfield" ref={box /* araxis:folder */}>
+    <div className="pathfield" ref={box}>
       {label && <span className="pathfield-label">{label}</span>}
       <input
         value={value}
@@ -154,7 +153,7 @@ export function PathField({
       <button className="icon-btn" title="Browse…" onClick={browse}>
         <FolderOpen size={15} />
       </button>
-      {/* bc5:archives — folder sides can also be an archive or a snapshot file */}
+      {/* folder sides can also be an archive or a snapshot file */}
       {directory && !saveDialog && (
         <button
           className="icon-btn"
@@ -167,7 +166,7 @@ export function PathField({
           <FileArchive size={15} />
         </button>
       )}
-      {/* araxis:vcs — a git/hg revision of a working-tree file or folder */}
+      {/* a git/hg revision of a working-tree file or folder */}
       {!saveDialog && (
         <button className="icon-btn" title="Compare a Git or Mercurial revision (git:/hg: path)" onClick={() => setRevision(true)}>
           <GitBranch size={15} />
@@ -184,7 +183,6 @@ export function PathField({
           }}
         />
       )}
-      {/* araxis:vcs end */}
       {!localOnly && (
         <button className="icon-btn" title="Browse remote (S3, SFTP, OneDrive…)" onClick={() => setRemote(true)}>
           <Globe size={15} />

@@ -1,5 +1,5 @@
 //! Archives, snapshots and Subversion repositories behind the same path
-//! routing as remote profiles (bc5:archives): `C:\x\a.zip\dir\f.txt`,
+//! routing as remote profiles: `C:\x\a.zip\dir\f.txt`,
 //! `/x/home.pcsnap`, `svn:https://host/repo/trunk@12` and archives stored
 //! on a remote (`remote://s3/backups/site.tar.gz/index.html`, downloaded
 //! once per version and read-only) all resolve to a file system + path,
@@ -114,7 +114,7 @@ impl RemoteManager {
 /// `svn:` path — paths [`crate::is_remote`] doesn't cover but that aren't
 /// plain files either.
 pub fn is_container_path(path: &str) -> bool {
-    pcompare_archive::is_repo_path(path) // araxis:vcs — svn:, git: and hg:
+    pcompare_archive::is_repo_path(path) // svn:, git: and hg:
         || (pcompare_archive::may_be_container_path(path)
             && split_path(path, true, |p| Path::new(p).is_file()).is_some())
 }
@@ -123,7 +123,7 @@ pub fn is_container_path(path: &str) -> bool {
 /// a bare archive file). Such files are read-only in the viewers: they open
 /// from an extracted copy.
 pub fn is_inside_container(path: &str) -> bool {
-    pcompare_archive::is_repo_path(path) // araxis:vcs — svn:, git: and hg:
+    pcompare_archive::is_repo_path(path) // svn:, git: and hg:
         || (pcompare_archive::may_be_container_path(path)
             && split_path(path, false, |p| Path::new(p).is_file()).is_some())
 }

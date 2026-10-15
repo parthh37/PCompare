@@ -1,5 +1,5 @@
-// bc5:sync-matrix — the custom sync table: one action per category, like
-// Beyond Compare's Folder Sync "Sync" settings. Shared by Folder Sync's
+// the custom sync table: one action per category, like
+// Folder Sync's custom "Sync" settings. Shared by Folder Sync's
 // Custom mode dialog and the Sync Automation task editor.
 import { TriangleAlert } from "lucide-react";
 import type { SyncMatrix } from "../lib/syncApi";

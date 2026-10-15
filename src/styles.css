@@ -23,7 +23,7 @@
   --ok: #6fcf97;
   --hatch: repeating-linear-gradient(135deg, transparent 0 5px, rgba(255, 255, 255, 0.035) 5px 10px);
 
-  /* bc5:app-shell — theme tokens (overridden by [data-theme="light"] below) */
+  /* theme tokens (overridden by [data-theme="light"] below) */
   --ui-font-size: 13px;
   --editor-font-size: 13px;
   --btn-hover-border: #3b4558;
@@ -59,7 +59,7 @@
   background: var(--bg);
 }
 
-/* bc5:app-shell — light theme: Settings → Appearance (Light, or System when the OS is light). */
+/* light theme: Settings → Appearance (Light, or System when the OS is light). */
 :root[data-theme="light"] {
   --bg: #f4f6f9;
   --panel: #ffffff;
@@ -227,7 +227,7 @@ select:focus {
 .tabpanel[hidden] {
   display: none;
 }
-/* bc5:app-shell — sessions plus the docked help panel */
+/* sessions plus the docked help panel */
 .workarea {
   flex: 1;
   min-height: 0;
@@ -1082,7 +1082,7 @@ kbd {
 .s-similar-fg {
   color: var(--unimportant);
 }
-/* Contents were actually read (BC's "0110" marker): underline the status glyph. */
+/* Contents were actually read (the "0110" marker): underline the status glyph. */
 .fcell.status.checked {
   text-decoration: underline dotted;
   text-underline-offset: 3px;
@@ -1348,8 +1348,8 @@ button,
   letter-spacing: 0.04em;
 }
 
-/* ---------- Beyond Compare–style toolbar and icons ---------- */
-.bc-toolbar {
+/* ---------- Icon toolbar and icons ---------- */
+.icon-toolbar {
   display: flex;
   align-items: stretch;
   gap: 2px;
@@ -1386,7 +1386,7 @@ button,
 .tool-btn:disabled .tool-icon {
   filter: grayscale(1);
 }
-.bc-toolbar .more-filters {
+.icon-toolbar .more-filters {
   align-self: center;
   margin: 0 4px;
 }
@@ -1403,12 +1403,12 @@ button,
   display: block;
   flex-shrink: 0;
 }
-/* Older of two differing files: grey, as in Beyond Compare (the newer stays red). */
+/* Older of two differing files: grey (the newer stays red). */
 .s-different .fcell.name.older,
 .s-different .fcell.older {
   color: var(--muted);
 }
-/* Suppress filters: what the filters leave out, in teal as in Beyond Compare
+/* Suppress filters: what the filters leave out, in teal
    (a pair filtered on one side only on that side). After the rules above so
    it beats the status colours at equal specificity. */
 .frow .fcell.filtered,

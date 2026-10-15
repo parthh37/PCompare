@@ -6,15 +6,13 @@
 
 pub mod error;
 pub mod folder;
-pub mod grammar; // bc5:text-engine
+pub mod grammar;
 pub mod hex;
-pub mod hex_align; // bc5:hex
-pub mod hex_edit; // bc5:hex
-pub mod hex_find; // bc5:hex
-                  // araxis:text-engine
+pub mod hex_align;
+pub mod hex_edit;
+pub mod hex_find;
 pub mod numeric;
-// araxis:text-engine end
-pub mod patch; // bc5:editor-patch
+pub mod patch;
 pub mod secrets;
 pub mod session;
 pub mod store;
@@ -22,8 +20,8 @@ pub mod text;
 pub mod textfile;
 pub mod vault;
 pub mod vfs;
-pub mod vfs_write; // bc5:remote-write
-pub mod workspace; // bc5:app-shell
+pub mod vfs_write;
+pub mod workspace;
 
 pub use error::{CoreError, Result};
 

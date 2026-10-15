@@ -67,7 +67,7 @@ interface Props {
   onClose: () => void;
 }
 
-/** Beyond Compare-style column mapping: pair any left column with any right one, or leave it unmatched. */
+/** Column mapping: pair any left column with any right one, or leave it unmatched. */
 export function TableMappingDialog({
   columns,
   manual,

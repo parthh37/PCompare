@@ -1,4 +1,4 @@
-// bc5:sync-matrix — labels, presets and rules of the sync matrix, mirroring
+// labels, presets and rules of the sync matrix, mirroring
 // crates/pcompare-sync/src/matrix.rs (the engine is the authority: every plan
 // carries the matrix it followed, `SyncPlan.matrix`).
 import type { SyncAction, SyncCategory, SyncMatrix, SyncMode } from "./syncApi";

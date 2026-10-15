@@ -4,14 +4,14 @@
 import { invoke } from "@tauri-apps/api/core";
 import type { LineEnding, TextDiffOptions, TextDiffResult, TextFileInfo } from "./api";
 import type { TextDocument as BaseDocument, TextFormat } from "./mergeApi";
-import type { Conversion } from "./convertApi"; // bc5:converters
+import type { Conversion } from "./convertApi";
 
 export interface TextDocument extends BaseDocument {
   /** Each line's terminator as read ("none" for an unterminated last line). */
   eols: LineEnding[];
   /** The encoding was guessed statistically (no BOM, not valid UTF-8). */
   encodingGuessed: boolean;
-  /** bc5:converters — the file format rule applied to this side (converted text, read-only, grammar). */
+  /** the file format rule applied to this side (converted text, read-only, grammar). */
   conversion?: Conversion | null;
 }
 

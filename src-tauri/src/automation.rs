@@ -618,7 +618,7 @@ impl TauriRunner {
             return cancelled_before_start();
         }
 
-        let rules = task.plan_rules(); // bc5:sync-matrix
+        let rules = task.plan_rules();
         let plan =
             match shell_sync::plan(app, left, right, task.mode, &task.compare, task.conflicts, &rules) {
                 Ok(p) => p,
@@ -711,7 +711,7 @@ impl TauriRunner {
             mode: task.mode,
             compare: &task.compare,
             conflicts: task.conflicts,
-            rules: &rules, // bc5:sync-matrix
+            rules: &rules,
         };
         let run = match shell_sync::execute_new_job(
             app,
@@ -1086,7 +1086,7 @@ fn default_task() -> SyncTask {
         left: String::new(),
         right: String::new(),
         mode: SyncMode::default(),
-        matrix: SyncMatrix::preset(SyncMode::default()), // bc5:sync-matrix
+        matrix: SyncMatrix::preset(SyncMode::default()),
         skip_empty_folders: false,
         conflicts: ConflictPolicy::default(),
         compare: FolderCompareOptions::default(),

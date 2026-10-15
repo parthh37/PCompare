@@ -45,8 +45,8 @@ import { COMPARE_PRESETS, type ComparePreset } from "../lib/folderSettings";
 import type { ConflictPolicy, SyncMode } from "../lib/syncApi";
 import "./Automation.css";
 import { CONFLICT_POLICIES, MODES, modeLabel } from "./FolderSync";
-import { SyncMatrixEditor } from "./SyncMatrixEditor"; // bc5:sync-matrix
-import { matrixFor } from "../lib/syncMatrix"; // bc5:sync-matrix
+import { SyncMatrixEditor } from "./SyncMatrixEditor";
+import { matrixFor } from "../lib/syncMatrix";
 import { Modal } from "./Modal";
 import { ChannelIcon, channelSummary } from "./NotificationChannelsDialog";
 import { PathField } from "./PathField";
@@ -354,7 +354,7 @@ type TabProps = { task: SyncTask; set: (patch: Partial<SyncTask>) => void };
 function GeneralTab({ task, set }: TabProps) {
   const mode = MODES.find((m) => m.value === task.mode) ?? MODES[0];
   const showConflicts = task.mode === "twoWay" || task.mode === "updateBoth" || task.mode === "custom";
-  // bc5:sync-matrix — Custom starts from the mode in use (saving resets a fixed mode's matrix to its preset).
+  // Custom starts from the mode in use (saving resets a fixed mode's matrix to its preset).
   const pickMode = (next: SyncMode) =>
     set(next === "custom" ? { mode: next, matrix: matrixFor(task.mode, task.matrix) } : { mode: next });
   return (
@@ -445,7 +445,6 @@ function GeneralTab({ task, set }: TabProps) {
             <TriangleAlert size={13} /> {MODE_DETAILS[mode.value]}
           </p>
         )}
-        {/* bc5:sync-matrix */}
         {task.mode === "custom" && (
           <SyncMatrixEditor
             value={matrixFor("custom", task.matrix)}

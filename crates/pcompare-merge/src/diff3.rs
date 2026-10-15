@@ -36,7 +36,7 @@ pub enum ChunkKind {
     Conflict,
 }
 
-/// Merge-only rules (Beyond Compare's `TTextMergeRules`).
+/// Merge-only rules.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct MergeRules {
@@ -48,7 +48,7 @@ pub struct MergeRules {
 
 impl Default for MergeRules {
     fn default() -> Self {
-        // Beyond Compare's default.
+        // The usual default.
         Self { conflict_scan_lines: 2 }
     }
 }

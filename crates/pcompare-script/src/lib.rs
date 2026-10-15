@@ -1,6 +1,7 @@
 //! PCompare's script processor (`pcompare @script.txt`), headless quick
 //! compare (`pcompare /qc left right`) and headless merge (`/automerge`),
-//! compatible with Beyond Compare's scripts, switches and exit codes.
+//! compatible with the common compare-script language, switches and exit
+//! codes.
 //!
 //! ```text
 //! # Mirror a project to a backup, then report what differed before.
@@ -32,7 +33,7 @@ use std::path::Path;
 
 /// Exit code: every command succeeded.
 pub const EXIT_OK: i32 = 0;
-/// Exit code (Beyond Compare's "unknown error"): the script ran but some
+/// Exit code ("unknown error"): the script ran but some
 /// commands failed.
 pub const EXIT_ERRORS: i32 = interp::EXIT_FAILED;
 /// Exit code: the script file couldn't be read.
@@ -70,7 +71,7 @@ pub struct RunOptions<'a> {
 }
 
 /// Runs a script file, printing progress to stdout (unless silent) and
-/// errors to stderr. Returns Beyond Compare's exit code: 0 success, 100
+/// errors to stderr. Returns the standard exit code: 0 success, 100
 /// some commands failed, 105 unreadable script, 106 syntax errors, 107 a
 /// `load` failed.
 pub fn run_file(path: &Path, opts: &RunOptions) -> i32 {
@@ -114,8 +115,8 @@ pub fn run_file(path: &Path, opts: &RunOptions) -> i32 {
 mod tests {
     use super::*;
 
-    /// Every script on Beyond Compare's "Sample Scripts" help page.
-    pub(crate) const BC_SAMPLES: &[&str] = &[
+    /// The classic sample scripts.
+    pub(crate) const SAMPLE_SCRIPTS: &[&str] = &[
         "load \"Sync Laptop\"\nsync update:left->right\n",
         "# Turn logging on.\nlog normal \"C:\\My Log.txt\"\n# Load the default session and exclude all but certain file types.\nload <default>\nfilter \"*.html;*.htm;*.png;*.jpg\"\n# Load the base folders.\nload \"C:\\My Folder\" ftp://user@website.com/folder\n# Copy different files left to right, delete orphans on right.\nsync mirror:left->right\n",
         "file-report layout:side-by-side &\n options:display-mismatches &\n output-to:\"%3\" \"%1\" \"%2\"\n",
@@ -127,7 +128,7 @@ mod tests {
     ];
 
 
-    /// A host where BC's sample `ftp://user@website.com/folder` is a local
+    /// A host where the sample `ftp://user@website.com/folder` is a local
     /// folder.
     struct SampleHost {
         local: host::LocalHost,
@@ -227,7 +228,7 @@ mod tests {
             assert_eq!(prep.outcome.exit_code(), 0, "{}{}", prep.out, prep.err);
             let c_drive = format!("{}/", root.display());
             let params = ["My File.txt", "Your File.txt", "My Report.txt"].map(String::from);
-            for (i, sample) in BC_SAMPLES.iter().enumerate() {
+            for (i, sample) in SAMPLE_SCRIPTS.iter().enumerate() {
                 let script = sample.replace("C:\\", &c_drive);
                 let r = interp::tests::run_with(root, &script, &params, &host, false, dry_run);
                 assert_eq!(
@@ -276,7 +277,7 @@ mod tests {
     }
 
     #[test]
-    fn missing_invalid_and_failing_scripts_exit_with_bc_codes() {
+    fn missing_invalid_and_failing_scripts_exit_with_standard_codes() {
         let d = tempfile::tempdir().unwrap();
         let host = host::LocalHost::temporary();
         assert_eq!(

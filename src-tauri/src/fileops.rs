@@ -1,4 +1,4 @@
-//! Tauri commands for Folder Compare's file operations (bc5:file-ops):
+//! Tauri commands for Folder Compare's file operations:
 //! copy / move to the other side or a folder, delete, rename, new folder,
 //! attributes and touch, on local and `remote://` sides.
 //!

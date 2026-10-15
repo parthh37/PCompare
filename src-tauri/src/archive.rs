@@ -1,5 +1,5 @@
 //! Archives, folder snapshots and Subversion repositories as Folder Compare
-//! sides (bc5:archives).
+//! sides.
 //!
 //! Path routing itself lives in `pcompare-remote` (`RemoteManager::target`,
 //! `local_copy`, `resolve_container`), so every viewer and Folder Sync
@@ -203,7 +203,7 @@ pub struct SideInfo {
     pub read_only: Option<String>,
     pub snapshot: Option<SnapshotInfo>,
     /// For `svn:` sides: whether the `svn` client is installed
-    /// (araxis:vcs — for `git:` / `hg:` sides, `git` / `hg`).
+    /// (for `git:` / `hg:` sides, `git` / `hg`).
     pub svn_available: Option<bool>,
 }
 
@@ -226,12 +226,10 @@ pub async fn archive_side_info(app: AppHandle, path: String) -> CmdResult<SideIn
             container: res.as_ref().map(|r| r.kind),
             read_only: res.as_ref().and_then(|r| r.read_only.clone()),
             snapshot: res.and_then(|r| r.snapshot),
-            // araxis:vcs
             svn_available: match pcompare_archive::vcs::VcsKind::of(&path) {
                 Some(kind) => Some(pcompare_archive::vcs::available(kind)),
                 None => svn.then(pcompare_archive::svn::available),
             },
-            // araxis:vcs end
         })
     })
     .await

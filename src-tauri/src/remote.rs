@@ -1,5 +1,5 @@
 //! Remote write operations for the remote browser, and the bridge that
-//! lets a server's sign-in questions reach the user (bc5:remote-write).
+//! lets a server's sign-in questions reach the user.
 //!
 //! Connections open on worker threads, often in the middle of a compare or
 //! a sync. When an SSH server asks something no saved setting answers (a

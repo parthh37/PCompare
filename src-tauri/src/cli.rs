@@ -1,4 +1,5 @@
-//! Command-line interface, Beyond Compare–compatible where that makes sense.
+//! Command-line interface, compatible with the common compare-tool switches
+//! where that makes sense.
 //!
 //! ```text
 //! pcompare [options] <left> [<right> [<base> [<output>]]]
@@ -10,7 +11,7 @@
 //! Switches may start with `/` (Windows style, matched only for the exact
 //! names below so `/Users/…` stays a path) or `-`/`--`. Scripts, quick
 //! compares, automatic merges and `--help` run without a window and exit
-//! with Beyond Compare's status codes; everything else becomes
+//! with the standard status codes; everything else becomes
 //! [`LaunchOptions`] for the UI.
 
 use pcompare_core::session::{SavedSession, SessionStore};
@@ -54,7 +55,6 @@ pub struct LaunchOptions {
     /// `--compare-to <path>`: pair with the remembered left side.
     #[serde(skip)]
     pub compare_to: Option<String>,
-    // araxis:vcs
     /// `--wait` / `/wait`: block until the tab closes (vcs.rs).
     #[serde(skip)]
     pub wait: bool,
@@ -64,7 +64,6 @@ pub struct LaunchOptions {
     /// `--base-first`: paths come as `base theirs yours merged` (P4MERGE).
     #[serde(skip)]
     pub base_first: bool,
-    // araxis:vcs end
 }
 
 /// A parsed command line.
@@ -99,15 +98,15 @@ PCompare — compare files and folders
 Usage:
   pcompare [options] <left> [<right>]                 compare two files or folders
   pcompare [options] <left> <right> <base> [<output>]  3-way merge (git mergetool order)
-  pcompare @<script> [<param>…] [/silent] [--dry-run] run a Beyond Compare script without a window
+  pcompare @<script> [<param>…] [/silent] [--dry-run] run a compare script without a window
   pcompare /qc[=<method>] <left> <right>               quick compare without a window
   pcompare <left> <right> <base> <output> /automerge   merge without a window (git mergetool)
   pcompare --snapshot <folder> <out.pcsnap> [--crc]    save a folder snapshot without a window
 
-Options (Beyond Compare spellings in brackets):
+Options (alternative /switch spellings in brackets):
   --viewer <kind>        [/fv=<viewer>] open as text, hex, table, picture, folder,
                          sync, merge, folderMerge, registry, version, mp3 or database
-                         (BC names such as \"Text Compare\" and \"Hex Compare\" work too)
+                         (names such as \"Text Compare\" and \"Hex Compare\" work too)
   --title-left <text>    [/title1=<text>, /lefttitle=] label for the left side
   --title-right <text>   [/title2=<text>, /righttitle=] label for the right side
   --title-base <text>    [/title3=<text>, /centertitle=] label for the merge base
@@ -144,7 +143,7 @@ Options (Beyond Compare spellings in brackets):
   --uninstall-shell-menu remove the Explorer right-click menu
   -h, --help             [/?, /h, /help] show this help
 
-Exit codes (Beyond Compare's; changed in 1.5 — quick compare used to exit
+Exit codes (standard; changed in 1.5 — quick compare used to exit
 0 for same and 1 for different, scripts 1 and 2 for errors):
   quick compare  1 = binary same, 2 = rules-based same (only encoding or line
                  endings differ), 11 = binary differences, 12 = similar (only
@@ -193,7 +192,7 @@ struct Switch<'a> {
 /// Recognizes a switch. `/x` forms count only for known names, so absolute
 /// Unix paths are never mistaken for switches.
 fn switch(arg: &str) -> Option<Switch<'_>> {
-    // Every Beyond Compare switch, so none of them is taken for a path.
+    // Every /switch, so none of them is taken for a path.
     const SLASH: &[&str] = &[
         "fv",
         "fileviewer",
@@ -241,7 +240,7 @@ fn switch(arg: &str) -> Option<Switch<'_>> {
         "vcsright",
         "vcscenter",
         "vcsoutput",
-        "wait", // araxis:vcs
+        "wait",
         "?",
         "h",
         "help",
@@ -341,7 +340,7 @@ pub fn parse(args: &[String]) -> Result<Invocation, String> {
             "filters" => opts.filters = Some(take(&mut i, &sw, "file masks")?),
             "expandall" | "expand-all" => opts.expand_all = true,
             "savetarget" | "save-target" => opts.save_target = Some(take(&mut i, &sw, "a path")?),
-            // Beyond Compare's `/sync` and `/edit` open those viewers.
+            // `/sync` and `/edit` open those viewers.
             "sync" => opts.viewer = Some("sync".into()),
             "edit" => opts.viewer = Some("edit".into()),
             "vcs1" | "vcsleft" | "vcs2" | "vcsright" | "vcs3" | "vcscenter" | "vcs4"
@@ -365,7 +364,6 @@ pub fn parse(args: &[String]) -> Result<Invocation, String> {
                 );
             }
             "silent" => silent = true,
-            // araxis:vcs
             "wait" => opts.wait = true,
             "wait-token" => opts.wait_token = Some(take(&mut i, &sw, "a token")?),
             "base-first" => opts.base_first = true,
@@ -378,7 +376,6 @@ pub fn parse(args: &[String]) -> Result<Invocation, String> {
                     opts.title_right = Some(label);
                 }
             }
-            // araxis:vcs end
             "compare-to" => opts.compare_to = Some(take(&mut i, &sw, "a path")?),
             // Handled before parsing (records the path and exits).
             "select-left" => {
@@ -480,14 +477,13 @@ pub fn resolve(mut opts: LaunchOptions, left_selection: Option<String>) -> Launc
             _ => vec![target],
         };
     }
-    // araxis:vcs — `base theirs yours merged [extra…]` → `yours theirs base merged`.
+    // `base theirs yours merged [extra…]` → `yours theirs base merged`.
     if opts.base_first && opts.paths.len() >= 3 {
         let mut p = std::mem::take(&mut opts.paths);
         p.truncate(4);
         p.swap(0, 2);
         opts.paths = p;
     }
-    // araxis:vcs end
     if let Some(out) = opts.merge_output.clone() {
         // `/mergeoutput=` names the merge result: the 4th path.
         if opts.paths.len() >= 3 {
@@ -546,7 +542,7 @@ fn auto_merge(m: &AutoMerge, review: bool) -> Option<i32> {
 /// Runs headless invocations (help, scripts, quick compare) and returns
 /// their exit code; `None` means "open the window".
 pub fn run_headless(args: &[String]) -> Option<i32> {
-    // bc5:archives — `pcompare --snapshot <folder> <out.pcsnap> [--crc]`
+    // `pcompare --snapshot <folder> <out.pcsnap> [--crc]`
     if args.iter().any(|a| a.eq_ignore_ascii_case("--snapshot") || a.eq_ignore_ascii_case("/snapshot")) {
         pcompare_script::console::attach_parent();
         let code = crate::archive::run_snapshot_cli(args);
@@ -618,7 +614,7 @@ fn config_dir() -> Option<PathBuf> {
 /// Scripts' view of the app: base folders resolve exactly as in Folder
 /// Compare ([`crate::archive::folder_side`]: local and remote folders,
 /// archives, snapshots, `svn:` / `git:`), with the user's saved sessions,
-/// connection profiles and file format rules. Beyond Compare style
+/// connection profiles and file format rules. Script-style
 /// `ftp://user@host/path` and `sftp://…` URLs use the matching saved
 /// FTP / SFTP connection.
 pub struct AppHost {
@@ -718,7 +714,7 @@ impl Host for AppHost {
     fn folder(&self, path: &str) -> Result<Side, String> {
         let path = self.map_url(path)?;
         let local = Path::new(&path);
-        // Snapshots saved under Beyond Compare's `.bcss` name, and plain folders.
+        // Snapshots saved under the legacy `.bcss` name, and plain folders.
         if local.is_dir() || (local.is_file() && host::is_snapshot_name(&path)) {
             return host::container_or_local(self.remote.archives(), &path);
         }
@@ -798,7 +794,7 @@ mod tests {
     // automation:shell end
 
     #[test]
-    fn bc_and_gnu_style_switches() {
+    fn slash_and_gnu_style_switches() {
         let o = gui(&[
             "/fv=Hex Compare",
             "/title1=Mine",
@@ -840,7 +836,6 @@ mod tests {
         assert_eq!(o.paths, args(&["l", "r", "base", "new"]));
     }
 
-    // araxis:vcs
     #[test]
     fn vcs_tool_switches() {
         let o = gui(&["/wait", "a", "b"]);
@@ -856,7 +851,6 @@ mod tests {
         assert_eq!(o.title_left.as_deref(), Some("a.c (rev 3)"));
         assert_eq!(o.title_right.as_deref(), Some("a.c (working copy)"));
     }
-    // araxis:vcs end
 
     #[test]
     fn compare_to_pairs_with_the_selected_left() {
@@ -972,7 +966,7 @@ mod tests {
     }
 
     #[test]
-    fn automerge_runs_headless_with_bc_exit_codes() {
+    fn automerge_runs_headless_with_standard_exit_codes() {
         let d = temp_dir();
         let p = |n: &str| d.path().join(n).to_string_lossy().into_owned();
         // Edits two unchanged lines apart: past the default conflict scan lines.
@@ -1010,7 +1004,7 @@ mod tests {
     }
 
     #[test]
-    fn titles_vcs_paths_and_other_bc_switches() {
+    fn titles_vcs_paths_and_other_slash_switches() {
         let o = gui(&[
             "/title3=Base",
             "/outputtitle=Merged",
@@ -1076,7 +1070,7 @@ mod tests {
         assert!(host.map_url("ftp://other@website.com/www").is_err());
         assert!(host.map_url("ftp://website.com/elsewhere").is_err());
         assert_eq!(host.map_url("/local/path").unwrap(), "/local/path");
-        // Local folders and BC-named snapshots go through the same sides as the app.
+        // Local folders and `.bcss`-named snapshots go through the same sides as the app.
         std::fs::create_dir_all(d.path().join("l")).unwrap();
         let side = host.folder(&d.path().join("l").to_string_lossy()).unwrap();
         assert!(side.local.is_some());

@@ -19,7 +19,6 @@ import {
   RefreshCw,
   Save,
   Undo2,
-  // bc5:text-ui
   Bookmark,
   ClipboardPaste,
   Code,
@@ -28,7 +27,7 @@ import {
   TextWrap,
   X,
 } from "lucide-react";
-import { embedInactive } from "../lib/embeddedPane"; // araxis:folder
+import { embedInactive } from "../lib/embeddedPane";
 import {
   useCallback,
   useEffect,
@@ -57,16 +56,16 @@ import {
 } from "../lib/api";
 import { basename, formatSize } from "../lib/format";
 import { joinLines, type TextDocument, type TextFormat } from "../lib/mergeApi";
-// bc5:text-engine — grammar-aware diffing, rules dialog, per-side encodings, save backups.
+// grammar-aware diffing, rules dialog, per-side encodings, save backups.
 import { EyeOff, SlidersHorizontal } from "lucide-react";
-import { FilePen } from "lucide-react"; // bc5:editor-patch
+import { FilePen } from "lucide-react";
 import { addRange, lineEndingsFor, loadBackups, removeRange, textApi, type DiffSide } from "../lib/textApi";
 import { SEPARATOR, type MenuEntry, type MenuItems } from "../lib/nativeMenu";
 import { useContextMenu } from "./ContextMenu";
 import { TextEncodingPicker } from "./TextEncodingPicker";
 import { TextRulesDialog, type RulesPage } from "./TextRulesDialog";
 import { autoRefreshTitle, useAutoRefresh } from "../lib/useAutoRefresh";
-// bc5:text-ui — find/replace, bookmarks, wrap, line details, syntax, line editing, clipboard sides.
+// find/replace, bookmarks, wrap, line details, syntax, line editing, clipboard sides.
 import { readClipboardText, writeClipboardText } from "../lib/clipboard";
 import { differenceSections, isDifference, rowStateLabel } from "../lib/textSections";
 import {
@@ -99,17 +98,17 @@ import { FindBar, type FindScope } from "./FindBar";
 import { LineDetails } from "./LineDetails";
 import { PathBar } from "./PathBar";
 import { VarList, type VarListHandle } from "./VarList";
-// bc5:converters — converted documents, file format rules, formatted HTML view.
+// converted documents, file format rules, formatted HTML view.
 import { AppWindow } from "lucide-react";
 import type { Conversion } from "../lib/convertApi";
 import { ConversionBanner } from "./ConversionBanner";
 import { FileFormatsDialog } from "./FileFormatsDialog";
 import { HtmlRenderedView, isHtmlPath } from "./HtmlRenderedView";
-// bc5:reports-script — Report… (HTML / text / patch; save, copy, print)
+// Report… (HTML / text / patch; save, copy, print)
 import { FileText } from "lucide-react";
 import { StackButton } from "./StackButton";
 import { ReportDialog } from "./ReportDialog";
-// araxis:text-view — linked lines, sync points, go to line, block indent, line endings, replace file,
+// linked lines, sync points, go to line, block indent, line endings, replace file,
 // resolved / edit markers, IME-safe keys, line drag-and-drop.
 import { Ellipsis, Hash, Link2, Pilcrow, Rows3 } from "lucide-react";
 import { isComposing } from "../lib/ime";
@@ -118,10 +117,8 @@ import { setPrefs, usePref } from "../lib/prefs";
 import { indentRange, indentUnitOf } from "../lib/textEdit";
 import { changedRegion, EOL_GLYPH, eolsOfText, linkedLayout, shiftLinePairs, shiftLineRanges } from "../lib/textLinks";
 import { TextLinkedView } from "./TextLinkedView";
-// araxis:text-view end
-// araxis:text-review — bookmark comments, statistics, comparison archives.
+// bookmark comments, statistics, comparison archives.
 import { useTextReview } from "./TextReview";
-// araxis:text-review end
 // Moved blocks and blame: moved lines tinted and linked across; who last changed each line (git blame).
 import { ArrowRightLeft, GitCommitHorizontal } from "lucide-react";
 import type { MovedBlock } from "../lib/api";
@@ -132,7 +129,7 @@ const ROW_HEIGHT = 20;
 const CHAR_WIDTH = 7.8;
 const CONTEXT_LINES = 3;
 const MAX_UNDO = 200;
-// bc5:converters — also shown for sides a file format rule made read-only.
+// also shown for sides a file format rule made read-only.
 const READ_ONLY_HINT =
   "Read-only: remote files and converted documents (see File formats) can't be edited here; copy or convert the file locally to edit it";
 const TAB_SIZE = 4;
@@ -156,7 +153,7 @@ const CLIPBOARD_LABEL = "Clipboard";
 /** Stands in for a side with no file while the other side has one (an orphan from a folder compare). */
 const NO_FILE_LABEL = "no file";
 
-/** BC's view filters: All, Diffs, Same and Context (differences plus a few lines around them). */
+/** View filters: All, Diffs, Same and Context (differences plus a few lines around them). */
 type ViewMode = "all" | "context" | "diffs" | "same";
 type Side = "left" | "right";
 const SIDES: Side[] = ["left", "right"];
@@ -167,26 +164,23 @@ export interface TextSettings {
   options: TextDiffOptions;
   mode: ViewMode;
   autoRefresh: boolean;
-  /** BC's "Minor" toggle: unimportant differences count as same (default on). */
+  /** The "Minor" toggle: unimportant differences count as same (default on). */
   ignoreMinor?: boolean;
-  // bc5:text-ui
   wordWrap?: boolean;
   syntax?: boolean;
   lineDetails?: boolean;
   bookmarks?: BookmarkMark[];
-  /** bc5:text-engine — manual encoding per side; null/absent = detect. */
+  /** manual encoding per side; null/absent = detect. */
   encodings?: Encodings;
   /**
-   * bc5:editor-patch — sides opened as text rather than files (e.g. a patched
+   * sides opened as text rather than files (e.g. a patched
    * file from the Patch Viewer). Read once when the tab opens; not saved back.
    */
   memory?: Partial<Record<Side, { text: string; label: string }>>;
-  // araxis:text-view
   /** Line-ending glyphs at the end of every line. */
   showEol?: boolean;
   /** Lines marked resolved (dimmed; view-only, the diff is unchanged). */
   resolved?: BookmarkMark[];
-  // araxis:text-view end
   /** Moved blocks are tinted and linked (default on). */
   moves?: boolean;
   /** The blame gutter (who last changed each line). */
@@ -200,9 +194,9 @@ interface MemoryText {
   trailingNewline: boolean;
   size: number;
   lineEnding: LineEnding;
-  /** bc5:editor-patch — shown instead of "Clipboard" (e.g. "Patched: a.c"). */
+  /** shown instead of "Clipboard" (e.g. "Patched: a.c"). */
   label?: string;
-  /** araxis:text-view — each line's terminator (for "Show line endings"). */
+  /** each line's terminator (for "Show line endings"). */
   eols?: LineEnding[];
 }
 
@@ -221,12 +215,12 @@ function memoryText(text: string): MemoryText {
     trailingNewline,
     size: new TextEncoder().encode(text).length,
     lineEnding: detectLineEnding(text),
-    eols: eolsOfText(text), // araxis:text-view araxis:text-view end
+    eols: eolsOfText(text),
   };
 }
 
 const memoryDoc = (m: MemoryText): TextDocument => {
-  // araxis:text-view — carries `eols` like a loaded file (see rememberEols).
+  // carries `eols` like a loaded file (see rememberEols).
   const doc: TextDocument & { eols?: LineEnding[] } = {
     info: { path: m.label ?? CLIPBOARD_LABEL, encoding: "Text", hasBom: false, lineEnding: m.lineEnding, size: m.size },
     format: { encoding: "UTF-8", hasBom: false, lineEnding: m.lineEnding === "crlf" ? "crlf" : "lf" },
@@ -243,7 +237,7 @@ async function loadSides(
   left: string,
   right: string,
   memory: Record<Side, MemoryText | null>,
-  encodings: Encodings = NO_ENCODINGS, // bc5:text-engine
+  encodings: Encodings = NO_ENCODINGS,
 ): Promise<{ left: TextDocument; right: TextDocument }> {
   if (!memory.left && !memory.right && left && right)
     return textApi.loadTextPair(left, right, encodings.left, encodings.right);
@@ -259,7 +253,7 @@ async function loadSides(
   return { left: l, right: r };
 }
 
-// bc5:text-engine — manual encoding per side (null = detect), saved with the session.
+// manual encoding per side (null = detect), saved with the session.
 type Encodings = Record<Side, string | null>;
 const NO_ENCODINGS: Encodings = { left: null, right: null };
 /** Line terminators of loaded documents, keyed by their `lines` array (see `lineEndingsFor`). */
@@ -347,9 +341,9 @@ interface Props {
   settings?: Partial<TextSettings>;
   onSettingsChange?: (s: TextSettings) => void;
   onDirtyChange?: (dirty: boolean, save?: () => unknown) => void;
-  /** bc5:editor-patch — "Open in Text Edit" when only one file is chosen. */
+  /** "Open in Text Edit" when only one file is chosen. */
   onOpenEditor?: (path: string) => void;
-  /** bc5:reports-script — sides opened read-only from the command line (`/readonly`). */
+  /** sides opened read-only from the command line (`/readonly`). */
   readOnlySides?: { left: boolean; right: boolean };
   /** Opens another comparison in a new tab (blame: a commit's change to the file). */
   onOpenCompare?: (left: string, right: string) => void;
@@ -368,7 +362,7 @@ interface SideDoc {
   saved: string[];
   /** Clipboard text rather than a file: editable, never saved. */
   memory: boolean;
-  /** bc5:converters — the file format rule applied when loading (converted text, read-only, grammar). */
+  /** the file format rule applied when loading (converted text, read-only, grammar). */
   conversion: Conversion | null;
 }
 type Docs = Record<Side, SideDoc>;
@@ -382,7 +376,7 @@ const toSide = (d: TextDocument, memory = false): SideDoc => ({
   lines: d.lines,
   saved: d.lines,
   memory,
-  conversion: (d as Partial<{ conversion: Conversion | null }>).conversion ?? null, // bc5:converters
+  conversion: (d as Partial<{ conversion: Conversion | null }>).conversion ?? null,
 });
 const isDirty = (d: SideDoc) => d.lines !== d.saved;
 const sameLines = (a: string[], b: string[]) => a.length === b.length && a.every((l, i) => l === b[i]);
@@ -400,7 +394,7 @@ function reloadSide(cur: SideDoc, fresh: TextDocument): SideDoc | null {
       info: fresh.info,
       format: fresh.format,
       trailingNewline: fresh.trailingNewline,
-      conversion: toSide(fresh).conversion, // bc5:converters
+      conversion: toSide(fresh).conversion,
     };
   }
   return toSide(fresh, cur.memory);
@@ -446,7 +440,7 @@ function FileInfo({ doc, readOnly }: { doc: SideDoc; readOnly: boolean }) {
       {doc.memory ? (
         <>
           {isDirty(doc) ? "edited " : ""}
-          {info.path === CLIPBOARD_LABEL ? "clipboard text" : info.path /* bc5:editor-patch */} · {doc.lines.length.toLocaleString()} line
+          {info.path === CLIPBOARD_LABEL ? "clipboard text" : info.path} · {doc.lines.length.toLocaleString()} line
           {doc.lines.length === 1 ? "" : "s"} · {info.lineEnding.toUpperCase()} · {formatSize(info.size)}
         </>
       ) : doc.binary ? (
@@ -469,8 +463,8 @@ export function TextCompare({
   settings,
   onSettingsChange,
   onDirtyChange,
-  onOpenEditor, // bc5:editor-patch
-  readOnlySides, // bc5:reports-script
+  onOpenEditor,
+  readOnlySides,
   onOpenCompare,
   onCompareTexts,
 }: Props) {
@@ -481,17 +475,16 @@ export function TextCompare({
   const [editingRules, setEditingRules] = useState(false);
   /** Opens the Rules dialog on a page with a draft (Replacement… adds a rule from the current difference). */
   const [rulesDraft, setRulesDraft] = useState<{ page: RulesPage; options: TextDiffOptions } | null>(null);
-  const [reporting, setReporting] = useState(false); // bc5:reports-script
-  // bc5:converters — File formats dialog and the formatted (rendered) HTML view.
+  const [reporting, setReporting] = useState(false);
+  // File formats dialog and the formatted (rendered) HTML view.
   const [fileFormatsOpen, setFileFormatsOpen] = useState(false);
   const [htmlView, setHtmlView] = useState(false);
-  // bc5:text-engine
   const [encodings, setEncodings] = useState<Encodings>({ ...NO_ENCODINGS, ...settings?.encodings });
   const encodingsRef = useRef(encodings);
   encodingsRef.current = encodings;
   const eolMap = useRef<EolMap>(new WeakMap());
-  // bc5:text-ui — view toggles and bookmarks are saved with the session.
-  // araxis:text-view — padding off (linked lines) has no word wrap: each side has its own row heights.
+  // view toggles and bookmarks are saved with the session.
+  // padding off (linked lines) has no word wrap: each side has its own row heights.
   const padding = usePref("textPadding");
   /** The left pane's gutter sits at its right edge, so both copy arrows meet in the middle. */
   const leftGutterRight = usePref("textLeftGutterRight");
@@ -508,9 +501,8 @@ export function TextCompare({
   const [gotoText, setGotoText] = useState("");
   /** Caret index in the line editor (for the Ln/Col indicator). */
   const [caretIdx, setCaretIdx] = useState(0);
-  // araxis:text-view end
   const [syntaxOn, setSyntaxOn] = useState(settings?.syntax ?? true);
-  // Beyond Compare keeps Line Details open under the panes.
+  // Line Details stay open under the panes by default.
   const [showDetails, setShowDetails] = useState(settings?.lineDetails ?? true);
   const [bookmarks, setBookmarks] = useState<BookmarkMark[]>(settings?.bookmarks ?? []);
   const [showMoves, setShowMoves] = useState(settings?.moves ?? true);
@@ -524,13 +516,13 @@ export function TextCompare({
         mode,
         autoRefresh,
         ignoreMinor,
-        wordWrap: wordWrapOn, // araxis:text-view
+        wordWrap: wordWrapOn,
         syntax: syntaxOn,
         lineDetails: showDetails,
         bookmarks,
-        encodings, // bc5:text-engine
-        showEol, // araxis:text-view
-        resolved, // araxis:text-view
+        encodings,
+        showEol,
+        resolved,
         moves: showMoves,
         blame: blameOn,
       }),
@@ -562,7 +554,7 @@ export function TextCompare({
     setEditor({ side, line, caret, seq: ++editorSeq.current });
   };
   /** Clipboard text standing in for a side's file. */
-  // bc5:editor-patch — a tab may open with text sides (settings.memory).
+  // a tab may open with text sides (settings.memory).
   const [memory, setMemory] = useState<Record<Side, MemoryText | null>>(() => ({
     left: settings?.memory?.left ? { ...memoryText(settings.memory.left.text), label: settings.memory.left.label } : null,
     right: settings?.memory?.right ? { ...memoryText(settings.memory.right.text), label: settings.memory.right.label } : null,
@@ -634,7 +626,6 @@ export function TextCompare({
       line != null && menuItem("Insert Line Before", null, !editable, () => insertLine(side, row, false)),
       line != null && menuItem("Insert Line After", null, !editable, () => insertLine(side, row, true)),
       SEPARATOR,
-      // araxis:text-view
       menuItem(
         syncPick && syncPick.side !== side ? `Align With ${syncPick.side} line ${syncPick.line}` : "Align With… (Sync Point)",
         syncHint,
@@ -647,7 +638,6 @@ export function TextCompare({
       menuItem(resolvedHere ? "Unmark Resolved" : "Mark Resolved (Ignore)", shortcutLabel("text.markResolved") || null, false, () =>
         markResolved(resolvedHere),
       ),
-      // araxis:text-view end
       SEPARATOR,
       menuItem("Select Section", null, h < 0, () => selectSection(side, h)),
       onCompareTexts &&
@@ -656,7 +646,7 @@ export function TextCompare({
         ),
       SEPARATOR,
       menuItem("Toggle Bookmark", "Ctrl+F2", false, toggleBookmark),
-      menuItem("Comment…", null, false, () => review.commentRow(side, row)), // araxis:text-review
+      menuItem("Comment…", null, false, () => review.commentRow(side, row)),
       menuItem("Find…", "Ctrl+F", false, () => openFind(false)),
       menuItem(showDetails ? "Hide Line Details" : "Line Details", null, false, () => setShowDetails((s) => !s)),
       SEPARATOR,
@@ -687,7 +677,6 @@ export function TextCompare({
       menuItem("Clear Bookmarks", "Ctrl+Shift+F2", none, () => setBookmarks([])),
       SEPARATOR,
       menuItem("Select Section", null, rowHunk[row] < 0, () => selectSection(side, rowHunk[row])),
-      // araxis:text-view
       menuItem(
         syncPick && syncPick.side !== side ? `Align With ${syncPick.side} line ${syncPick.line}` : "Align With… (Sync Point)",
         syncHint,
@@ -695,12 +684,11 @@ export function TextCompare({
         () => setSyncPoint(side, row),
       ),
       line != null && syncLines[side].has(line) && menuItem("Remove Sync Point", null, false, () => removeSyncPoint(side, row)),
-      // araxis:text-view end
       ...isolateItems(side, row),
     ];
   });
 
-  // araxis:text-view — toolbar "…" menu
+  // toolbar "…" menu
   const toolsMenu = useContextMenu((): MenuItems => [
     menuItem("Go to Line…", shortcutLabel("text.goToLine") || null, !docs || binary, openGoto),
     SEPARATOR,
@@ -756,9 +744,9 @@ export function TextCompare({
   const root = useRef<HTMLDivElement>(null);
 
   const readOnly: Record<Side, boolean> = {
-    // bc5:converters — converted documents are read-only unless their rule allows saving.
-    // araxis:text-review — `readOnlySides` also covers in-memory texts (a comparison archive under review).
-    left: (!memory.left || !!readOnlySides?.left) && (isRemote(left) || !!docs?.left.conversion?.readOnly || !!readOnlySides?.left), // bc5:reports-script
+    // converted documents are read-only unless their rule allows saving.
+    // `readOnlySides` also covers in-memory texts (a comparison archive under review).
+    left: (!memory.left || !!readOnlySides?.left) && (isRemote(left) || !!docs?.left.conversion?.readOnly || !!readOnlySides?.left),
     right: (!memory.right || !!readOnlySides?.right) && (isRemote(right) || !!docs?.right.conversion?.readOnly || !!readOnlySides?.right),
   };
   const dirty = !!docs && SIDES.some((s) => isDirty(docs[s]) && !docs[s].memory);
@@ -787,7 +775,7 @@ export function TextCompare({
       const seq = ++requestSeq.current;
       if (!quiet) setLoading(true);
       try {
-        const pair = await loadSides(left, right, memory, encodingsRef.current); // bc5:text-engine
+        const pair = await loadSides(left, right, memory, encodingsRef.current);
         rememberEols(eolMap.current, pair, docsRef.current);
         if (seq !== requestSeq.current) return;
         setError(null);
@@ -799,7 +787,7 @@ export function TextCompare({
           setStaleOnDisk(kept(cur.left, pair.left) || kept(cur.right, pair.right));
           if ((l && l.lines !== cur.left.lines) || (r && r.lines !== cur.right.lines)) {
             setHistory({ undo: [], redo: [] });
-            setEdited([]); // araxis:text-view araxis:text-view end
+            setEdited([]);
           }
           setDocs({ left: l ?? cur.left, right: r ?? cur.right });
           return;
@@ -813,10 +801,8 @@ export function TextCompare({
         setEditor(null);
         setCursor(null);
         setAnchor(null);
-        // araxis:text-view
         setEdited([]);
         setSyncPick(null);
-        // araxis:text-view end
       } catch (e) {
         if (seq !== requestSeq.current) return;
         setError(errorMessage(e));
@@ -843,7 +829,7 @@ export function TextCompare({
   const binary = !!docs && (docs.left.binary || docs.right.binary);
   const leftLines = docs?.left.lines;
   const rightLines = docs?.right.lines;
-  /** bc5:text-engine — a side as the engine diffs it: path (picks the grammar) and terminators. */
+  /** a side as the engine diffs it: path (picks the grammar) and terminators. */
   const engineSide = (side: Side, lines: string[]): DiffSide => {
     const d = docsRef.current?.[side];
     if (!d) return { lines };
@@ -852,21 +838,21 @@ export function TextCompare({
       : null;
     return { lines, eols, path: d.memory ? null : d.info.path };
   };
-  /** bc5:converters — a file format rule's grammar applies unless the rules dialog picked one. */
+  /** a file format rule's grammar applies unless the rules dialog picked one. */
   const ruleGrammar = docs?.left.conversion?.grammar ?? docs?.right.conversion?.grammar ?? null;
   const editorOpen = useRef(false);
   editorOpen.current = !!editor;
   useEffect(() => {
     if (!leftLines || !rightLines || binary) return;
     let stale = false;
-    // bc5:text-ui — while typing in the line editor, re-compare once typing pauses.
+    // while typing in the line editor, re-compare once typing pauses.
     const timer = window.setTimeout(
       () =>
-        textApi // bc5:text-engine
+        textApi
           .diffTexts(
             engineSide("left", leftLines),
             engineSide("right", rightLines),
-            options.grammar || !ruleGrammar ? options : { ...options, grammar: ruleGrammar }, // bc5:converters
+            options.grammar || !ruleGrammar ? options : { ...options, grammar: ruleGrammar },
           )
           .then((result) => {
             if (stale) return;
@@ -937,7 +923,7 @@ export function TextCompare({
     [hunks, rowToDisplay],
   );
 
-  // ---------- bc5:text-ui: layout, syntax and find over the displayed rows ----------
+  // ---------- layout, syntax and find over the displayed rows ----------
 
   /** The line arrays `rows` were computed from (lags the docs while a re-compare runs). */
   const shown = diff ? diffed!.for : null;
@@ -1013,7 +999,7 @@ export function TextCompare({
     if (listEl) ro.observe(listEl);
     measure();
     return () => ro.disconnect();
-  }, [hasGrid, padding, blameOn]); // araxis:text-view — the linked view is a different list element
+  }, [hasGrid, padding, blameOn]); // the linked view is a different list element
 
   /** Word wrap: each row is as tall as the longer of its two wrapped lines, so both sides stay aligned. */
   const offsets = useMemo(() => {
@@ -1131,7 +1117,7 @@ export function TextCompare({
     caretApplied.current = editor.seq;
     el.focus({ preventScroll: true });
     el.setSelectionRange(editor.caret, editor.caret);
-    setCaretIdx(editor.caret); // araxis:text-view
+    setCaretIdx(editor.caret);
   });
 
   useEffect(() => {
@@ -1144,7 +1130,6 @@ export function TextCompare({
   /** Typing in one line merges into one undo step; anything else starts a new one. */
   const coalesceKey = useRef<string | null>(null);
 
-  // araxis:text-view
   /**
    * Keeps the line marks in step with a change from `prev` to `next`: edit
    * markers flag the changed lines (cleared when a side is back to its saved
@@ -1177,13 +1162,12 @@ export function TextCompare({
         );
     }
   };
-  // araxis:text-view end
 
   /** Replaces the text of both sides as one undoable step; returns the new docs. */
   const commit = (next: Snapshot, coalesce?: string): Docs | null => {
     if (!docs) return null;
     if (next.left === docs.left.lines && next.right === docs.right.lines) return docs;
-    trackEdits({ left: docs.left.lines, right: docs.right.lines }, next); // araxis:text-view
+    trackEdits({ left: docs.left.lines, right: docs.right.lines }, next);
     const updated: Docs = {
       left: { ...docs.left, lines: next.left },
       right: { ...docs.right, lines: next.right },
@@ -1230,7 +1214,7 @@ export function TextCompare({
     const prev = history.undo[history.undo.length - 1];
     if (!cur || !prev) return;
     coalesceKey.current = null;
-    trackEdits(cur, prev); // araxis:text-view
+    trackEdits(cur, prev);
     setHistory({ undo: history.undo.slice(0, -1), redo: [...history.redo, cur] });
     setDocs((d) => d && { left: { ...d.left, lines: prev.left }, right: { ...d.right, lines: prev.right } });
     followEditor(prev);
@@ -1241,7 +1225,7 @@ export function TextCompare({
     const next = history.redo[history.redo.length - 1];
     if (!cur || !next) return;
     coalesceKey.current = null;
-    trackEdits(cur, next); // araxis:text-view
+    trackEdits(cur, next);
     setHistory({ undo: [...history.undo, cur], redo: history.redo.slice(0, -1) });
     setDocs((d) => d && { left: { ...d.left, lines: next.left }, right: { ...d.right, lines: next.right } });
     followEditor(next);
@@ -1510,14 +1494,14 @@ export function TextCompare({
   };
 
   const onEditorKey = (e: ReactKeyboardEvent<HTMLTextAreaElement>) => {
-    if (!editor || !docs || isComposing(e)) return; // araxis:text-view — keys belong to an open IME composition
+    if (!editor || !docs || isComposing(e)) return; // keys belong to an open IME composition
     const ta = e.currentTarget;
     const { selectionStart: s, selectionEnd: end, value } = ta;
     const lines = docs[editor.side].lines;
     const mod = e.ctrlKey || e.metaKey;
     const key = e.key.toLowerCase();
     if (e.key === "Enter" && !mod && !e.altKey) applyEdit(editor.side, insertAt(lines, editor.line, s, end, "\n"));
-    // araxis:text-view — Shift+Tab un-indents the line.
+    // Shift+Tab un-indents the line.
     else if (e.key === "Tab" && e.shiftKey && !mod && !e.altKey) outdentEditorLine(s);
     else if (e.key === "Tab" && !mod && !e.altKey) applyEdit(editor.side, insertAt(lines, editor.line, s, end, "\t"));
     else if (e.key === "Backspace" && !mod && !e.altKey && s === 0 && end === 0)
@@ -1745,7 +1729,7 @@ export function TextCompare({
     try {
       for (const s of sides) {
         const doc = current[s];
-        // bc5:text-engine — backups per the rules dialog setting.
+        // backups per the rules dialog setting.
         const { info, backup } = await textApi.saveTextFile(
           doc.info.path,
           joinLines(doc.lines, doc.trailingNewline),
@@ -1755,7 +1739,7 @@ export function TextCompare({
         if (backup) setNotice(`Previous version backed up to ${backup}`);
         // Edits made while saving stay dirty: only the saved array is marked clean.
         setDocs((d) => d && { ...d, [s]: { ...d[s], info: { ...info, path: doc.info.path }, saved: doc.lines } });
-        setEdited((m) => m.filter((b) => b.side !== s)); // araxis:text-view araxis:text-view end
+        setEdited((m) => m.filter((b) => b.side !== s));
       }
     } catch (e) {
       setError(errorMessage(e));
@@ -1772,7 +1756,7 @@ export function TextCompare({
   const refresh = () => {
     if (confirmDiscard("reload both files")) load();
   };
-  // bc5:text-engine — how many importance rules are active (shown on the Rules button).
+  // how many importance rules are active (shown on the Rules button).
   const ruleCount =
     options.ignorePatterns.filter((p) => p.trim()).length +
     options.pageHeaderPatterns.filter((p) => p.trim()).length +
@@ -1786,10 +1770,8 @@ export function TextCompare({
     (options.isolated?.right.length ?? 0) +
     [options.ignoreComments, options.ignoreStrings, options.compareLineEndings].filter(Boolean).length +
     (options.pageHeaderLines || options.pageFooterLines ? 1 : 0) +
-    // araxis:text-engine
     (options.numericTolerance?.enabled ? 1 : 0) +
     (options.ignoreBlocks?.length ?? 0);
-  // araxis:text-engine end
 
   /** Marks the selected rows (or the current difference) unimportant on both sides. */
   const markUnimportant = () => {
@@ -1810,7 +1792,7 @@ export function TextCompare({
     setOptions({ ...options, unimportantLines: marks });
   };
 
-  // ---------- araxis:text-view: sync points, go to line, indent, replace file, resolved, line drag ----------
+  // ---------- sync points, go to line, indent, replace file, resolved, line drag ----------
 
   const resolvedKeys = useMemo(() => new Set(resolved.map((b) => `${b.side}:${b.line}`)), [resolved]);
   const editedKeys = useMemo(() => new Set(edited.map((b) => `${b.side}:${b.line}`)), [edited]);
@@ -1910,7 +1892,7 @@ export function TextCompare({
     list.current?.ensureVisible(rowToDisplay[row], true);
   }, [rowToDisplay]);
 
-  // araxis:text-review — Comments panel, Statistics, Save comparison archive.
+  // Comments panel, Statistics, Save comparison archive.
   const review = useTextReview({
     bookmarks,
     setBookmarks,
@@ -1924,7 +1906,6 @@ export function TextCompare({
     reveal: revealRow,
     onNotice: setNotice,
   });
-  // araxis:text-review end
 
   /** Ctrl+G: the line bar opens on the caret's side with its line number. */
   const openGoto = () => {
@@ -2101,7 +2082,6 @@ export function TextCompare({
     return true;
   };
 
-  // araxis:text-view end
 
   /**
    * Picks a side's encoding: an unedited file is re-read in it; with unsaved edits
@@ -2129,7 +2109,7 @@ export function TextCompare({
     }
   };
 
-  /** BC's Swap Sides: the files (and their encodings, clipboard text) trade places. */
+  /** Swap Sides: the files (and their encodings, clipboard text) trade places. */
   const swapSides = () => {
     if (left === right) return;
     if (!confirmDiscard("swap the sides")) return;
@@ -2137,13 +2117,13 @@ export function TextCompare({
     changePaths(right, left, true);
   };
 
-  /** What a collapsed run of rows says: BC's Same view hides differences, the others hide same lines. */
+  /** What a collapsed run of rows says: the Same view hides differences, the others hide same lines. */
   const gapLabel = (n: number) =>
     `⋯ ${n.toLocaleString()} ${mode === "same" ? "different" : "same"} line${n === 1 ? "" : "s"} hidden ⋯`;
 
   const changePaths = (l: string, r: string, confirmed = false) => {
     if (!confirmed && !confirmDiscard("open the new files")) return;
-    // bc5:text-ui — a newly chosen file replaces that side's clipboard text; swapping swaps it too.
+    // a newly chosen file replaces that side's clipboard text; swapping swaps it too.
     if (memory.left || memory.right) {
       const swapped = l === right && r === left && l !== r;
       setMemory((m) =>
@@ -2159,26 +2139,24 @@ export function TextCompare({
     const onKey = (e: KeyboardEvent) => {
       // Inactive tabs stay mounted but hidden; only the visible session reacts.
       if (e.defaultPrevented || !root.current?.offsetParent) return;
-      if (embedInactive(root.current)) return; // araxis:folder — split view: the folder list has the keys
-      if (isComposing(e)) return; // araxis:text-view — keys belong to an open IME composition
+      if (embedInactive(root.current)) return; // split view: the folder list has the keys
+      if (isComposing(e)) return; // keys belong to an open IME composition
       const mod = e.ctrlKey || e.metaKey;
       const key = e.key.toLowerCase();
       const t = e.target as HTMLElement | null;
       const inField = !!t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.tagName === "SELECT");
       const plain = !mod && !e.altKey;
       if (mod && !e.shiftKey && !e.altKey && key === "s") save();
-      // bc5:text-ui — find, bookmarks: also from the line editor and the find bar.
+      // find, bookmarks: also from the line editor and the find bar.
       else if (mod && !e.shiftKey && !e.altKey && key === "f") openFind(false);
       else if (e.ctrlKey && !e.shiftKey && !e.altKey && key === "h") openFind(true);
       else if (e.key === "F3" && !mod && !e.altKey) findStep(e.shiftKey ? -1 : 1);
       else if (e.key === "F2" && mod && e.shiftKey) setBookmarks([]);
       else if (e.key === "F2" && mod) toggleBookmark();
       else if (e.key === "F2" && !e.altKey) gotoBookmark(e.shiftKey ? -1 : 1);
-      // araxis:text-view
       else if (keyMatches(e, "text.goToLine")) openGoto();
       else if (keyMatches(e, "text.togglePadding")) togglePadding();
       else if (keyMatches(e, "text.lineEndings")) setShowEol((v) => !v);
-      // araxis:text-view end
       else if (inField) return;
       else if (mod && !e.shiftKey && key === "z") undo();
       else if (mod && (key === "y" || (e.shiftKey && key === "z"))) redo();
@@ -2193,7 +2171,6 @@ export function TextCompare({
         if (!cursor) return;
         void pasteLines(cursor.side, cursor.row);
       }
-      // araxis:text-view
       else if (plain && e.key === "Tab" && selRange && cursor && t?.tagName !== "BUTTON") indentSelection(e.shiftKey ? -1 : 1);
       else if (keyMatches(e, "text.setSyncPoint")) cursor && setSyncPoint(cursor.side, cursor.row);
       else if (keyMatches(e, "text.copyAllToRight")) replaceFile("left");
@@ -2201,7 +2178,6 @@ export function TextCompare({
       else if (keyMatches(e, "text.markResolved")) toggleResolved();
       else if (e.key === "Escape" && syncPick) setSyncPick(null);
       else if (e.key === "Escape" && gotoOpen) setGotoOpen(false);
-      // araxis:text-view end
       else if (e.altKey && e.key === "ArrowDown") goHunk(hunkIdx + 1);
       else if (e.altKey && e.key === "ArrowUp") goHunk(hunkIdx - 1);
       else if (e.altKey && e.key === "ArrowRight") copyTo("right");
@@ -2283,14 +2259,13 @@ export function TextCompare({
     const hits = n != null ? hitRanges.get(`${side}:${n - 1}`) : undefined;
     if (hits) layers.push(hits);
     const runs = composeRuns(text, layers);
-    // araxis:text-view — dimmed line-ending glyph after the text.
+    // dimmed line-ending glyph after the text.
     const eol = n != null ? eolBySide?.[side]?.[n - 1] : undefined;
     const eolMark = eol && EOL_GLYPH[eol] && (
       <span className="tc-eol" title={eol.toUpperCase()}>
         {EOL_GLYPH[eol]}
       </span>
     );
-    // araxis:text-view end
     if (wordWrap) {
       const vlines = wrapRuns(runs, metrics.cols, TAB_SIZE);
       return vlines.map((line, i) => (
@@ -2312,7 +2287,7 @@ export function TextCompare({
     const segs = side === "left" ? row.left : row.right;
     const selected = !!selRange && cursor?.side === side && rowIdx >= selRange[0] && rowIdx <= selRange[1];
     const caret = cursor?.side === side && cursor.row === rowIdx;
-    // araxis:text-view — resolved lines are dimmed; drop target for dragged lines; Ctrl+click sets a sync point.
+    // resolved lines are dimmed; drop target for dragged lines; Ctrl+click sets a sync point.
     const n = lineNo(row, side);
     const done = n != null && resolvedKeys.has(`${side}:${n}`);
     // Moved blocks: tinted, and the block's first line links to where it went (or came from).
@@ -2414,7 +2389,7 @@ export function TextCompare({
   const renderLineNo = (rowIdx: number, row: DiffRow, side: Side) => {
     const n = lineNo(row, side);
     const marked = n != null && bookmarkKeys.has(`${side}:${n}`);
-    // araxis:text-view — edit markers, sync points, dragging a selection by its line numbers.
+    // edit markers, sync points, dragging a selection by its line numbers.
     const edit = n != null && editedKeys.has(`${side}:${n}`);
     const synced = n != null && syncLines[side].has(n);
     const iso = n != null && !!options.isolated?.[side].some((r) => n >= r.start && n <= r.end);
@@ -2422,7 +2397,7 @@ export function TextCompare({
     const inSel = !!selRange && cursor?.side === side && rowIdx >= selRange[0] && rowIdx <= selRange[1];
     const hints = [
       marked ? "Bookmark (F2 / Shift+F2 to jump, Ctrl+F2 to remove)" : "Click or drag to select lines",
-      review.comment(side, n) ?? "", // araxis:text-review
+      review.comment(side, n) ?? "",
       edit ? "edited since the last save" : "",
       synced ? "sync point (right-click to remove)" : "",
       iso ? "isolated: matches no line of the other side (right-click ▸ Remove Isolation)" : "",
@@ -2450,7 +2425,7 @@ export function TextCompare({
         {gutterMark(rowIdx, side)}
         {blameOn && blame.cell(side, n)}
         {n ?? ""}
-        {review.mark(side, n) /* araxis:text-review */}
+        {review.mark(side, n)}
       </span>
     );
   };
@@ -2477,7 +2452,7 @@ export function TextCompare({
         <span
           className={`mid${
             row.leftNo != null && row.rightNo != null && syncPairs.has(`${row.leftNo}:${row.rightNo}`) ? " tc-sync" : ""
-          }`} /* araxis:text-view — sync point */
+          }`} /* sync point */
         />
         {renderLineNo(item.row, row, "right")}
         {renderCell(item.row, row, "right")}
@@ -2522,13 +2497,13 @@ export function TextCompare({
         onChange={onEditorChange}
         onKeyDown={onEditorKey}
         onPaste={onEditorPaste}
-        onSelect={(e) => setCaretIdx(e.currentTarget.selectionStart)} // araxis:text-view — Ln/Col
+        onSelect={(e) => setCaretIdx(e.currentTarget.selectionStart)} // Ln/Col
         // Switching windows keeps the editor; clicking elsewhere in the app closes it.
         onBlur={() => document.hasFocus() && setEditor(null)}
       />
     );
 
-  // ---------- araxis:text-view: the linked (padding off) view ----------
+  // ---------- the linked (padding off) view ----------
 
   /** Padding off: the line editor floats over its line in that side's pane. */
   const linkedEditorPos = useRef<{ side: Side; index: number } | null>(null);
@@ -2565,7 +2540,6 @@ export function TextCompare({
       </div>
     );
   };
-  // araxis:text-view end
 
   /** Per-side "Save", "Clipboard" button, plus the way back to the file while clipboard text is shown. */
   const clipControls = (side: Side) => (
@@ -2586,7 +2560,7 @@ export function TextCompare({
           onClick={() => closeMemory(side)}
           title={(side === "left" ? left : right) ? "Compare the file again" : "Close the clipboard text"}
         >
-          <X size={11} /> {memory[side]?.label ?? CLIPBOARD_LABEL /* bc5:editor-patch */}
+          <X size={11} /> {memory[side]?.label ?? CLIPBOARD_LABEL}
         </button>
       )}
       <button
@@ -2622,7 +2596,7 @@ export function TextCompare({
   const canSave = SIDES.some(sideSavable);
   const allReadOnly = readOnly.left && readOnly.right;
   const hasHunk = fresh && hunkIdx >= 0 && hunkIdx < hunks.length;
-  // araxis:text-view — Ln/Col of the caret (the line editor's caret, else the caret line).
+  // Ln/Col of the caret (the line editor's caret, else the caret line).
   const sideName = (s: Side) => (s === "left" ? "Left" : "Right");
   const caretLine = editor ? editor.line + 1 : cursor && rows[cursor.row] ? lineNo(rows[cursor.row], cursor.side) : null;
   const lnCol =
@@ -2632,16 +2606,15 @@ export function TextCompare({
         ? `${sideName(cursor.side)} · Ln ${caretLine}, Col 1`
         : null;
   const syncHint = isMac ? "⌘+click" : "Ctrl+click";
-  /** BC's status-bar state of the caret line ("Important difference", "Same", …). */
+  /** The status-bar state of the caret line ("Important difference", "Same", …). */
   const lineState = rowStateLabel(cursor ? rows[cursor.row] : detail);
-  // araxis:text-view end
   return (
     <div
       className={`session tc-editable${blameOn ? " tc-blame-on" : ""}${leftGutterRight ? " tc-lgutter-right" : ""}`}
       ref={root}
     >
-      {/* Beyond Compare's text toolbar: view filters, Minor, Rules, section navigation, copy, swap, reload. */}
-      <div className="toolbar tc-bc-toolbar">
+      {/* Text toolbar: view filters, Minor, Rules, section navigation, copy, swap, reload. */}
+      <div className="toolbar tc-icon-toolbar">
         <div className="stack-group" role="group" aria-label="Show">
           {VIEW_FILTERS.map(({ mode: m, label, icon, title }) => (
             <StackButton key={m} icon={icon} label={label} active={mode === m} onClick={() => setMode(m)} title={title} />
@@ -2716,7 +2689,7 @@ export function TextCompare({
         >
           <EyeOff size={14} />
         </button>
-        {/* bc5:converters — formatted HTML view */}
+        {/* formatted HTML view */}
         {(isHtmlPath(left) || isHtmlPath(right)) && (
           <button
             className={`icon-btn${htmlView ? " active" : ""}`}
@@ -2727,7 +2700,7 @@ export function TextCompare({
             <AppWindow size={14} />
           </button>
         )}
-        {/* bc5:text-ui — find, view toggles, bookmarks */}
+        {/* find, view toggles, bookmarks */}
         <button
           className={`icon-btn${findOpen ? " active" : ""}`}
           onClick={() => (findOpen ? setFindOpen(false) : openFind(false))}
@@ -2738,7 +2711,7 @@ export function TextCompare({
         <button
           className={`icon-btn${wordWrapOn ? " active" : ""}`}
           onClick={() => setWordWrap((w) => !w)}
-          disabled={!padding /* araxis:text-view */}
+          disabled={!padding}
           title={padding ? "Word wrap (both sides stay aligned)" : "Word wrap needs vertical padding on"}
         >
           <TextWrap size={14} />
@@ -2774,8 +2747,8 @@ export function TextCompare({
         >
           <Bookmark size={14} />
         </button>
-        {review.toolbar /* araxis:text-review */}
-        {/* araxis:text-view — vertical padding (off = linked lines), line endings, more commands */}
+        {review.toolbar}
+        {/* vertical padding (off = linked lines), line endings, more commands */}
         <button
           className={`icon-btn${padding ? " active" : ""}`}
           onClick={togglePadding}
@@ -2805,7 +2778,6 @@ export function TextCompare({
         >
           <Ellipsis size={14} />
         </button>
-        {/* araxis:text-view end */}
         <span className="sep" />
         <button className="icon-btn" onClick={undo} disabled={!history.undo.length} title="Undo (Ctrl+Z)">
           <Undo2 size={14} />
@@ -2832,7 +2804,6 @@ export function TextCompare({
           <input type="checkbox" checked={autoRefresh} onChange={(e) => setAutoRefresh(e.target.checked)} />
           Auto-refresh
         </label>
-        {/* bc5:reports-script */}
         <button
           className="icon-btn"
           onClick={() => setReporting(true)}
@@ -2842,7 +2813,7 @@ export function TextCompare({
           <FileText size={14} />
         </button>
       </div>
-      {/* bc5:reports-script — reports diff the text as shown, unsaved edits included. */}
+      {/* reports diff the text as shown, unsaved edits included. */}
       {reporting && docs && (
         <ReportDialog
           source={{
@@ -2852,7 +2823,7 @@ export function TextCompare({
             rules: options,
           }}
           onClose={() => setReporting(false)}
-          bookmarks={bookmarks} /* araxis:reports araxis:reports end */
+          bookmarks={bookmarks}
         />
       )}
       {editingRules && (
@@ -2863,10 +2834,9 @@ export function TextCompare({
           lineCounts={docs ? { left: docs.left.lines.length, right: docs.right.lines.length } : undefined}
           onClose={() => (setEditingRules(false), setRulesDraft(null))}
           onApply={setOptions}
-          onOpenFileFormats={() => (setEditingRules(false), setFileFormatsOpen(true))} // bc5:converters
+          onOpenFileFormats={() => (setEditingRules(false), setFileFormatsOpen(true))}
         />
       )}
-      {/* bc5:converters */}
       {fileFormatsOpen && <FileFormatsDialog onClose={() => setFileFormatsOpen(false)} onSaved={() => load()} />}
 
       <PathBar
@@ -2874,17 +2844,17 @@ export function TextCompare({
         right={right}
         directory={false}
         onCompare={changePaths}
-        // bc5:text-ui — with clipboard text on one side, a single chosen file is enough.
+        // with clipboard text on one side, a single chosen file is enough.
         oneSided={!!(memory.left || memory.right)}
       />
 
       {docs && (
         <div className="infobar">
           {SIDES.map((side) => (
-            // bc5:text-engine — per-side encoding picker
+            // per-side encoding picker
             <span key={side} className="tc-side-info">
               <FileInfo doc={docs[side]} readOnly={readOnly[side]} />
-              {!docs[side].binary && !docs[side].memory && !docs[side].conversion?.convertedFrom /* bc5:converters */ && (
+              {!docs[side].binary && !docs[side].memory && !docs[side].conversion?.convertedFrom && (
                 <TextEncodingPicker
                   value={encodings[side]}
                   detected={docs[side].info.encoding}
@@ -2894,7 +2864,7 @@ export function TextCompare({
                   onChange={(enc) => changeEncoding(side, enc)}
                 />
               )}
-              {/* bc5:text-ui — compare clipboard text on this side */}
+              {/* compare clipboard text on this side */}
               {clipControls(side)}
               {blame.note(side)}
             </span>
@@ -2925,7 +2895,7 @@ export function TextCompare({
           onClose={() => setFindOpen(false)}
         />
       )}
-      {/* araxis:text-view — Go to line (Ctrl+G) */}
+      {/* Go to line (Ctrl+G) */}
       {gotoOpen && docs && (
         <div className="tc-goto">
           <Hash size={13} />
@@ -2955,17 +2925,16 @@ export function TextCompare({
           </button>
         </div>
       )}
-      {/* araxis:text-view end */}
 
       <div className="session-body">
-        {review.layer /* araxis:text-review — Bookmarks & comments panel */}
-        {review.dialogs /* araxis:text-review */}
+        {review.layer /* Bookmarks & comments panel */}
+        {review.dialogs}
         {(loading || (docs && !binary && !diffed && !error && !diffError)) && (
           <div className="overlay">Comparing…</div>
         )}
         {error && <div className="banner error">{error}</div>}
         {diffError && <div className="banner error">{diffError}</div>}
-        {/* bc5:converters — converted / read-only sides */}
+        {/* converted / read-only sides */}
         {docs && (
           <ConversionBanner
             conversions={{ left: docs.left.conversion, right: docs.right.conversion }}
@@ -2987,7 +2956,7 @@ export function TextCompare({
             </button>
           </div>
         )}
-        {/* bc5:text-ui — nothing to compare yet: offer the clipboard */}
+        {/* nothing to compare yet: offer the clipboard */}
         {!docs && !loading && !error && (
           <div className="empty-state">
             <p>Choose two files above, or compare text from the clipboard.</p>
@@ -2997,7 +2966,7 @@ export function TextCompare({
                   <ClipboardPaste size={14} /> {memory[side] ? "Reload clipboard" : "Clipboard"} on the {side}
                 </button>
               ))}
-              {/* bc5:editor-patch — one file chosen: edit it on its own instead */}
+              {/* one file chosen: edit it on its own instead */}
               {onOpenEditor && !!(left || right) && !(left && right) && !isRemote(left || right) && (
                 <button onClick={() => onOpenEditor(left || right)} title={left || right}>
                   <FilePen size={14} /> Open in Text Edit
@@ -3006,7 +2975,7 @@ export function TextCompare({
             </div>
           </div>
         )}
-        {diff && !(htmlView && (isHtmlPath(left) || isHtmlPath(right))) /* bc5:converters */ && (
+        {diff && !(htmlView && (isHtmlPath(left) || isHtmlPath(right))) && (
           <div className="text-grid" ref={gridRef}>
             <span className="tc-probe" ref={probeRef} aria-hidden>
               {"0".repeat(PROBE_CHARS)}
@@ -3014,13 +2983,13 @@ export function TextCompare({
             <Overview
               rows={rows}
               marks={bookmarkRows}
-              edits={editRows} // araxis:text-view
+              edits={editRows}
               displayRows={displayRows}
               scroller={listScroller}
               listKind={linked ? "linked" : "padded"}
               moved={moveRows}
             />
-            {/* araxis:text-view — padding off: linked lines */}
+            {/* padding off: linked lines */}
             {linked ? (
               <TextLinkedView
                 ref={list}
@@ -3047,7 +3016,6 @@ export function TextCompare({
                 onWheel={onWheel}
               />
             )}
-            {/* araxis:text-view end */}
           </div>
         )}
         {diff && showDetails && (
@@ -3064,7 +3032,7 @@ export function TextCompare({
 
       {menu.element}
       {gutterMenu.element}
-      {toolsMenu.element /* araxis:text-view */}
+      {toolsMenu.element}
 
       <div className="statusbar">
         {diff &&
@@ -3094,7 +3062,7 @@ export function TextCompare({
           </span>
         )}
         {notice && <span className="tc-notice">{notice}</span>}
-        {/* araxis:text-view — pending sync point */}
+        {/* pending sync point */}
         {syncPick && (
           <span className="tc-syncwait">
             <Link2 size={11} /> Sync point from {syncPick.side} line {syncPick.line}: {syncHint} or right-click a line on the{" "}
@@ -3110,19 +3078,17 @@ export function TextCompare({
                 : "Double-click or Enter to edit · drag line numbers to select · right-click for more"}
           </span>
         )}
-        {/* araxis:text-view */}
         {lnCol && (
           <span className="tc-lncol" title={`Caret position (${shortcutLabel("text.goToLine") || "Ctrl+G"}: go to line)`}>
             {lnCol}
           </span>
         )}
-        {/* araxis:text-view end */}
       </div>
     </div>
   );
 }
 
-/** A Beyond Compare-style toolbar button: icon above its label, pressed when `active`. */
+/** A toolbar button: icon above its label, pressed when `active`. */
 const VIEW_FILTERS: { mode: ViewMode; label: string; icon: ReactNode; title: string }[] = [
   { mode: "all", label: "All", icon: <Columns2 size={16} />, title: "Show all lines" },
   { mode: "diffs", label: "Diffs", icon: <EqualNot size={16} />, title: "Show only differences" },
@@ -3143,11 +3109,11 @@ const THUMB_VAR: Record<string, string> = {
   leftOnly: "--del-fg",
   rightOnly: "--add-fg",
 };
-/** Characters a thumbnail half is wide; longer lines are clipped like BC's. */
+/** Characters a thumbnail half is wide; longer lines are clipped. */
 const THUMB_COLS = 100;
 
 /**
- * Beyond Compare's thumbnail: a miniature of both files (each line a bar as
+ * The thumbnail: a miniature of both files (each line a bar as
  * long as the line, coloured by its difference kind), with a box over the
  * visible part. Click or drag to scroll; bookmarks and edits are marked too.
  */
@@ -3163,7 +3129,7 @@ function Overview({
   rows: DiffRow[];
   /** Bookmarked rows. */
   marks: number[];
-  /** araxis:text-view — rows with edited lines. */
+  /** rows with edited lines. */
   edits?: number[];
   /** The row each display item shows (a hidden-lines gap maps to its first hidden row). */
   displayRows: Int32Array;
@@ -3304,7 +3270,7 @@ function Overview({
       {moved.map((row) => (
         <div key={`mv${row}`} className="ov-move" style={{ top: `${(row / total) * 100}%` }} />
       ))}
-      {/* araxis:text-view — edit markers */}
+      {/* edit markers */}
       {edits.map((row) => (
         <div key={`ed${row}`} className="ov-edit" style={{ top: `${(row / total) * 100}%` }} />
       ))}

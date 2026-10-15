@@ -12,11 +12,11 @@ export type SyncMode =
   | "mirrorRightToLeft"
   /** True two-way sync against the state of the last sync (deletions propagate). */
   | "twoWay"
-  /** bc5:sync-matrix — the user's own action per category (`SyncMatrix`). */
+  /** the user's own action per category (`SyncMatrix`). */
   | "custom";
 
-// ----- bc5:sync-matrix — mirrors crates/pcompare-sync/src/matrix.rs -----
-/** What to do with one category of items (Beyond Compare's TDirSyncOp). */
+// ----- mirrors crates/pcompare-sync/src/matrix.rs -----
+/** What to do with one category of items. */
 export type SyncAction = "leave" | "copyLeftToRight" | "copyRightToLeft" | "deleteLeft" | "deleteRight" | "prompt";
 /** How an item compares, for choosing its action. */
 export type SyncCategory =
@@ -69,9 +69,9 @@ export interface SyncOp {
   reason: string;
   /** The target as the preview saw it; the executor refuses to touch it if it changed since. */
   dstBefore: Snap | null;
-  /** bc5:file-ops — the left side's own path when alignment paired differently named items. */
+  /** the left side's own path when alignment paired differently named items. */
   leftRelPath?: string;
-  /** bc5:sync-matrix — the category that chose this op. */
+  /** the category that chose this op. */
   category?: SyncCategory;
 }
 
@@ -81,7 +81,7 @@ export interface SyncSkip {
   reason: string;
   /** Needs the user's attention (type clash, error, ambiguous change, a "prompt" category). */
   conflict: boolean;
-  /** bc5:sync-matrix — null for type clashes, errors and paths changed on both sides. */
+  /** null for type clashes, errors and paths changed on both sides. */
   category: SyncCategory | null;
   onLeft: boolean;
   onRight: boolean;
@@ -99,7 +99,7 @@ export interface SyncSummary {
   skipped: number;
 }
 
-export type WarningKind = "emptySide" | "massDeletion" | "remotePermanent"; // bc5:remote-write
+export type WarningKind = "emptySide" | "massDeletion" | "remotePermanent";
 
 /** Something about a plan the user must acknowledge before running it. */
 export interface PlanWarning {
@@ -111,7 +111,7 @@ export interface SyncPlan {
   leftRoot: string;
   rightRoot: string;
   mode: SyncMode;
-  /** bc5:sync-matrix — the matrix the plan followed (the mode's preset, or the custom one). */
+  /** the matrix the plan followed (the mode's preset, or the custom one). */
   matrix: SyncMatrix;
   ops: SyncOp[];
   skipped: SyncSkip[];
@@ -142,13 +142,13 @@ export interface ExecOptions {
   /** Refuse to overwrite/delete targets that changed since the preview. */
   checkDrift: boolean;
   disposal: Disposal;
-  /** bc5:file-ops — Windows: copy NTFS owners and ACLs along (best effort). */
+  /** Windows: copy NTFS owners and ACLs along (best effort). */
   copyAcls?: boolean;
-  /** bc5:file-ops — Windows: carry DOS 8.3 short names over (needs administrator rights). */
+  /** Windows: carry DOS 8.3 short names over (needs administrator rights). */
   copyShortNames?: boolean;
-  /** bc5:sync-matrix — Windows/macOS: give copies the source's creation date too. */
+  /** Windows/macOS: give copies the source's creation date too. */
   copyCreated?: boolean;
-  /** bc5:sync-matrix — folders the sync creates get their source folder's dates. */
+  /** folders the sync creates get their source folder's dates. */
   preserveFolderTimes?: boolean;
 }
 
@@ -205,7 +205,7 @@ export const FAILURE_LABELS: Record<FailureKind, string> = {
   other: "Error",
 };
 
-export type ExecPhase = "running" | "retrying" | "deferred" | "paused" | "finished"; // bc5:file-ops — paused
+export type ExecPhase = "running" | "retrying" | "deferred" | "paused" | "finished"; // paused
 
 export interface SyncProgress {
   done: number;
@@ -451,7 +451,7 @@ export interface MergeProgress {
 export const syncApi = {
   /**
    * `reuse` re-plans from the comparison behind the last preview of the same folders and options
-   * (when there is one) instead of rescanning: for changed row actions (bc5:sync-matrix).
+   * (when there is one) instead of rescanning: for changed row actions.
    */
   plan: (
     left: string,
@@ -488,7 +488,7 @@ export const syncApi = {
     return invoke<SyncRun>("sync_execute", { ...rest, onProgress: channel });
   },
   cancel: (runKey: string) => invoke<void>("sync_cancel", { runKey }),
-  /** bc5:file-ops — holds (or resumes) a running sync between files and inside large copies. */
+  /** holds (or resumes) a running sync between files and inside large copies. */
   pause: (runKey: string, paused: boolean) => invoke<void>("sync_pause", { runKey, paused }),
 
   /** The latest interrupted job for this pair (the app crashed or was killed mid-sync). */

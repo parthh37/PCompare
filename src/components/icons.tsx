@@ -1,4 +1,4 @@
-// Colour, filled icons in the spirit of Beyond Compare's: a file icon per
+// Colour, filled icons: a file icon per
 // type (so a tree of mixed files reads at a glance) and toolbar glyphs.
 // Everything is drawn on a 16×16 grid and scaled, so icons stay crisp at any size.
 import type { ReactNode } from "react";
@@ -204,8 +204,8 @@ export type ToolIconName =
   | "text"
   | "hex"
   | "copy"
-  | "report" // bc5:reports-script
-  | "snapshot"; // bc5:archives
+  | "report"
+  | "snapshot";
 
 /** A small page used inside toolbar glyphs. */
 const MiniPage = ({ x = 0, y = 0 }: { x?: number; y?: number }) => (
@@ -343,14 +343,14 @@ const TOOL: Record<ToolIconName, ReactNode> = {
       <MiniPage x={0.5} y={3} />
     </>
   ),
-  // bc5:reports-script — a page with a small bar chart.
+  // a page with a small bar chart.
   report: (
     <>
       <MiniPage x={2} />
       <path d="M6.5 11.5V9M8.5 11.5V6.8M10.5 11.5V8" stroke="#2f7cf6" strokeWidth="1.4" strokeLinecap="round" />
     </>
   ),
-  // bc5:archives — a camera: "Save snapshot"
+  // a camera: "Save snapshot"
   snapshot: (
     <>
       <path d="M1.5 5.5h3l1.2-2h4.6l1.2 2h3v8h-13z" fill="#e8ecf3" stroke={INK} strokeLinejoin="round" />
