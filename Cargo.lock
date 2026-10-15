@@ -5136,6 +5136,7 @@ name = "pcompare"
 version = "1.6.0"
 dependencies = [
  "chrono",
+ "fs4",
  "gethostname",
  "globset",
  "notify",

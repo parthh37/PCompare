@@ -210,3 +210,101 @@
   margin: 8px 0 0;
   line-height: 1.4;
 }
+
+/* ---------- Toolbars: stacked buttons, two rows ---------- */
+.fc-toolbar {
+  gap: 4px;
+  padding: 4px 8px;
+}
+.fc-toolbar .sep {
+  height: 34px;
+  margin: 0 3px;
+}
+.fc-toolbar-2 {
+  padding-top: 2px;
+}
+.fc-toolbar .icon-btn {
+  position: relative;
+  padding: 2px 5px;
+}
+.fc-toolbar > .icon-btn + .icon-btn {
+  margin-left: -2px;
+}
+/* A count on an icon button (running operations, bookmarks). */
+.icon-btn .fop-count {
+  position: absolute;
+  top: -3px;
+  right: -3px;
+  min-width: 14px;
+  padding: 0 3px;
+  border-radius: 7px;
+  background: var(--accent);
+  color: #fff;
+  font-size: 9.5px;
+  line-height: 14px;
+  font-variant-numeric: tabular-nums;
+}
+.fc-filterbox {
+  flex: 0 1 340px;
+  min-width: 180px;
+}
+.fc-filterbox input {
+  flex: 1;
+  min-width: 0;
+  font-family: var(--mono, ui-monospace, monospace);
+  font-size: 12px;
+}
+.fc-find {
+  gap: 4px;
+}
+.fc-find input {
+  width: 140px;
+}
+
+/* Per-side footer under the list: selection and free space. */
+.fc-sidefoot {
+  border-top: 1px solid var(--border);
+  border-bottom: 0;
+  padding: 3px 0;
+}
+.fc-sidefoot > div {
+  display: flex;
+  gap: 8px;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+}
+.fc-sidefoot-right {
+  border-left: 1px solid var(--border);
+}
+
+/* The log: what was loaded, compared, cancelled or refreshed, and when. */
+.fc-log {
+  display: flex;
+  align-items: flex-start;
+  flex: 0 0 auto;
+  height: 66px;
+  border-top: 1px solid var(--border);
+  background: var(--panel-2);
+  font-size: 11.5px;
+}
+.fc-log-lines {
+  flex: 1;
+  height: 100%;
+  overflow-y: auto;
+  padding: 3px 8px;
+  user-select: text;
+}
+.fc-log-lines > div {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.fc-log-time {
+  margin-right: 10px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+.fc-log-error {
+  color: var(--warn);
+}

@@ -556,6 +556,8 @@ export const isRemote = (path: string) => path.toLowerCase().startsWith(REMOTE_S
 
 export const api = {
   pathKind: (path: string) => invoke<PathKind>("path_kind", { path }),
+  /** Free space on the volume of a local folder; null for remote, archive and VCS paths. */
+  diskFree: (path: string) => invoke<{ free: number; volume: string } | null>("disk_free", { path }),
   /** bc5:reports-script — paths plus viewer / title / read-only switches (see cliApi.ts). */
   launchArgs: () => invoke<import("./cliApi").LaunchOptions>("launch_args"),
   /** "Select Left Side for Compare" — shared with the Explorer context menu. */
