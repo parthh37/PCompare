@@ -677,6 +677,7 @@ export default function App() {
             onOpenHex={() => updateTab(t.id, { kind: "hex" })}
             // bc5:editor-patch — the one chosen file, edited on its own in this tab
             onOpenEditor={(p) => updateTab(t.id, { kind: "edit", left: p, right: "", settings: undefined })}
+            onOpenCompare={(l, r) => openTab("text", l, r)}
           />
         );
       case "merge":
