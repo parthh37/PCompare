@@ -447,42 +447,6 @@
   height: 34px;
   margin: 0 3px;
 }
-/* Icon above its label, flat until hovered, sunken while pressed (BC's toggle look). */
-.bc-btn {
-  display: inline-flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 2px;
-  min-width: 44px;
-  height: 42px;
-  padding: 3px 4px;
-  border-color: transparent;
-  background: transparent;
-  font-size: 11px;
-  line-height: 1.1;
-  white-space: nowrap;
-}
-.bc-btn svg.lucide {
-  vertical-align: 0;
-}
-.bc-btn.active {
-  background: var(--accent-tint);
-  border-color: var(--accent-border);
-  color: var(--accent);
-}
-/* All / Diffs / Same / Context are one radio group. */
-.bc-group {
-  display: inline-flex;
-  gap: 1px;
-  padding: 1px;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-}
-.bc-group .bc-btn {
-  min-width: 44px;
-  height: 40px;
-}
 .tc-linestate {
   color: var(--muted);
 }

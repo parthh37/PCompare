@@ -173,10 +173,17 @@ Compares images pixel by pixel: PNG, JPEG, GIF, BMP, ICO, TIFF, WebP, TGA, PNM a
 Compares two folder trees. Red names differ (the older file is grey), purple items exist on one side only, blue (≈) items differ only in unimportant ways. A clock means the contents are the same but the size or timestamp differs. Folders take the colours of everything inside them: a folder holding both newer files and orphans shows red and purple, and its name is bold on the side its newer files are on. **View → Legend** explains every colour and icon.
 
 ## Toolbar
-- **Expand / Collapse** all folders; **Flatten** lists every file at one level.
-- **Swap** exchanges the sides; **Sync** opens Folder Sync for these folders.
-- Display filters show all, differences, same or orphans; name filters include or exclude files and folders.
-- **Refresh** rescans. Folders are watched and rescan by themselves when something changes.
+- **All · Diffs · Same** pick what shows. The ▾ on **Diffs** offers the rest: differences without orphans, no orphans, orphans (either or one side), left or right newer, and newer plus that side's orphans.
+- **Structure ▾** sets when folders show: **Always show folders**, **Compare files and folder structure** (folders follow the display filter like files; the default) or **Compare files only** (just folders holding a shown file). **Ignore folder structure** lists every file at one level.
+- **Minor** (on by default) counts unimportant differences as same: files that differ only in ways the text rules call unimportant (≈). Off, Diffs shows them and Same doesn't.
+- **Rules** opens the session settings. **Copy** copies the selection to the other side (it asks which way when both sides are selected).
+- **Expand / Collapse** open or close every folder. **Select…** selects by criteria and **Files** selects every file shown. **Refresh** (F5) lists and compares both folders again.
+- Second row: **Swap** exchanges the sides, **Stop** (Esc) stops a running compare, and the **Filters** box takes files to include and \`-\`names to exclude, separated by \`;\` (e.g. \`*.rs;*.ts;-target;-*.tmp\`). The **Filters** button opens the size, date, attribute and content filters, and **Peek** shows what the filters leave out, in teal.
+- The small icons on the right: Folder Sync, report, split view, comments, statistics, comparison archive, snapshot, delete, operations, and **View** (attributes column, log, legend).
+- Folders are watched with **Auto-refresh** and compared again when something changes.
+
+## Log and status
+The log under the folders says when a comparison was loaded, how long it took, and what was cancelled, refreshed or failed (**View → Log** shows or hides it). Under each side, the footer shows what is selected there and how much space is free on that disk.
 
 ## Comparing contents
 The session settings choose quick tests (size, timestamp with tolerance) and an optional content compare: binary, CRC-32 or rules-based (text rules, so cosmetic changes count as similar). Right-click a file or folder to compare contents on demand.

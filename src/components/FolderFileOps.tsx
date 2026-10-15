@@ -7,7 +7,7 @@
 // other side or a folder, delete, rename, new folder, attributes, touch —
 // work on the selected side's items, run in the background Operations queue
 // and, when they finish, compare the rows they changed again (or rescan).
-import { ArrowLeftToLine, ArrowRightToLine, ListTodo, Trash } from "lucide-react";
+import { ListTodo, Trash } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type MouseEvent, type ReactNode, type RefObject } from "react";
 import type { FolderCompareOptions, FolderCompareResult, FolderEntry, Side } from "../lib/api";
 import { touchedRows } from "../lib/folderRefresh";
@@ -387,43 +387,38 @@ export function useFolderFileOps({
   };
   const has = (side: Side) => selected.some((e) => e[side]);
 
+  /**
+   * "Copy to Other Side": copies to the side opposite the selection. With
+   * both sides selected `target` is null and the caller asks which side.
+   */
+  const copyTarget: Side | null = sel.side === "both" ? null : otherSide(sel.side);
+  const copyOther = {
+    target: copyTarget,
+    disabled: !selected.length || (copyTarget ? !has(otherSide(copyTarget)) || !rootOf(copyTarget) : !left || !right),
+    title: copyTarget
+      ? tip(`Copy the selection to the ${copyTarget}`, copyTarget === "right" ? "folder.copyToRight" : "folder.copyToLeft")
+      : "Copy the selection to the other side",
+    run: (target: Side) => copyTo("copy", target),
+  };
+
+  /** Icon-only buttons for the toolbar's right-hand cluster. */
   const toolbar = (
     <>
-      <span className="tool-sep" />
       <button
-        className="tool-btn"
-        title={tip("Copy the selection to the right", "folder.copyToRight")}
-        disabled={!has("left") || !right}
-        onClick={() => copyTo("copy", "right")}
-      >
-        <ArrowRightToLine size={20} className="fop-tool" />
-        <span>Copy →</span>
-      </button>
-      <button
-        className="tool-btn"
-        title={tip("Copy the selection to the left", "folder.copyToLeft")}
-        disabled={!has("right") || !left}
-        onClick={() => copyTo("copy", "left")}
-      >
-        <ArrowLeftToLine size={20} className="fop-tool" />
-        <span>← Copy</span>
-      </button>
-      <button
-        className="tool-btn"
+        className="icon-btn"
         title={tip("Delete the selection (Recycle Bin / Trash)", "folder.delete")}
         disabled={!selected.length}
         onClick={() => remove(false)}
       >
-        <Trash size={20} className="fop-tool" />
-        <span>Delete</span>
+        <Trash size={14} />
       </button>
       <button
-        className={`tool-btn${panelOpen ? " active" : ""}`}
-        title={tip("Show background file operations", "folder.operations")}
+        className={`icon-btn${panelOpen ? " active" : ""}`}
+        title={tip(`Background file operations${running ? ` · ${running} running` : ""}`, "folder.operations")}
         onClick={() => setPanelOpen(!panelOpen)}
       >
-        <ListTodo size={20} className="fop-tool" />
-        <span className="fop-badge">{running ? `Ops · ${running}` : "Ops"}</span>
+        <ListTodo size={14} />
+        {running > 0 && <span className="fop-count">{running}</span>}
       </button>
     </>
   );
@@ -572,5 +567,5 @@ export function useFolderFileOps({
   }
 
   // araxis:folder — selectRows added
-  return { sel, selected, onRowClick, onRowContext, menuEntries, rowClass, toolbar, menuItems, panel, overlay, selectRows };
+  return { sel, selected, onRowClick, onRowContext, menuEntries, rowClass, toolbar, copyOther, menuItems, panel, overlay, selectRows };
 }

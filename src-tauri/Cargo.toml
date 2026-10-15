@@ -16,6 +16,7 @@ pcompare-merge = { path = "../crates/pcompare-merge" }
 pcompare-table = { path = "../crates/pcompare-table" }
 pcompare-picture = { path = "../crates/pcompare-picture" }
 pcompare-sync = { path = "../crates/pcompare-sync" }
+fs4 = "0.13"
 pcompare-meta = { path = "../crates/pcompare-meta" }
 pcompare-index = { path = "../crates/pcompare-index" }
 pcompare-db = { path = "../crates/pcompare-db" }

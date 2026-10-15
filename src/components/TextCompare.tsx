@@ -40,7 +40,6 @@ import {
   type ClipboardEvent as ReactClipboardEvent,
   type KeyboardEvent as ReactKeyboardEvent,
   type MouseEvent as ReactMouseEvent,
-  type ButtonHTMLAttributes,
   type ReactNode,
   type WheelEvent,
 } from "react";
@@ -107,6 +106,7 @@ import { FileFormatsDialog } from "./FileFormatsDialog";
 import { HtmlRenderedView, isHtmlPath } from "./HtmlRenderedView";
 // bc5:reports-script — Report… (HTML / text / patch; save, copy, print)
 import { FileText } from "lucide-react";
+import { StackButton } from "./StackButton";
 import { ReportDialog } from "./ReportDialog";
 // araxis:text-view — linked lines, sync points, go to line, block indent, line endings, replace file,
 // resolved / edit markers, IME-safe keys, line drag-and-drop.
@@ -2371,12 +2371,12 @@ export function TextCompare({
     <div className={`session tc-editable${blameOn ? " tc-blame-on" : ""}`} ref={root}>
       {/* Beyond Compare's text toolbar: view filters, Minor, Rules, section navigation, copy, swap, reload. */}
       <div className="toolbar tc-bc-toolbar">
-        <div className="bc-group" role="group" aria-label="Show">
+        <div className="stack-group" role="group" aria-label="Show">
           {VIEW_FILTERS.map(({ mode: m, label, icon, title }) => (
-            <BcButton key={m} icon={icon} label={label} active={mode === m} onClick={() => setMode(m)} title={title} />
+            <StackButton key={m} icon={icon} label={label} active={mode === m} onClick={() => setMode(m)} title={title} />
           ))}
         </div>
-        <BcButton
+        <StackButton
           icon={<Feather size={16} />}
           label="Minor"
           active={ignoreMinor}
@@ -2387,21 +2387,21 @@ export function TextCompare({
               : "Unimportant differences count as differences (click to ignore them)"
           }
         />
-        <BcButton
+        <StackButton
           icon={<SlidersHorizontal size={16} />}
           label={ruleCount ? `Rules · ${ruleCount}` : "Rules"}
           onClick={() => setEditingRules(true)}
           title="Session rules: whitespace, case, algorithm, importance (grammar, regexes, columns), replacements, alignment"
         />
         <span className="sep" />
-        <BcButton
+        <StackButton
           icon={<ArrowUp size={16} />}
           label="Prev Section"
           onClick={() => goHunk(hunkIdx - 1)}
           disabled={!hunks.length}
           title="Previous difference section (Alt+↑)"
         />
-        <BcButton
+        <StackButton
           icon={<ArrowDown size={16} />}
           label="Next Section"
           onClick={() => goHunk(hunkIdx + 1)}
@@ -2409,7 +2409,7 @@ export function TextCompare({
           title="Next difference section (Alt+↓)"
         />
         <span className="sep" />
-        <BcButton
+        <StackButton
           icon={<ArrowLeft size={16} />}
           label="Copy Left"
           onClick={() => copyTo("left")}
@@ -2418,7 +2418,7 @@ export function TextCompare({
             readOnly.left ? READ_ONLY_HINT : "Copy the selected right lines, or else the current section, to the left (Alt+←)"
           }
         />
-        <BcButton
+        <StackButton
           icon={<ArrowRight size={16} />}
           label="Copy Right"
           onClick={() => copyTo("right")}
@@ -2428,14 +2428,14 @@ export function TextCompare({
           }
         />
         <span className="sep" />
-        <BcButton
+        <StackButton
           icon={<ArrowLeftRight size={16} />}
           label="Swap"
           onClick={swapSides}
           disabled={!left || !right || left === right}
           title="Swap sides: exchange the left and right files"
         />
-        <BcButton icon={<RefreshCw size={16} />} label="Reload" onClick={refresh} title="Reload both files (F5)" />
+        <StackButton icon={<RefreshCw size={16} />} label="Reload" onClick={refresh} title="Reload both files (F5)" />
         <span className="spacer" />
         <button
           className="icon-btn"
@@ -2851,20 +2851,6 @@ export function TextCompare({
 }
 
 /** A Beyond Compare-style toolbar button: icon above its label, pressed when `active`. */
-function BcButton({
-  icon,
-  label,
-  active,
-  ...rest
-}: { icon: ReactNode; label: string; active?: boolean } & ButtonHTMLAttributes<HTMLButtonElement>) {
-  return (
-    <button {...rest} className={`bc-btn${active ? " active" : ""}`} aria-pressed={active}>
-      {icon}
-      <span>{label}</span>
-    </button>
-  );
-}
-
 const VIEW_FILTERS: { mode: ViewMode; label: string; icon: ReactNode; title: string }[] = [
   { mode: "all", label: "All", icon: <Columns2 size={16} />, title: "Show all lines" },
   { mode: "diffs", label: "Diffs", icon: <EqualNot size={16} />, title: "Show only differences" },

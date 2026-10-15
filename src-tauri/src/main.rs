@@ -112,6 +112,40 @@ async fn path_kind(app: AppHandle, path: String) -> PathKind {
     pcompare_core::path_kind(path)
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DiskFree {
+    /// Bytes available to this user.
+    free: u64,
+    /// The volume as people name it: `C:\` or `\\server\share` on Windows,
+    /// empty elsewhere (a mount point says little there).
+    volume: String,
+}
+
+/// Free space on the volume holding a local folder, for the folder views'
+/// per-side status. `None` for remote, archive and VCS paths.
+#[tauri::command]
+async fn disk_free(path: String) -> Option<DiskFree> {
+    if path.is_empty() || pcompare_remote::is_remote(&path) || pcompare_remote::is_container_path(&path) {
+        return None;
+    }
+    tauri::async_runtime::spawn_blocking(move || {
+        let free = fs4::available_space(&path).ok()?;
+        Some(DiskFree { free, volume: volume_label(std::path::Path::new(&path)) })
+    })
+    .await
+    .ok()
+    .flatten()
+}
+
+/// The drive or share a Windows path is on (`C:\`), or "" without one.
+fn volume_label(path: &std::path::Path) -> String {
+    match path.components().next() {
+        Some(std::path::Component::Prefix(p)) => format!("{}{}", p.as_os_str().to_string_lossy(), std::path::MAIN_SEPARATOR),
+        _ => String::new(),
+    }
+}
+
 /// Where "Select Left Side for Compare" remembers its path between the
 /// Explorer menu, the in-app menu and the next "Compare to…".
 fn left_selection_file() -> PathBuf {
@@ -453,6 +487,7 @@ fn main() {
         })
         .invoke_handler(tauri::generate_handler![
             path_kind,
+            disk_free,
             launch_args,
             get_left_selection,
             set_left_selection,

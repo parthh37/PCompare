@@ -16,12 +16,15 @@ export type DisplayFilter =
   | "all"
   | "diffs"
   | "diffsNoOrphans"
+  | "noOrphans"
   | "same"
   | "orphans"
   | "leftOrphans"
   | "rightOrphans"
   | "leftNewer"
-  | "rightNewer";
+  | "rightNewer"
+  | "leftNewerOrphans"
+  | "rightNewerOrphans";
 
 export const DISPLAY_FILTERS: { value: DisplayFilter; label: string; primary?: boolean }[] = [
   { value: "all", label: "All", primary: true },
@@ -29,11 +32,41 @@ export const DISPLAY_FILTERS: { value: DisplayFilter; label: string; primary?: b
   { value: "same", label: "Same", primary: true },
   { value: "orphans", label: "Orphans", primary: true },
   { value: "diffsNoOrphans", label: "Differences (no orphans)" },
-  { value: "leftOrphans", label: "Left orphans" },
-  { value: "rightOrphans", label: "Right orphans" },
+  { value: "noOrphans", label: "No orphans" },
   { value: "leftNewer", label: "Left newer" },
   { value: "rightNewer", label: "Right newer" },
+  { value: "leftNewerOrphans", label: "Left newer and left orphans" },
+  { value: "rightNewerOrphans", label: "Right newer and right orphans" },
+  { value: "leftOrphans", label: "Left orphans" },
+  { value: "rightOrphans", label: "Right orphans" },
 ];
+
+/**
+ * When folders show, whatever the display filter: every folder ("always"),
+ * folders that match the filter themselves or hold something shown
+ * ("structure"), or only folders holding a shown file ("filesOnly").
+ */
+export type FolderStructure = "always" | "structure" | "filesOnly";
+
+export const FOLDER_STRUCTURES: { value: FolderStructure; label: string; title: string }[] = [
+  { value: "always", label: "Always show folders", title: "Every folder shows, whatever the display filter" },
+  {
+    value: "structure",
+    label: "Compare files and folder structure",
+    title: "Folders follow the display filter like files: orphan folders show under Orphans, and so on",
+  },
+  { value: "filesOnly", label: "Compare files only", title: "Only folders holding a file that shows; empty folders are hidden" },
+];
+
+/** How the view filters rows, beyond the display filter itself. */
+export interface ViewFilterOptions {
+  structure?: FolderStructure;
+  /**
+   * Unimportant differences ("similar" files, rules-based compare) count as
+   * same. Off, they count as differences: Diffs shows them, Same doesn't.
+   */
+  ignoreMinor?: boolean;
+}
 
 const isOrphan = (s: EntryStatus) => s === "leftOnly" || s === "rightOnly";
 
@@ -196,17 +229,20 @@ export function replaceEntry(entries: FolderEntry[], relPath: string, next: Fold
  * and ignored ones count as same, so "Differences" shows exactly what needs
  * attention.
  */
-export function matchesFilter(entry: FolderEntry, f: DisplayFilter): boolean {
+export function matchesFilter(entry: FolderEntry, f: DisplayFilter, ignoreMinor = true): boolean {
   const e = { status: effectiveStatus(entry) };
+  const same = e.status === "same" || (ignoreMinor && e.status === "similar");
   switch (f) {
     case "all":
       return true;
     case "diffs":
-      return e.status !== "same" && e.status !== "similar";
+      return !same;
     case "diffsNoOrphans":
-      return e.status !== "same" && e.status !== "similar" && !isOrphan(e.status);
+      return !same && !isOrphan(e.status);
+    case "noOrphans":
+      return !isOrphan(e.status);
     case "same":
-      return e.status === "same" || e.status === "similar";
+      return same;
     case "orphans":
       return isOrphan(e.status);
     case "leftOrphans":
@@ -218,6 +254,10 @@ export function matchesFilter(entry: FolderEntry, f: DisplayFilter): boolean {
       return hasDetail(entry, "leftNewer");
     case "rightNewer":
       return hasDetail(entry, "rightNewer");
+    case "leftNewerOrphans":
+      return e.status === "leftOnly" || hasDetail(entry, "leftNewer");
+    case "rightNewerOrphans":
+      return e.status === "rightOnly" || hasDetail(entry, "rightNewer");
   }
 }
 
@@ -239,19 +279,22 @@ export function nameMatcher(query: string): ((name: string) => boolean) | null {
 
 /**
  * Post-order pass: a file is visible if it passes both filters; a folder is
- * visible if any descendant is (or, with no name query, if it matches itself).
+ * visible if any descendant is, or as `structure` says otherwise: always, or
+ * (with no name query) when it matches the display filter itself.
  */
 export function visibleSet(
   entries: FolderEntry[],
   f: DisplayFilter,
   name: ((name: string) => boolean) | null,
+  { structure = "structure", ignoreMinor = true }: ViewFilterOptions = {},
 ): Set<string> {
   const out = new Set<string>();
   const visit = (e: FolderEntry): boolean => {
     let childVisible = false;
     for (const c of e.children) childVisible = visit(c) || childVisible;
-    const self = matchesFilter(e, f) && (!name || (!e.isDir && name(e.name)));
-    const show = (e.isDir && childVisible) || (self && (!e.isDir || !name));
+    const self = matchesFilter(e, f, ignoreMinor) && (!name || (!e.isDir && name(e.name)));
+    const folder = structure === "always" || (structure === "structure" && self && !name);
+    const show = e.isDir ? childVisible || folder : self;
     if (show) out.add(e.relPath);
     return show;
   };
