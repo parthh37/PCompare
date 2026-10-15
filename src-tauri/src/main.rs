@@ -624,6 +624,7 @@ fn main() {
             vcs::vcs_snippets,
             vcs::vcs_detect,
             vcs::vcs_revisions,
+            vcs::vcs_blame,
             // araxis:vcs end
             // automation:shell — sync automation + notification channels (automation.rs)
             automation::automation_tasks,

@@ -28,7 +28,7 @@ use std::process::{Command, Stdio};
 use std::sync::Mutex;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use pcompare_archive::vcs::{self, Revision, VcsKind};
+use pcompare_archive::vcs::{self, Blame, Revision, VcsKind};
 use serde::Serialize;
 
 use crate::{blocking, cli, CmdResult};
@@ -464,6 +464,25 @@ pub async fn vcs_revisions(
     limit: Option<usize>,
 ) -> CmdResult<Vec<Revision>> {
     blocking(move || vcs::recent_revisions(kind, &path, limit.unwrap_or(50).min(500))).await
+}
+
+/// Who last changed each line of a Text Compare side: a working-tree file
+/// (with `text`, its unsaved contents) or a `git:` file at a revision.
+#[tauri::command]
+pub async fn vcs_blame(app: tauri::AppHandle, path: String, text: Option<String>) -> CmdResult<Blame> {
+    blocking(move || {
+        if vcs::is_vcs(&path) {
+            let p = crate::with_remote(&app, [&path, ""], |r| r.archives().resolve_vcs_path(&path))?;
+            return vcs::blame_rev(&p);
+        }
+        if pcompare_remote::is_remote(&path) || pcompare_archive::may_be_container_path(&path) {
+            return Err(pcompare_core::CoreError::Other(
+                "Blame works on files in a local Git working tree and on git: sides".into(),
+            ));
+        }
+        vcs::blame_working(&path, text.as_deref())
+    })
+    .await
 }
 
 #[cfg(test)]

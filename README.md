@@ -69,9 +69,9 @@ A fast, modern file & folder comparison tool for Windows and macOS — inspired 
 ### Phase 3 — Extended features (beyond Beyond Compare)
 - [ ] Structural diff for JSON / YAML / XML (key-order-insensitive)
 - [x] Syntax highlighting · [ ] semantic (AST-aware) code diff
-- [ ] Moved-block detection
+- [x] Moved-block detection (moved lines tinted and linked to where they went)
 - [x] Office/PDF text extraction compare (docx, doc, odt, rtf, pdf)
-- [x] Git integration: compare branches/commits (`git:` / `hg:` sides), difftool / mergetool setup with `--wait` · [ ] blame-aware view <!-- araxis:vcs -->
+- [x] Git integration: compare branches/commits (`git:` / `hg:` sides), difftool / mergetool setup with `--wait` · [x] blame-aware view (git blame gutter; click a commit to compare its change) <!-- araxis:vcs -->
 - [x] Watch mode — live re-compare on file change
 - [ ] AI-generated change summary of a diff
 - [x] Light theme & custom color schemes

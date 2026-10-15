@@ -33,6 +33,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::tree::{self, normalize, Loc, Tree};
 
+mod blame;
+pub use blame::{blame_rev, blame_working, parse_git_blame, Blame, BlameCommit, BlamePrevious};
+
 /// The `git:` path prefix.
 pub const GIT_PREFIX: &str = "git:";
 /// The `hg:` path prefix.
@@ -1367,5 +1370,57 @@ def\x1fd\x1fOlder\x1fAl\x1f1709300000\x1f\x1e\n";
         assert_eq!(r[0].refs, ["main", "v1", "origin/main"]);
         assert_eq!(r[0].time_ms, 1_709_337_600_000);
         assert!(r[1].refs.is_empty());
+    }
+
+    #[test]
+    fn blames_edits_and_revisions() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path().join("repo");
+        std::fs::create_dir_all(&repo).unwrap();
+        if !git(&repo, &["init", "-q", "-b", "main"]) {
+            eprintln!("git isn't installed; skipping");
+            return;
+        }
+        let file = repo.join("a.txt");
+        std::fs::write(&file, "one\ntwo\n").unwrap();
+        assert!(git(&repo, &["add", "."]));
+        assert!(git(&repo, &["commit", "-q", "-m", "first"]));
+        std::fs::write(&file, "one\ntwo\nthree\n").unwrap();
+        assert!(git(&repo, &["commit", "-qam", "second"]));
+        let f = file.to_string_lossy().into_owned();
+
+        let b = blame_working(&f, None).unwrap();
+        assert_eq!(b.lines, [Some(0), Some(0), Some(1)]);
+        assert_eq!(b.commits[0].summary, "first");
+        assert_eq!(b.commits[1].summary, "second");
+        assert_eq!(b.commits[1].previous.as_ref().unwrap().id, b.commits[0].id);
+        assert_eq!(b.commits[0].path, "a.txt");
+
+        // Unsaved edits: an inserted line isn't committed, the rest shift.
+        let b = blame_working(&f, Some("zero\none\ntwo\nthree\n")).unwrap();
+        assert_eq!(b.lines.len(), 4);
+        assert_eq!(b.lines[0], None);
+        assert!(b.lines[1..].iter().all(Option::is_some));
+
+        let at = VcsPath {
+            kind: VcsKind::Git,
+            location: f.clone(),
+            rev: "HEAD~1".into(),
+            inner: String::new(),
+        };
+        let b = blame_rev(&at).unwrap();
+        assert_eq!(b.lines, [Some(0), Some(0)]);
+        let at = VcsPath {
+            location: repo.to_string_lossy().into_owned(),
+            inner: "a.txt".into(),
+            rev: "HEAD".into(),
+            ..at
+        };
+        assert_eq!(blame_rev(&at).unwrap().lines.len(), 3);
+
+        let outside = tmp.path().join("loose.txt");
+        std::fs::write(&outside, "x\n").unwrap();
+        let err = blame_working(&outside.to_string_lossy(), None).unwrap_err();
+        assert!(err.to_string().contains("isn't inside a Git working tree"), "{err}");
     }
 }

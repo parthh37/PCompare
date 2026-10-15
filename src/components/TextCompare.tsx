@@ -121,6 +121,10 @@ import { TextLinkedView } from "./TextLinkedView";
 // araxis:text-review — bookmark comments, statistics, comparison archives.
 import { useTextReview } from "./TextReview";
 // araxis:text-review end
+// Moved blocks and blame: moved lines tinted and linked across; who last changed each line (git blame).
+import { ArrowRightLeft, GitCommitHorizontal } from "lucide-react";
+import type { MovedBlock } from "../lib/api";
+import { useTextBlame } from "./TextBlame";
 import "./TextCompare.css";
 
 const ROW_HEIGHT = 20;
@@ -134,6 +138,8 @@ const TAB_SIZE = 4;
 /** Grid geometry from TextCompare.css (line-number gutters, middle gutter, cell padding). */
 const LN_WIDTH = 52;
 const MID_WIDTH = 40;
+/** Extra width of each line-number gutter while blame is shown (TextCompare.css `.tc-blame-on`). */
+const BLAME_WIDTH = 176;
 const CELL_PAD = 6;
 /** While the inline editor is open, re-compare after this pause in typing. */
 const RECOMPARE_DELAY_MS = 120;
@@ -175,6 +181,10 @@ export interface TextSettings {
   /** Lines marked resolved (dimmed; view-only, the diff is unchanged). */
   resolved?: BookmarkMark[];
   // araxis:text-view end
+  /** Moved blocks are tinted and linked (default on). */
+  moves?: boolean;
+  /** The blame gutter (who last changed each line). */
+  blame?: boolean;
 }
 type DisplayItem = { row: number } | { gap: number };
 
@@ -301,6 +311,8 @@ interface Props {
   onOpenEditor?: (path: string) => void;
   /** bc5:reports-script — sides opened read-only from the command line (`/readonly`). */
   readOnlySides?: { left: boolean; right: boolean };
+  /** Opens another comparison in a new tab (blame: a commit's change to the file). */
+  onOpenCompare?: (left: string, right: string) => void;
 }
 
 /** One side's file as edited in memory. */
@@ -417,6 +429,7 @@ export function TextCompare({
   onDirtyChange,
   onOpenEditor, // bc5:editor-patch
   readOnlySides, // bc5:reports-script
+  onOpenCompare,
 }: Props) {
   const [options, setOptions] = useState<TextDiffOptions>({ ...DEFAULT_TEXT_OPTIONS, ...settings?.options });
   const [mode, setMode] = useState<ViewMode>(settings?.mode ?? "all");
@@ -453,6 +466,8 @@ export function TextCompare({
   // Beyond Compare keeps Line Details open under the panes.
   const [showDetails, setShowDetails] = useState(settings?.lineDetails ?? true);
   const [bookmarks, setBookmarks] = useState<BookmarkMark[]>(settings?.bookmarks ?? []);
+  const [showMoves, setShowMoves] = useState(settings?.moves ?? true);
+  const [blameOn, setBlameOn] = useState(settings?.blame ?? false);
   const reportSettings = useRef(onSettingsChange);
   reportSettings.current = onSettingsChange;
   useEffect(
@@ -469,8 +484,10 @@ export function TextCompare({
         encodings, // bc5:text-engine
         showEol, // araxis:text-view
         resolved, // araxis:text-view
+        moves: showMoves,
+        blame: blameOn,
       }),
-    [options, mode, autoRefresh, ignoreMinor, wordWrapOn, syntaxOn, showDetails, bookmarks, encodings, showEol, resolved],
+    [options, mode, autoRefresh, ignoreMinor, wordWrapOn, syntaxOn, showDetails, bookmarks, encodings, showEol, resolved, showMoves, blameOn],
   );
 
   const [docs, setDocs] = useState<Docs | null>(null);
@@ -614,6 +631,7 @@ export function TextCompare({
     menuItem(showEol ? "Hide Line Endings" : "Show Line Endings", shortcutLabel("text.lineEndings") || null, false, () =>
       setShowEol((v) => !v),
     ),
+    menuItem(showMoves ? "Don't Highlight Moved Blocks" : "Highlight Moved Blocks", null, false, () => setShowMoves((v) => !v)),
   ]);
   /** A short status message (e.g. how many matches Replace All changed). */
   const [notice, setNotice] = useState<string | null>(null);
@@ -816,6 +834,45 @@ export function TextCompare({
     [rows, shown],
   );
 
+  // ---------- moved blocks and blame ----------
+
+  const moves = useMemo(() => new Map<number, MovedBlock>((diff?.moves ?? []).map((m) => [m.id, m])), [diff]);
+  /** Rows in moved blocks, for the overview strip. */
+  const moveRows = useMemo(
+    () => (showMoves ? rows.flatMap((r, i) => (r.leftMove != null || r.rightMove != null ? [i] : [])) : []),
+    [rows, showMoves],
+  );
+  /** Scrolls to the other end of a moved block and puts the caret there. */
+  const jumpToMove = (from: Side, m: MovedBlock) => {
+    const to = other(from);
+    const row = lineRow?.[to][(to === "left" ? m.leftStart : m.rightStart) - 1] ?? -1;
+    if (row < 0) return;
+    setCursor({ side: to, row });
+    setAnchor(null);
+    list.current?.scrollToRow(rowToDisplay[row]);
+  };
+  const blame = useTextBlame({
+    enabled: blameOn,
+    sides: docs && {
+      left: {
+        path: left,
+        lines: docs.left.lines,
+        trailingNewline: docs.left.trailingNewline,
+        dirty: isDirty(docs.left),
+        noHistory: docs.left.memory || !!docs.left.conversion?.convertedFrom,
+      },
+      right: {
+        path: right,
+        lines: docs.right.lines,
+        trailingNewline: docs.right.trailingNewline,
+        dirty: isDirty(docs.right),
+        noHistory: docs.right.memory || !!docs.right.conversion?.convertedFrom,
+      },
+    },
+    onOpenCompare,
+    onNotice: setNotice,
+  });
+
   // Character width and columns per pane, measured from the real font (the editor font size is a preference).
   const gridRef = useRef<HTMLDivElement>(null);
   const probeRef = useRef<HTMLSpanElement>(null);
@@ -828,7 +885,8 @@ export function TextCompare({
     const listEl = grid.querySelector<HTMLElement>(".text-list");
     const measure = () => {
       const charW = probe.getBoundingClientRect().width / PROBE_CHARS || CHAR_WIDTH;
-      const cellW = Math.max(40, ((listEl?.clientWidth ?? grid.clientWidth) - 2 * LN_WIDTH - MID_WIDTH) / 2);
+      const lnW = LN_WIDTH + (blameOn ? BLAME_WIDTH : 0);
+      const cellW = Math.max(40, ((listEl?.clientWidth ?? grid.clientWidth) - 2 * lnW - MID_WIDTH) / 2);
       const cols = Math.max(8, Math.floor((cellW - CELL_PAD - 4) / charW));
       setMetrics((m) => (m.charW === charW && m.cols === cols && m.cellW === cellW ? m : { charW, cols, cellW }));
     };
@@ -838,7 +896,7 @@ export function TextCompare({
     if (listEl) ro.observe(listEl);
     measure();
     return () => ro.disconnect();
-  }, [hasGrid, padding]); // araxis:text-view — the linked view is a different list element
+  }, [hasGrid, padding, blameOn]); // araxis:text-view — the linked view is a different list element
 
   /** Word wrap: each row is as tall as the longer of its two wrapped lines, so both sides stay aligned. */
   const offsets = useMemo(() => {
@@ -1990,11 +2048,15 @@ export function TextCompare({
     // araxis:text-view — resolved lines are dimmed; drop target for dragged lines; Ctrl+click sets a sync point.
     const n = lineNo(row, side);
     const done = n != null && resolvedKeys.has(`${side}:${n}`);
+    // Moved blocks: tinted, and the block's first line links to where it went (or came from).
+    const moveId = showMoves ? (side === "left" ? row.leftMove : row.rightMove) : undefined;
+    const move = moveId != null ? moves.get(moveId) : undefined;
+    const moveStart = move && n === (side === "left" ? move.leftStart : move.rightStart);
     return (
       <div
         className={`tcell${segs ? "" : " absent"}${selected ? " tc-sel" : ""}${caret ? " tc-caret" : ""}${
           done ? " tc-resolved" : ""
-        }${dropCls(rowIdx, side)}`}
+        }${move ? " tc-moved" : ""}${dropCls(rowIdx, side)}`}
         data-tc-row={rowIdx}
         data-tc-side={side}
         onMouseDown={(e) => syncClick(e, rowIdx, side) || pointAt(e, rowIdx, side, false)}
@@ -2003,6 +2065,22 @@ export function TextCompare({
         title={readOnly[side] ? READ_ONLY_HINT : undefined}
       >
         {segs && renderContent(row, side, segs)}
+        {move && moveStart && (
+          <button
+            className="tc-move-tag"
+            title={`${move.len} line${move.len === 1 ? "" : "s"} moved ${
+              side === "left" ? `to right line ${move.rightStart}` : `from left line ${move.leftStart}`
+            } — click to go there`}
+            onMouseDown={(e) => e.stopPropagation()}
+            onDoubleClick={(e) => e.stopPropagation()}
+            onClick={(e) => {
+              e.stopPropagation();
+              jumpToMove(side, move);
+            }}
+          >
+            <ArrowRightLeft size={10} /> {side === "left" ? `moved to ${move.rightStart}` : `moved from ${move.leftStart}`}
+          </button>
+        )}
       </div>
     );
   };
@@ -2091,6 +2169,7 @@ export function TextCompare({
         }}
         onContextMenu={(e) => openMenu(e, rowIdx, side)}
       >
+        {blameOn && blame.cell(side, n)}
         {n ?? ""}
         {review.mark(side, n) /* araxis:text-review */}
       </span>
@@ -2289,7 +2368,7 @@ export function TextCompare({
   const lineState = rowStateLabel(cursor ? rows[cursor.row] : detail);
   // araxis:text-view end
   return (
-    <div className="session tc-editable" ref={root}>
+    <div className={`session tc-editable${blameOn ? " tc-blame-on" : ""}`} ref={root}>
       {/* Beyond Compare's text toolbar: view filters, Minor, Rules, section navigation, copy, swap, reload. */}
       <div className="toolbar tc-bc-toolbar">
         <div className="bc-group" role="group" aria-label="Show">
@@ -2399,6 +2478,13 @@ export function TextCompare({
           title={`Syntax highlighting${langs.left || langs.right ? ` (${(langs.left ?? langs.right)!.name})` : " (no language recognised for these files)"}`}
         >
           <Code size={14} />
+        </button>
+        <button
+          className={`icon-btn${blameOn ? " active" : ""}`}
+          onClick={() => setBlameOn((b) => !b)}
+          title="Blame: who last changed each line (Git). Click a commit to compare it with the version before"
+        >
+          <GitCommitHorizontal size={14} />
         </button>
         <button
           className={`icon-btn${showDetails ? " active" : ""}`}
@@ -2538,6 +2624,7 @@ export function TextCompare({
               )}
               {/* bc5:text-ui — compare clipboard text on this side */}
               {clipControls(side)}
+              {blame.note(side)}
             </span>
           ))}
         </div>
@@ -2659,6 +2746,7 @@ export function TextCompare({
               displayRows={displayRows}
               scroller={listScroller}
               listKind={linked ? "linked" : "padded"}
+              moved={moveRows}
             />
             {/* araxis:text-view — padding off: linked lines */}
             {linked ? (
@@ -2720,6 +2808,11 @@ export function TextCompare({
               <span className="k-changed-fg">{stats!.changed} changed</span>
               <span className="k-leftOnly-fg">{stats!.leftOnly} left only</span>
               <span className="k-rightOnly-fg">{stats!.rightOnly} right only</span>
+              {showMoves && !!diff.moves?.length && (
+                <span className="tc-moved-fg" title={`${stats!.moved ?? 0} lines on each side are in moved blocks`}>
+                  {diff.moves.length} moved block{diff.moves.length === 1 ? "" : "s"}
+                </span>
+              )}
               {stats!.unimportant > 0 && <span className="k-unimportant-fg">{stats!.unimportant} unimportant</span>}
             </>
           ))}
@@ -2807,6 +2900,7 @@ function Overview({
   displayRows,
   scroller,
   listKind,
+  moved = [],
 }: {
   rows: DiffRow[];
   /** Bookmarked rows. */
@@ -2819,6 +2913,8 @@ function Overview({
   scroller: () => HTMLElement | null;
   /** Changes when the list element is replaced (padding on/off), to re-attach the scroll listener. */
   listKind: string;
+  /** Rows in moved blocks. */
+  moved?: number[];
 }) {
   const total = Math.max(rows.length, 1);
   const canvas = useRef<HTMLCanvasElement>(null);
@@ -2946,6 +3042,9 @@ function Overview({
       )}
       {marks.map((row) => (
         <div key={`bm${row}`} className="ov-bm" style={{ top: `${(row / total) * 100}%` }} />
+      ))}
+      {moved.map((row) => (
+        <div key={`mv${row}`} className="ov-move" style={{ top: `${(row / total) * 100}%` }} />
       ))}
       {/* araxis:text-view — edit markers */}
       {edits.map((row) => (

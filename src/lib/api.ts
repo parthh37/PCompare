@@ -125,6 +125,17 @@ export interface DiffRow {
   /** Line terminators; only present with `options.compareLineEndings`. */
   leftEol?: LineEnding;
   rightEol?: LineEnding;
+  /** Id of the `MovedBlock` this side's line belongs to (the row is still left/right only). */
+  leftMove?: number;
+  rightMove?: number;
+}
+
+/** Lines that left one place and reappear, unchanged under the rules, elsewhere (1-based). */
+export interface MovedBlock {
+  id: number;
+  leftStart: number;
+  rightStart: number;
+  len: number;
 }
 
 export interface Hunk {
@@ -135,8 +146,18 @@ export interface Hunk {
 export interface TextDiffResult {
   rows: DiffRow[];
   hunks: Hunk[];
-  stats: { equal: number; unimportant: number; changed: number; leftOnly: number; rightOnly: number };
+  stats: {
+    equal: number;
+    unimportant: number;
+    changed: number;
+    leftOnly: number;
+    rightOnly: number;
+    /** Lines in moved blocks (also counted in leftOnly / rightOnly); absent from older commands. */
+    moved?: number;
+  };
   identical: boolean;
+  /** Moved blocks; their rows carry `leftMove` / `rightMove`. Absent from older commands. */
+  moves?: MovedBlock[];
   /** Grammar id used per side (bc5:text-engine); absent from older commands. */
   leftGrammar?: string | null;
   rightGrammar?: string | null;
