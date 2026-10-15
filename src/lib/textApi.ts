@@ -159,3 +159,15 @@ export function addRange(ranges: { start: number; end: number }[], start: number
   }
   return out;
 }
+
+/** `ranges` without lines `start..end` (1-based, inclusive); ranges straddling them are split. */
+export function removeRange(ranges: { start: number; end: number }[], start: number, end: number) {
+  return ranges.flatMap((r) =>
+    r.end < start || r.start > end
+      ? [r]
+      : [
+          ...(r.start < start ? [{ start: r.start, end: start - 1 }] : []),
+          ...(r.end > end ? [{ start: end + 1, end: r.end }] : []),
+        ],
+  );
+}

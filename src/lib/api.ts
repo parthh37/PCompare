@@ -66,6 +66,8 @@ export interface TextDiffOptions {
   anchors: LinePair[];
   /** Forced separation: these line pairs are never shown side by side. */
   breaks: LinePair[];
+  /** Isolated lines per side: they match nothing and the rest aligns around them (absent = none). */
+  isolated?: { left: LineRange[]; right: LineRange[] };
   // araxis:text-engine
   /** Numbers compare by value, within a tolerance (absent = off). */
   numericTolerance?: import("./textApi").NumericTolerance;
@@ -670,6 +672,14 @@ export const api = {
   cancelSignIn: () => invoke<void>("cancel_sign_in"),
   openProviderConsole: (kind: ProviderKind) => invoke<void>("open_provider_console", { kind }),
   remoteList: (path: string) => invoke<RemoteEntry[]>("remote_list", { path }),
+};
+
+/** A local file handed to the OS (Open With ▸ / Reveal); other sides are refused. */
+export const shellApi = {
+  /** Opens the file in the application associated with its type. */
+  openInDefaultApp: (path: string) => invoke<void>("open_in_default_app", { path }),
+  /** Shows the file selected in Finder / Explorer / the file manager. */
+  revealInFileManager: (path: string) => invoke<void>("reveal_in_file_manager", { path }),
 };
 
 /** The error a cancelled sign-in rejects with (oauth.rs CANCELLED). */
