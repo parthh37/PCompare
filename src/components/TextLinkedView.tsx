@@ -23,9 +23,8 @@ interface Props {
   midWidth: number;
   /** One side's row for display item `d` (a line of that side, or a gap). */
   renderSide: (side: Side, d: number) => ReactNode;
-  /** The current difference: its band is emphasised and gets `renderLinkButtons`. */
+  /** The current difference: its band is emphasised (the copy arrows live in each pane's gutter). */
   currentHunk: number;
-  renderLinkButtons: (hunk: number) => ReactNode;
   onPickHunk: (hunk: number) => void;
   /** Sync points as display indices of their left and right lines. */
   syncLinks: { left: number; right: number }[];
@@ -38,7 +37,7 @@ interface Props {
 const SIDES: Side[] = ["left", "right"];
 
 export const TextLinkedView = forwardRef<VarListHandle, Props>(function TextLinkedView(
-  { layout, rowHeight: RH, midWidth: W, renderSide, currentHunk, renderLinkButtons, onPickHunk, syncLinks, overlay, onWheel, className },
+  { layout, rowHeight: RH, midWidth: W, renderSide, currentHunk, onPickHunk, syncLinks, overlay, onWheel, className },
   ref,
 ) {
   const scroller = useRef<HTMLDivElement>(null);
@@ -151,7 +150,6 @@ export const TextLinkedView = forwardRef<VarListHandle, Props>(function TextLink
 
   // Bands for the blocks on screen on either side.
   const bands: ReactNode[] = [];
-  let buttons: ReactNode = null;
   if (blocks > 0) {
     const from = Math.min(blockAt(layout.l, top.left / RH), blockAt(layout.r, top.right / RH));
     const to = Math.max(blockAt(layout.l, (top.left + height) / RH), blockAt(layout.r, (top.right + height) / RH));
@@ -174,14 +172,6 @@ export const TextLinkedView = forwardRef<VarListHandle, Props>(function TextLink
           onClick={() => h >= 0 && onPickHunk(h)}
         />,
       );
-      if (current) {
-        const mid = (l0 + l1 + r0 + r1) / 4;
-        buttons = (
-          <div className="tc-band-btns" style={{ top: Math.max(0, Math.min(height - RH, mid - RH / 2)), height: RH }}>
-            {renderLinkButtons(h)}
-          </div>
-        );
-      }
     }
   }
   const links = syncLinks.flatMap((s, i) => {
@@ -203,7 +193,6 @@ export const TextLinkedView = forwardRef<VarListHandle, Props>(function TextLink
             {bands}
             {links}
           </svg>
-          {buttons}
         </div>
         {pane("right")}
       </div>

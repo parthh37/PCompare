@@ -1,32 +1,69 @@
 /* Editing additions to the Text Compare view (base styles live in styles.css). */
 .tc-editable .trow {
-  grid-template-columns: 52px 1fr 40px 52px 1fr;
+  /* Each side: [copy arrow + line number] [text]; a thin divider between the sides. */
+  grid-template-columns: 68px 1fr 14px 68px 1fr;
 }
 .tc-editable .trow .mid {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 1px;
   background: var(--panel);
   border-inline: 1px solid var(--border);
 }
 .tc-editable .trow.current .mid {
   background: var(--accent-tint);
 }
-.tc-gutter-btn {
-  height: 17px;
-  width: 17px;
-  padding: 0;
-  justify-content: center;
-  border-radius: 3px;
-  border-color: transparent;
-  background: transparent;
-  color: var(--muted);
+
+/*
+ * Copy arrows sit in an 18px slot at the outer (left) edge of each side's
+ * gutter: on the first row of every difference section, pointing at the
+ * other side, with a bracket down the section's remaining rows.
+ */
+.tc-editable .trow .ln {
+  padding-left: 18px;
 }
-.tc-gutter-btn:hover:not(:disabled) {
-  color: var(--accent);
-  border-color: var(--accent);
+.tc-garrow {
+  position: absolute;
+  left: 1px;
+  top: 1px;
+  width: 17px;
+  height: 18px;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  border-radius: 3px;
+  background: transparent;
+  color: var(--tc-arrow-stroke);
+  cursor: pointer;
+}
+.tc-garrow svg {
+  fill: var(--tc-arrow-fill);
+}
+.tc-garrow.sel svg {
+  fill: var(--tc-arrow-sel-fill);
+}
+.tc-garrow:hover:not(:disabled) {
   background: var(--panel-2);
+}
+.tc-garrow:hover:not(:disabled) svg {
+  fill: var(--tc-arrow-hot);
+}
+.tc-garrow:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+.tc-gbracket {
+  position: absolute;
+  left: 9px;
+  top: 0;
+  bottom: 0;
+  width: 0;
+  border-left: 1px solid var(--tc-bracket);
+  pointer-events: none;
+}
+.tc-gbracket.end {
+  bottom: 5px;
+  width: 5px;
+  border-bottom: 1px solid var(--tc-bracket);
 }
 .tc-editable .tcell {
   position: relative;
@@ -200,7 +237,7 @@
 .tc-editable .trow .ln.tc-bm::before {
   content: "";
   position: absolute;
-  left: 5px;
+  left: 20px;
   top: 4px;
   width: 7px;
   height: 11px;
@@ -213,9 +250,6 @@
   right: 0;
   height: 2px;
   background: var(--bookmark);
-}
-.tc-gutter-btn.sel {
-  color: var(--accent);
 }
 
 .tc-editable .toolbar .icon-btn.active {
@@ -258,10 +292,21 @@
   --tc-band-del: rgba(239, 68, 68, 0.22);
   --tc-band-add: rgba(34, 197, 94, 0.22);
   --tc-band-unimp: rgba(127, 166, 217, 0.18);
+  /* Copy arrows: yellow block arrows with a dark outline, as in classic compare tools. */
+  --tc-arrow-fill: #e8c547;
+  --tc-arrow-hot: #ffd84d;
+  --tc-arrow-sel-fill: #7fb2ff;
+  --tc-arrow-stroke: #4a3f17;
+  --tc-bracket: #7d8592;
 }
 :root[data-theme="light"] {
   --tc-edited: #d97706;
   --tc-sync: #8b5cf6;
+  --tc-arrow-fill: #f5d55a;
+  --tc-arrow-hot: #ffe066;
+  --tc-arrow-sel-fill: #9cc3ff;
+  --tc-arrow-stroke: #5c4a10;
+  --tc-bracket: #6b7280;
 }
 
 /* Padding off: one sticky viewport holding two panes and the linking gutter. */
@@ -281,7 +326,7 @@
   min-width: 0;
 }
 .tc-editable .trow.tc-prow {
-  grid-template-columns: 52px 1fr;
+  grid-template-columns: 68px 1fr;
 }
 /* Right pane rows: the text cell is the 2nd child there too, so restate the right-side colours. */
 .tc-pane-right .k-changed > .tcell:nth-child(2) .seg-changed {
@@ -328,15 +373,6 @@
 .tc-band.current {
   stroke: var(--accent);
   stroke-width: 1.5;
-}
-.tc-band-btns {
-  position: absolute;
-  left: 0;
-  right: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 1px;
 }
 .tc-sync-link {
   stroke: var(--tc-sync);
@@ -568,10 +604,10 @@
 
 /* ---------- blame gutter: 170px of commit info before each line number ---------- */
 .tc-editable.tc-blame-on .trow {
-  grid-template-columns: 228px 1fr 40px 228px 1fr;
+  grid-template-columns: 244px 1fr 14px 244px 1fr;
 }
 .tc-editable.tc-blame-on .trow.tc-prow {
-  grid-template-columns: 228px 1fr;
+  grid-template-columns: 244px 1fr;
 }
 .tc-editable.tc-blame-on .trow .ln {
   display: flex;
