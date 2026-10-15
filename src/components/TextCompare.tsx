@@ -1,4 +1,8 @@
 import {
+  ArrowBigLeft,
+  ArrowBigLeftDash,
+  ArrowBigRight,
+  ArrowBigRightDash,
   ArrowDown,
   ArrowLeft,
   ArrowLeftRight,
@@ -10,8 +14,6 @@ import {
   FoldVertical,
   ArrowUp,
   Binary,
-  ChevronLeft,
-  ChevronRight,
   Lock,
   Redo2,
   RefreshCw,
@@ -19,8 +21,6 @@ import {
   Undo2,
   // bc5:text-ui
   Bookmark,
-  ChevronsLeft,
-  ChevronsRight,
   ClipboardPaste,
   Code,
   PanelBottom,
@@ -135,8 +135,13 @@ const MAX_UNDO = 200;
 const READ_ONLY_HINT =
   "Read-only: remote files and converted documents (see File formats) can't be edited here; copy or convert the file locally to edit it";
 const TAB_SIZE = 4;
-/** Grid geometry from TextCompare.css (line-number gutters, middle gutter, cell padding). */
-const LN_WIDTH = 52;
+/**
+ * Grid geometry from TextCompare.css: each side's gutter (copy-arrow slot +
+ * line number), the thin divider between the sides with padding on, the
+ * linking gutter with padding off, and the cell padding.
+ */
+const LN_WIDTH = 68;
+const DIVIDER_WIDTH = 14;
 const MID_WIDTH = 40;
 /** Extra width of each line-number gutter while blame is shown (TextCompare.css `.tc-blame-on`). */
 const BLAME_WIDTH = 176;
@@ -523,67 +528,110 @@ export function TextCompare({
   /** Caret line (`cursor`) and, for a line selection, the row it was extended from. */
   const [cursor, setCursor] = useState<{ side: Side; row: number } | null>(null);
   const [anchor, setAnchor] = useState<number | null>(null);
-  const [hoverHunk, setHoverHunk] = useState(-1);
-  // Row context menu; built after the right-click's caret/hunk change renders.
+  /**
+   * The copy commands both right-click menus start with: the section (or the
+   * selected lines) and the single line, to the other side; then the reverse
+   * direction, taking the other side's version into this one.
+   */
+  const copyItems = (side: Side, row: number): MenuItems => {
+    const to = other(side);
+    const h = rowHunk[row];
+    const ownSel = selRange && cursor?.side === side ? selRange : null;
+    const keys = (s: Side) => `Alt+${s === "right" ? "→" : "←"}`;
+    return [
+      menuItem(
+        `Copy ${ownSel ? "Selected Lines" : "Section"} to ${sideName(to)}`,
+        keys(to),
+        !fresh || readOnly[to] || (!ownSel && h < 0),
+        () => (ownSel ? copySelection(side, ownSel) : copyHunk(h, side)),
+      ),
+      menuItem(`Copy Line to ${sideName(to)}`, null, !fresh || readOnly[to] || h < 0, () => copyLineFrom(side, row)),
+      menuItem(`Copy Section to ${sideName(side)}`, ownSel ? null : keys(side), !fresh || readOnly[side] || h < 0, () =>
+        copyHunk(h, to),
+      ),
+    ];
+  };
+
+  // Right-click menus; built after the right-click's caret/hunk change renders.
+  // The text menu follows the reference layout: copy, clipboard, line edits,
+  // section and alignment commands, then this side's file.
   const menu = useContextMenu(({ side, row }: { side: Side; row: number }): MenuItems => {
     if (!rows[row]) return [];
     const line = lineNo(rows[row], side);
+    const h = rowHunk[row];
     const resolvedHere = rangeResolved(resolveRange());
-    const what = selRange ? "Selection" : "Line";
     const lines = selRange ? "Selected Lines" : "Line";
+    const editable = fresh && !readOnly[side];
     return [
-      ...(rowHunk[row] >= 0
+      ...copyItems(side, row),
+      ...(selRange && cursor?.side === side
         ? [
-            menuItem("Copy to Right", "Alt+→", !fresh || readOnly.right, () => copyHunk(rowHunk[row], "left")),
-            menuItem("Copy to Left", "Alt+←", !fresh || readOnly.left, () => copyHunk(rowHunk[row], "right")),
+            menuItem("Indent Lines", "Tab", !editable, () => indentSelection(1)),
+            menuItem("Un-indent Lines", "Shift+Tab", !editable, () => indentSelection(-1)),
           ]
         : []),
-      menuItem(
-        `Copy ${what} to Right`,
-        selRange && cursor?.side === "left" ? "Alt+→" : null,
-        !fresh || readOnly.right || !pickRange,
-        () => copySelection("left", pickRange),
+      SEPARATOR,
+      menuItem(`Cut ${lines}`, "Ctrl+X", !editable || !hasLines(pickRange, side), cutLines),
+      menuItem(`Copy ${lines}`, "Ctrl+C", !pickRange, () => copyLinesText()),
+      menuItem(selRange ? "Paste over Selected Lines" : "Paste Above This Line", "Ctrl+V", !editable, () =>
+        pasteLines(side, row),
       ),
-      menuItem(
-        `Copy ${what} to Left`,
-        selRange && cursor?.side === "right" ? "Alt+←" : null,
-        !fresh || readOnly.left || !pickRange,
-        () => copySelection("right", pickRange),
+      menuItem(`Delete ${lines}`, selRange ? "Del" : null, !editable || !hasLines(pickRange, side), () =>
+        deleteLines(pickRange),
       ),
       SEPARATOR,
-      menuItem(line == null ? "Insert Line Here" : "Edit Line", "Enter", !fresh || readOnly[side], () => startEdit(row, side)),
-      menuItem(
-        `Delete ${lines}`,
-        selRange ? "Del" : null,
-        !fresh || readOnly[side] || !hasLines(pickRange, side),
-        () => deleteLines(pickRange),
-      ),
-      menuItem(`Copy ${lines} as Text`, "Ctrl+C", !pickRange, () => copyLinesText()),
+      menuItem(line == null ? "Insert Line Here" : "Edit Line", "Enter", !editable, () => startEdit(row, side)),
+      line != null && menuItem("Insert Line Before", null, !editable, () => insertLine(side, row, false)),
+      line != null && menuItem("Insert Line After", null, !editable, () => insertLine(side, row, true)),
       SEPARATOR,
-      menuItem("Toggle Bookmark", "Ctrl+F2", false, toggleBookmark),
-      menuItem("Comment…", null, false, () => review.commentRow(side, row)), // araxis:text-review
-      menuItem("Find…", "Ctrl+F", false, () => openFind(false)),
-      menuItem(showDetails ? "Hide Line Details" : "Line Details", null, false, () => setShowDetails((s) => !s)),
+      menuItem("Select Section", null, h < 0, () => selectSection(side, h)),
       // araxis:text-view
-      SEPARATOR,
       menuItem(
-        syncPick && syncPick.side !== side ? `Link to ${syncPick.side} line ${syncPick.line}` : "Set Sync Point Here",
+        syncPick && syncPick.side !== side ? `Align With ${syncPick.side} line ${syncPick.line}` : "Align With… (Sync Point)",
         syncHint,
         !fresh || line == null,
         () => setSyncPoint(side, row),
       ),
       line != null && syncLines[side].has(line) && menuItem("Remove Sync Point", null, false, () => removeSyncPoint(side, row)),
-      menuItem(resolvedHere ? "Unmark Resolved" : "Mark Resolved", shortcutLabel("text.markResolved") || null, false, () =>
+      menuItem(resolvedHere ? "Unmark Resolved" : "Mark Resolved (Ignore)", shortcutLabel("text.markResolved") || null, false, () =>
         markResolved(resolvedHere),
       ),
-      ...(selRange && cursor?.side === side
-        ? [
-            menuItem("Indent Lines", "Tab", !fresh || readOnly[side], () => indentSelection(1)),
-            menuItem("Un-indent Lines", "Shift+Tab", !fresh || readOnly[side], () => indentSelection(-1)),
-          ]
-        : []),
+      // araxis:text-view end
+      SEPARATOR,
+      menuItem("Toggle Bookmark", "Ctrl+F2", false, toggleBookmark),
+      menuItem("Comment…", null, false, () => review.commentRow(side, row)), // araxis:text-review
+      menuItem("Find…", "Ctrl+F", false, () => openFind(false)),
+      menuItem(showDetails ? "Hide Line Details" : "Line Details", null, false, () => setShowDetails((s) => !s)),
+      SEPARATOR,
+      !memory[side] && menuItem(`Save ${sideName(side)} File`, null, !sideSavable(side) || saving, () => save(side)),
+      menuItem(`Open Clipboard on ${sideName(side)}`, null, false, () => loadClipboard(side)),
       menuItem("Copy All to Right", shortcutLabel("text.copyAllToRight") || null, readOnly.right, () => replaceFile("left")),
       menuItem("Copy All to Left", shortcutLabel("text.copyAllToLeft") || null, readOnly.left, () => replaceFile("right")),
+    ];
+  });
+
+  /** Right-click on a line number: copy commands, bookmarks and sync points (the gutter's own menu). */
+  const gutterMenu = useContextMenu(({ side, row }: { side: Side; row: number }): MenuItems => {
+    if (!rows[row]) return [];
+    const line = lineNo(rows[row], side);
+    const none = !bookmarks.length;
+    return [
+      ...copyItems(side, row),
+      SEPARATOR,
+      menuItem("Toggle Bookmark", "Ctrl+F2", false, toggleBookmark),
+      menuItem("Next Bookmark", "F2", none, () => gotoBookmark(1)),
+      menuItem("Previous Bookmark", "Shift+F2", none, () => gotoBookmark(-1)),
+      menuItem("Clear Bookmarks", "Ctrl+Shift+F2", none, () => setBookmarks([])),
+      SEPARATOR,
+      menuItem("Select Section", null, rowHunk[row] < 0, () => selectSection(side, rowHunk[row])),
+      // araxis:text-view
+      menuItem(
+        syncPick && syncPick.side !== side ? `Align With ${syncPick.side} line ${syncPick.line}` : "Align With… (Sync Point)",
+        syncHint,
+        !fresh || line == null,
+        () => setSyncPoint(side, row),
+      ),
+      line != null && syncLines[side].has(line) && menuItem("Remove Sync Point", null, false, () => removeSyncPoint(side, row)),
       // araxis:text-view end
     ];
   });
@@ -886,7 +934,7 @@ export function TextCompare({
     const measure = () => {
       const charW = probe.getBoundingClientRect().width / PROBE_CHARS || CHAR_WIDTH;
       const lnW = LN_WIDTH + (blameOn ? BLAME_WIDTH : 0);
-      const cellW = Math.max(40, ((listEl?.clientWidth ?? grid.clientWidth) - 2 * lnW - MID_WIDTH) / 2);
+      const cellW = Math.max(40, ((listEl?.clientWidth ?? grid.clientWidth) - 2 * lnW - DIVIDER_WIDTH) / 2);
       const cols = Math.max(8, Math.floor((cellW - CELL_PAD - 4) / charW));
       setMetrics((m) => (m.charW === charW && m.cols === cols && m.cellW === cellW ? m : { charW, cols, cellW }));
     };
@@ -1175,6 +1223,63 @@ export function TextCompare({
     const text = shown[cursor.side].slice(span.start, span.end).join("\n");
     writeClipboardText(span.end - span.start > 1 ? `${text}\n` : text).catch((e) => setError(errorMessage(e)));
     return true;
+  };
+
+  /** Copy Line to Right / Left: just `row`'s line (removing the other side's line there when `from` has none). */
+  const copyLineFrom = (from: Side, row: number) => {
+    if (copyRowsFrom(row, row + 1, from)) setAnchor(null);
+  };
+
+  /** Ctrl+X without a text selection: the selected lines (or the caret line) to the clipboard, then deleted. */
+  const cutLines = () => {
+    if (copyLinesText()) deleteLines(pickRange);
+  };
+
+  /**
+   * Ctrl+V without the line editor: the clipboard's lines replace the
+   * selected lines on `side`, or go in above `row`'s line.
+   */
+  const pasteLines = async (side: Side, row: number) => {
+    if (!docs || !fresh || readOnly[side] || !rows[row]) return;
+    const range = selRange && cursor?.side === side ? selRange : null;
+    let text: string;
+    try {
+      text = await readClipboardText();
+    } catch (e) {
+      setError(`Could not read the clipboard: ${errorMessage(e)}`);
+      return;
+    }
+    if (!text) return;
+    const lines = text.replace(/\r\n?/g, "\n").replace(/\n$/, "").split("\n");
+    const span = range
+      ? lineSpan(rows, range[0], range[1] + 1, side)
+      : { start: lineSpan(rows, row, row + 1, side).start, end: lineSpan(rows, row, row + 1, side).start };
+    commitSide(side, replaceLines(docs[side].lines, span.start, span.end, lines), {
+      start: span.start,
+      removed: span.end - span.start,
+      inserted: lines.length,
+    });
+    setAnchor(null);
+    setNotice(`Pasted ${lines.length} line${lines.length === 1 ? "" : "s"} (Ctrl+Z undoes)`);
+  };
+
+  /** Insert Line Before / After: an empty line next to `row`'s line, opened for typing. */
+  const insertLine = (side: Side, row: number, after: boolean) => {
+    if (!docs || !fresh || readOnly[side] || !rows[row]) return;
+    const n = lineNo(rows[row], side);
+    if (n == null) return startEdit(row, side);
+    const at = after ? n : n - 1;
+    commitSide(side, replaceLines(docs[side].lines, at, at, [""]), { start: at, removed: 0, inserted: 1 });
+    openEditor(side, at, 0);
+    setAnchor(null);
+  };
+
+  /** Select Section: every row of difference section `h`, on `side`. */
+  const selectSection = (side: Side, h: number) => {
+    if (h < 0 || h >= hunks.length) return;
+    setHunkIdx(h);
+    setAnchor(hunks[h].startRow);
+    setCursor({ side, row: hunks[h].endRow - 1 });
   };
 
   // ---------- line editing ----------
@@ -1926,6 +2031,13 @@ export function TextCompare({
       else if (mod && !e.shiftKey && !e.altKey && key === "c") {
         // A text selection inside the panes copies as usual; otherwise copy whole lines.
         if (window.getSelection()?.toString() || !copyLinesText()) return;
+      } else if (mod && !e.shiftKey && !e.altKey && key === "x") {
+        if (window.getSelection()?.toString() || !cursor || !fresh || readOnly[cursor.side] || !hasLines(pickRange, cursor.side))
+          return;
+        cutLines();
+      } else if (mod && !e.shiftKey && !e.altKey && key === "v") {
+        if (!cursor) return;
+        void pasteLines(cursor.side, cursor.row);
       }
       // araxis:text-view
       else if (plain && e.key === "Tab" && selRange && cursor && t?.tagName !== "BUTTON") indentSelection(e.shiftKey ? -1 : 1);
@@ -1988,7 +2100,8 @@ export function TextCompare({
     }
   };
 
-  const openMenu = (e: ReactMouseEvent, row: number, side: Side) => {
+  /** Right-click on a text cell, or on a line number (`gutter`: that menu has the bookmark commands). */
+  const openMenu = (e: ReactMouseEvent, row: number, side: Side, gutter = false) => {
     e.preventDefault();
     const inSelection = !!selRange && cursor?.side === side && row >= selRange[0] && row <= selRange[1];
     if (!inSelection) {
@@ -1996,7 +2109,7 @@ export function TextCompare({
       setAnchor(null);
     }
     if (rowHunk[row] >= 0) setHunkIdx(rowHunk[row]);
-    menu.open(e, { side, row });
+    (gutter ? gutterMenu : menu).open(e, { side, row });
   };
 
   /** One side of a row: diff marks, syntax colours and find hits layered into runs, wrapped if needed. */
@@ -2085,54 +2198,63 @@ export function TextCompare({
     );
   };
 
-  const gutterButton = (to: Side, title: string, onClick: () => void, selection = false) => (
-    <button
-      key={to}
-      className={`tc-gutter-btn${selection ? " sel" : ""}`}
-      disabled={!fresh || readOnly[to]}
-      title={readOnly[to] ? READ_ONLY_HINT : title}
-      onMouseDown={(e) => e.stopPropagation()}
-      onClick={(e) => {
-        e.stopPropagation();
-        onClick();
-      }}
-    >
-      {selection ? (
-        to === "right" ? <ChevronsRight size={13} /> : <ChevronsLeft size={13} />
-      ) : to === "right" ? (
-        <ChevronRight size={13} />
-      ) : (
-        <ChevronLeft size={13} />
-      )}
-    </button>
-  );
+  /** The copy arrow in `from`'s gutter; it always points at the other side. */
+  const gutterArrow = (from: Side, title: string, onClick: () => void, selection: boolean) => {
+    const to = other(from);
+    const Icon = selection
+      ? to === "right"
+        ? ArrowBigRightDash
+        : ArrowBigLeftDash
+      : to === "right"
+        ? ArrowBigRight
+        : ArrowBigLeft;
+    return (
+      <button
+        className={`tc-garrow${selection ? " sel" : ""}`}
+        disabled={!fresh}
+        title={title}
+        onMouseDown={(e) => e.stopPropagation()}
+        onDoubleClick={(e) => e.stopPropagation()}
+        onContextMenu={(e) => e.stopPropagation()}
+        onClick={(e) => {
+          e.stopPropagation();
+          onClick();
+        }}
+      >
+        <Icon size={17} strokeWidth={1.5} />
+      </button>
+    );
+  };
 
   /**
-   * Adaptive copy buttons in the middle gutter: on the first row of a line
-   * selection, one button copying just those lines away from their side;
-   * otherwise on the hovered or current difference, pointing away from the
-   * caret's side when the caret is in it (both ways when it is not).
+   * What `side`'s gutter shows on `rowIdx`, at the outer edge of its pane:
+   * a copy arrow on the first row of every difference section (pointing at
+   * the other side) and a bracket down the rest of the section. A line
+   * selection on this side gets its own arrow and bracket instead, and hides
+   * the section marks it overlaps there.
    */
-  const renderGutter = (rowIdx: number, h: number) => {
-    if (selRange && cursor && rowIdx === selRange[0]) {
-      const to = other(cursor.side);
-      const n = selRange[1] - selRange[0] + 1;
-      return gutterButton(
-        to,
-        `Copy the ${n} selected line${n === 1 ? "" : "s"} to the ${to} (Alt+${to === "right" ? "→" : "←"})`,
-        () => copySelection(cursor.side, selRange),
-        true,
-      );
+  const gutterMark = (rowIdx: number, side: Side) => {
+    const to = other(side);
+    if (readOnly[to]) return null;
+    const keys = `(Alt+${to === "right" ? "→" : "←"})`;
+    const ownSel = selRange && cursor?.side === side ? selRange : null;
+    let first: number;
+    let last: number;
+    if (ownSel && rowIdx >= ownSel[0] && rowIdx <= ownSel[1]) {
+      [first, last] = ownSel;
+      if (rowIdx === first) {
+        const n = last - first + 1;
+        return gutterArrow(side, `Copy ${n === 1 ? "Line" : `${n} Lines`} to ${sideName(to)} ${keys}`, () => copySelection(side, ownSel), true);
+      }
+    } else {
+      const h = rowHunk[rowIdx];
+      if (h < 0) return null;
+      first = hunks[h].startRow;
+      last = hunks[h].endRow - 1;
+      if (ownSel && ownSel[0] <= last && ownSel[1] >= first) return null;
+      if (rowIdx === first) return gutterArrow(side, `Copy Section to ${sideName(to)} ${keys}`, () => copyHunk(h, side), false);
     }
-    if (h < 0 || hunks[h].startRow !== rowIdx || (h !== hunkIdx && h !== hoverHunk)) return null;
-    if (selRange && selRange[0] < hunks[h].endRow && selRange[1] >= hunks[h].startRow) return null;
-    const from = cursor && rowHunk[cursor.row] === h ? cursor.side : null;
-    const targets = (from ? [other(from)] : (["right", "left"] as Side[])).filter((to) => !readOnly[to]);
-    return targets.map((to) =>
-      gutterButton(to, `Copy this difference to the ${to} (Alt+${to === "right" ? "→" : "←"})`, () =>
-        copyHunk(h, other(to)),
-      ),
-    );
+    return <span className={`tc-gbracket${rowIdx === last ? " end" : ""}`} />;
   };
 
   const renderLineNo = (rowIdx: number, row: DiffRow, side: Side) => {
@@ -2167,8 +2289,9 @@ export function TextCompare({
           }
           pointAt(e, rowIdx, side, true);
         }}
-        onContextMenu={(e) => openMenu(e, rowIdx, side)}
+        onContextMenu={(e) => openMenu(e, rowIdx, side, true)}
       >
+        {gutterMark(rowIdx, side)}
         {blameOn && blame.cell(side, n)}
         {n ?? ""}
         {review.mark(side, n) /* araxis:text-review */}
@@ -2189,7 +2312,6 @@ export function TextCompare({
         className={`trow k-${row.kind}${inHunk ? " current" : ""}`}
         onClick={() => h >= 0 && h !== hunkIdx && setHunkIdx(h)}
         onMouseEnter={(e) => {
-          setHoverHunk(h);
           const side = dragSide.current;
           if (side && e.buttons & 1) setCursor({ side, row: item.row });
         }}
@@ -2200,9 +2322,7 @@ export function TextCompare({
           className={`mid${
             row.leftNo != null && row.rightNo != null && syncPairs.has(`${row.leftNo}:${row.rightNo}`) ? " tc-sync" : ""
           }`} /* araxis:text-view — sync point */
-        >
-          {renderGutter(item.row, h)}
-        </span>
+        />
         {renderLineNo(item.row, row, "right")}
         {renderCell(item.row, row, "right")}
       </div>
@@ -2280,7 +2400,6 @@ export function TextCompare({
         className={`trow tc-prow k-${row.kind}${h >= 0 && h === hunkIdx ? " current" : ""}`}
         onClick={() => h >= 0 && h !== hunkIdx && setHunkIdx(h)}
         onMouseEnter={(e) => {
-          setHoverHunk(h);
           if (dragSide.current === side && e.buttons & 1) setCursor({ side, row: item.row });
         }}
       >
@@ -2289,14 +2408,6 @@ export function TextCompare({
       </div>
     );
   };
-
-  /** Copy buttons on the current difference's band. */
-  const renderLinkButtons = (h: number) =>
-    (["right", "left"] as Side[])
-      .filter((to) => !readOnly[to])
-      .map((to) =>
-        gutterButton(to, `Copy this difference to the ${to} (Alt+${to === "right" ? "→" : "←"})`, () => copyHunk(h, other(to))),
-      );
   // araxis:text-view end
 
   /** Per-side "Save", "Clipboard" button, plus the way back to the file while clipboard text is shown. */
@@ -2735,7 +2846,7 @@ export function TextCompare({
           </div>
         )}
         {diff && !(htmlView && (isHtmlPath(left) || isHtmlPath(right))) /* bc5:converters */ && (
-          <div className="text-grid" ref={gridRef} onMouseLeave={() => setHoverHunk(-1)}>
+          <div className="text-grid" ref={gridRef}>
             <span className="tc-probe" ref={probeRef} aria-hidden>
               {"0".repeat(PROBE_CHARS)}
             </span>
@@ -2758,7 +2869,6 @@ export function TextCompare({
                 midWidth={MID_WIDTH}
                 renderSide={renderSide}
                 currentHunk={hunkIdx}
-                renderLinkButtons={renderLinkButtons}
                 onPickHunk={setHunkIdx}
                 syncLinks={syncLinks}
                 overlay={linkedOverlay()}
@@ -2792,6 +2902,7 @@ export function TextCompare({
       </div>
 
       {menu.element}
+      {gutterMenu.element}
       {toolsMenu.element /* araxis:text-view */}
 
       <div className="statusbar">
