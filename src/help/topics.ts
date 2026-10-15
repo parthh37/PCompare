@@ -289,10 +289,17 @@ Schema and data compare for SQL Server, MySQL/MariaDB, PostgreSQL and SQLite.
 Pick a saved connection (or create one) and a database for each side. Passwords are kept in the OS keychain.
 
 ## Schema compare
-Tables (columns, keys, indexes, foreign keys, checks), views, procedures, functions, triggers and sequences, with side-by-side DDL. Tick objects to include them in the **sync script**.
+Tables (columns, keys, indexes, foreign keys, checks), views, procedures, functions, triggers and sequences, with side-by-side DDL.
 
 ## Data compare
-Rows are matched by primary key (or a unique index, or key columns you choose) with cell-level differences. Options cover case, whitespace, numeric tolerance and date-time precision. Generate a data sync script for the ticked tables, review it, then run it.
+Rows are matched by primary key (or a unique index, or key columns you choose) with cell-level differences. Options cover case, whitespace, numeric tolerance and date-time precision.
+
+## Copying changes
+Every difference has two arrows: **→** copies it into the right database, **←** into the left one (click an active arrow again to undo). Arrows work on single objects, a whole group (all tables, all views…), a whole table's data, or single rows in the middle of the row grid. **Alt+→** / **Alt+←** pick the selected object or table.
+
+Nothing is changed while you pick. **Review changes** lists what will happen in plain words, per database: what is added, updated and deleted. **Apply** then builds and runs the SQL in the background, in all-or-nothing batches, and compares again. **Show SQL** in the review shows (and lets you copy or save) the exact statements first.
+
+Copying a row that refers to another row (a foreign key) needs that row on the other side too: pick both, or copy the whole table.
 `,
   },
   {

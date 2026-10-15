@@ -1,4 +1,4 @@
-import { open, save } from "@tauri-apps/plugin-dialog";
+import { open } from "@tauri-apps/plugin-dialog";
 import {
   ArrowLeft,
   ArrowLeftRight,
@@ -6,7 +6,7 @@ import {
   ChevronDown,
   ChevronRight,
   CircleCheck,
-  Copy,
+  ClipboardCheck,
   Equal,
   EqualNot,
   Eye,
@@ -14,12 +14,12 @@ import {
   Layers,
   ListOrdered,
   LoaderCircle,
+  PanelLeft,
+  PanelRight,
   Pencil,
   Play,
   Plus,
   Rows3,
-  Save,
-  ScrollText,
   Search,
   Settings2,
   SquareFunction,
@@ -37,7 +37,6 @@ import {
   dbPathLabel,
   DEFAULT_DATA_OPTIONS,
   DEFAULT_SCHEMA_OPTIONS,
-  DEFAULT_SCRIPT_OPTIONS,
   ENGINE_INFO,
   KIND_LABEL,
   OBJECT_KINDS,
@@ -46,6 +45,7 @@ import {
   type Cell,
   type DataCompareOptions,
   type DataCompareResult,
+  type DataRow,
   type DbConnection,
   type DbProgress,
   type DiffStatus,
@@ -55,17 +55,31 @@ import {
   type RowStatus,
   type SchemaCompareOptions,
   type SchemaCompareResult,
-  type ScriptOptions,
   type SideInfo,
-  type SyncScript,
   type TableDataDiff,
   type TableDataSummary,
 } from "../lib/dbApi";
+import {
+  commonDir,
+  describeObject,
+  emptyPlan,
+  objectHints,
+  pickAll,
+  planSize,
+  rowHints,
+  rowKeyId,
+  tableHints,
+  type ChangePlan,
+  type MoveDir,
+  type PlainChange,
+  type RowPick,
+} from "../lib/dbChanges";
 import { basename } from "../lib/format";
 import { matches, shortcutLabel } from "../lib/keymap";
 import { mergeApi } from "../lib/mergeApi";
 import type { CompareProps } from "../lib/sessionProps";
 import { DbConnectionDialog, describeConfig, EngineBadge, SQLITE_FILTERS } from "./DbConnectionDialog";
+import { DbReviewDialog } from "./DbReviewDialog";
 import { Modal } from "./Modal";
 import { VirtualList } from "./VirtualList";
 import "./TableCompare.css";
@@ -85,15 +99,13 @@ export interface DbSettings {
   dataFilter: DataFilter;
   schemaOptions: SchemaCompareOptions;
   dataOptions: DataCompareOptions;
-  /** Script dialog choices (ids are picked per comparison and not saved). */
-  scriptOptions: Omit<ScriptOptions, "ids">;
 }
 
 const STATUS_ICON: Record<DiffStatus, LucideIcon> = {
   same: Equal,
   different: EqualNot,
-  leftOnly: ArrowLeft,
-  rightOnly: ArrowRight,
+  leftOnly: PanelLeft,
+  rightOnly: PanelRight,
 };
 const STATUS_LABEL: Record<DiffStatus, string> = {
   same: "Identical",
@@ -115,8 +127,6 @@ const DATA_ROW = 22;
 const CHAR_WIDTH = 7.4;
 const MIN_COL = 56;
 const MAX_COL = 320;
-/** Script lines rendered with highlighting; longer scripts are shown as plain text. */
-const HIGHLIGHT_LINES = 4000;
 const NEW_CONNECTION = "\u0000new";
 const OPEN_FILE = "\u0000file";
 
@@ -126,7 +136,7 @@ const matchesSchema = (o: ObjectDiff, f: SchemaFilter) =>
 const tableIdentical = (t: TableDataSummary) => !t.error && t.status === "same";
 const matchesData = (t: TableDataSummary, f: DataFilter) =>
   f === "all" || (f === "errors" ? !!t.error : f === "same" ? tableIdentical(t) : !tableIdentical(t) && !t.error);
-/** Tables that a data script can sync: on both sides, comparable, not identical. */
+/** Tables whose rows can be copied: on both sides, comparable, not identical. */
 const scriptable = (t: TableDataSummary) => !t.error && t.status === "different";
 
 const splitLines = (text: string | null) => (text ? text.replace(/\r\n?/g, "\n").replace(/\n$/, "").split("\n") : []);
@@ -163,7 +173,6 @@ function restore(s: Partial<DbSettings> | undefined): DbSettings {
       ...s?.dataOptions,
       rules: { ...DEFAULT_DATA_OPTIONS.rules, ...s?.dataOptions?.rules },
     },
-    scriptOptions: { ...DEFAULT_SCRIPT_OPTIONS, ...s?.scriptOptions },
   };
 }
 
@@ -174,12 +183,11 @@ export function DbCompare({ left, right, onPathsChange, settings, onSettingsChan
   const [dataFilter, setDataFilter] = useState<DataFilter>(initial.dataFilter);
   const [schemaOptions, setSchemaOptions] = useState(initial.schemaOptions);
   const [dataOptions, setDataOptions] = useState(initial.dataOptions);
-  const [scriptOptions, setScriptOptions] = useState(initial.scriptOptions);
   const reportSettings = useRef(onSettingsChange);
   reportSettings.current = onSettingsChange;
   useEffect(
-    () => reportSettings.current?.({ mode, schemaFilter, dataFilter, schemaOptions, dataOptions, scriptOptions }),
-    [mode, schemaFilter, dataFilter, schemaOptions, dataOptions, scriptOptions],
+    () => void reportSettings.current?.({ mode, schemaFilter, dataFilter, schemaOptions, dataOptions }),
+    [mode, schemaFilter, dataFilter, schemaOptions, dataOptions],
   );
 
   const root = useRef<HTMLDivElement>(null);
@@ -187,7 +195,9 @@ export function DbCompare({ left, right, onPathsChange, settings, onSettingsChan
   const [editing, setEditing] = useState<{ side: Side; connection?: DbConnection } | null>(null);
   const [notice, setNotice] = useState<{ tone: "ok" | "error"; text: string } | null>(null);
   const [showOptions, setShowOptions] = useState(false);
-  const [scriptFor, setScriptFor] = useState<Mode | null>(null);
+  const [reviewing, setReviewing] = useState(false);
+  /** What the ← / → arrows lined up; nothing touches a database until the review is applied. */
+  const [plan, setPlan] = useState<ChangePlan>(emptyPlan);
 
   const loadConnections = useCallback(
     () =>
@@ -280,10 +290,19 @@ export function DbCompare({ left, right, onPathsChange, settings, onSettingsChan
     dbApi.cancel().catch((e) => setNotice({ tone: "error", text: errorMessage(e) }));
   };
 
+  /** Alt+← / Alt+→ act on the selected object or table (set by the effect below the selection state). */
+  const pickSelected = useRef<(dir: MoveDir) => void>(() => {});
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       // Inactive tabs stay mounted but hidden; only the visible one reacts.
-      if (!matches(e, "database.refresh") || !root.current?.offsetParent) return;
+      if (!root.current?.offsetParent) return;
+      const dir: MoveDir | null = matches(e, "database.copyToRight") ? "toRight" : matches(e, "database.copyToLeft") ? "toLeft" : null;
+      if (dir && !(e.target instanceof HTMLInputElement || e.target instanceof HTMLSelectElement)) {
+        e.preventDefault();
+        pickSelected.current(dir);
+        return;
+      }
+      if (!matches(e, "database.refresh")) return;
       e.preventDefault();
       compare(mode);
     };
@@ -293,13 +312,14 @@ export function DbCompare({ left, right, onPathsChange, settings, onSettingsChan
 
   // ---------- schema view state ----------
   const [selectedObj, setSelectedObj] = useState<string | null>(null);
-  const [checkedObjs, setCheckedObjs] = useState<Set<string>>(new Set());
   const [search, setSearch] = useState("");
   const [collapsed, setCollapsed] = useState<Set<ObjectKind>>(new Set());
 
   useEffect(() => {
     const objs = schema?.objects ?? [];
-    setCheckedObjs(new Set(objs.filter((o) => o.status !== "same").map((o) => o.id)));
+    // Keep picks that still point at a difference (e.g. after an apply or an options change).
+    const live = new Set(objs.filter((o) => o.status !== "same").map((o) => o.id));
+    setPlan((p) => ({ ...p, objects: new Map([...p.objects].filter(([id]) => live.has(id))) }));
     setSelectedObj((sel) =>
       sel && objs.some((o) => o.id === sel) ? sel : (objs.find((o) => o.status !== "same") ?? objs[0])?.id ?? null,
     );
@@ -337,7 +357,6 @@ export function DbCompare({ left, right, onPathsChange, settings, onSettingsChan
 
   // ---------- data view state ----------
   const [selectedTable, setSelectedTable] = useState<string | null>(null);
-  const [checkedTables, setCheckedTables] = useState<Set<string>>(new Set());
   const [tableDiff, setTableDiff] = useState<TableDataDiff | null>(null);
   const [tableBusy, setTableBusy] = useState(false);
   const [tableError, setTableError] = useState<string | null>(null);
@@ -346,7 +365,13 @@ export function DbCompare({ left, right, onPathsChange, settings, onSettingsChan
 
   useEffect(() => {
     const tables = data?.tables ?? [];
-    setCheckedTables(new Set(tables.filter(scriptable).map((t) => t.id)));
+    // Keep picks whose table still differs; a picked row that now matches just produces no SQL.
+    const live = new Set(tables.filter(scriptable).map((t) => t.id));
+    setPlan((p) => ({
+      ...p,
+      tables: new Map([...p.tables].filter(([id]) => live.has(id))),
+      rows: new Map([...p.rows].filter(([id]) => live.has(id))),
+    }));
     setSelectedTable((sel) =>
       sel && tables.some((t) => t.id === sel) ? sel : (tables.find(scriptable) ?? tables[0])?.id ?? null,
     );
@@ -389,12 +414,60 @@ export function DbCompare({ left, right, onPathsChange, settings, onSettingsChan
   const crossEngine = !!sides && sides.left.engine !== sides.right.engine;
   const isBusy = busy[mode];
   const error = errors[mode];
-  const scriptIds = mode === "schema" ? checkedObjs : checkedTables;
+  const anySides: Record<Side, SideInfo> | null = sides ?? (schema ?? data ? { left: (schema ?? data)!.left, right: (schema ?? data)!.right } : null);
 
-  const toggle = (set: Set<string>, ids: string[], on: boolean) => {
-    const next = new Set(set);
-    ids.forEach((id) => (on ? next.add(id) : next.delete(id)));
-    return next;
+  // ---------- picks ----------
+  const pickObjects = (ids: string[], dir: MoveDir | undefined) =>
+    setPlan((p) => ({ ...p, objects: pickAll(p.objects, ids, dir) }));
+  /** A whole-table pick replaces any row picks in that table. */
+  const pickTables = (ids: string[], dir: MoveDir | undefined) =>
+    setPlan((p) => {
+      const rows = new Map(p.rows);
+      if (dir) ids.forEach((id) => rows.delete(id));
+      return { ...p, tables: pickAll(p.tables, ids, dir), rows };
+    });
+  const pickRow = (tableId: string, row: DataRow, dir: MoveDir | undefined) =>
+    setPlan((p) => {
+      const rows = new Map(p.rows);
+      const picks = new Map(rows.get(tableId));
+      const k = rowKeyId(row.key);
+      if (dir) picks.set(k, { dir, key: row.key, status: row.status });
+      else picks.delete(k);
+      if (picks.size) rows.set(tableId, picks);
+      else rows.delete(tableId);
+      return { ...p, rows };
+    });
+  const removeRef = (ref: PlainChange["ref"]) => {
+    if (ref.kind === "object") pickObjects([ref.id], undefined);
+    else if (ref.kind === "table") pickTables([ref.id], undefined);
+    else {
+      const { id, dir } = ref;
+      setPlan((p) => {
+        const rows = new Map(p.rows);
+        const kept = new Map([...(rows.get(id) ?? [])].filter(([, r]) => r.dir !== dir));
+        if (kept.size) rows.set(id, kept);
+        else rows.delete(id);
+        return { ...p, rows };
+      });
+    }
+  };
+  const planned = planSize(plan);
+  const plannedTotal = planned.toRight + planned.toLeft;
+
+  pickSelected.current = (dir) => {
+    if (mode === "schema") {
+      const o = schema?.objects.find((x) => x.id === selectedObj);
+      if (o && o.status !== "same") pickObjects([o.id], plan.objects.get(o.id) === dir ? undefined : dir);
+    } else {
+      const t = data?.tables.find((x) => x.id === selectedTable);
+      if (t && scriptable(t)) pickTables([t.id], plan.tables.get(t.id) === dir ? undefined : dir);
+    }
+  };
+
+  /** After applying, both views are stale: recompare this one now and the other when it is next shown. */
+  const refreshAll = () => {
+    attempted.current = { schema: "", data: "" };
+    compare(mode);
   };
 
   // ---------- rendering ----------
@@ -419,8 +492,8 @@ export function DbCompare({ left, right, onPathsChange, settings, onSettingsChan
     if ("group" in item) {
       const Icon = KIND_ICON[item.group];
       const syncable = item.objs.filter((o) => o.status !== "same").map((o) => o.id);
-      const on = syncable.filter((id) => checkedObjs.has(id)).length;
       const open = !collapsed.has(item.group);
+      const many = `${syncable.length} differing ${KIND_LABEL[item.group].toLowerCase()}`;
       return (
         <div
           className="db-group"
@@ -433,46 +506,41 @@ export function DbCompare({ left, right, onPathsChange, settings, onSettingsChan
             })
           }
         >
-          <input
-            type="checkbox"
-            checked={syncable.length > 0 && on === syncable.length}
-            ref={(el) => {
-              if (el) el.indeterminate = on > 0 && on < syncable.length;
-            }}
-            disabled={!syncable.length}
-            onClick={(e) => e.stopPropagation()}
-            onChange={(e) => setCheckedObjs((c) => toggle(c, syncable, e.target.checked))}
-            title="Include in the sync script"
-          />
           {open ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
           <Icon size={13} className="db-kind-icon" />
           <span>{KIND_LABEL[item.group]}</span>
           <span className="db-count">{item.objs.length}</span>
+          <MoveArrows
+            value={commonDir(plan.objects, syncable)}
+            onChange={(d) => pickObjects(syncable, d)}
+            hints={{ toRight: `Copy all ${many} to ${labels.right}`, toLeft: `Copy all ${many} to ${labels.left}` }}
+            disabled={!syncable.length}
+          />
         </div>
       );
     }
     const o = item.obj;
     const Icon = STATUS_ICON[o.status];
+    const dir = plan.objects.get(o.id);
     return (
       <div
-        className={`db-obj s-${o.status}${o.id === selectedObj ? " selected" : ""}`}
+        className={`db-obj s-${o.status}${o.id === selectedObj ? " selected" : ""}${dir ? ` planned ${dir}` : ""}`}
         onClick={() => setSelectedObj(o.id)}
         title={`${objectName(o.name)} — ${STATUS_LABEL[o.status]}`}
       >
-        <input
-          type="checkbox"
-          checked={checkedObjs.has(o.id)}
-          disabled={o.status === "same"}
-          onClick={(e) => e.stopPropagation()}
-          onChange={(e) => setCheckedObjs((c) => toggle(c, [o.id], e.target.checked))}
-          aria-label="Include in the sync script"
-        />
         <Icon size={13} className={`s-${o.status}-fg`} />
         <span className="db-obj-name">
           {o.name.schema && <span className="muted">{o.name.schema}.</span>}
           {o.name.name}
         </span>
         {o.changes.length > 0 && <span className="db-count">{o.changes.length}</span>}
+        <MoveArrows
+          value={dir}
+          onChange={(d) => pickObjects([o.id], d)}
+          hints={objectHints(o, labels)}
+          disabled={o.status === "same"}
+          hidden={o.status === "same"}
+        />
       </div>
     );
   };
@@ -497,19 +565,21 @@ export function DbCompare({ left, right, onPathsChange, settings, onSettingsChan
     );
     const n = (v: number, cls = "") => <span className={`num${v && cls ? ` ${cls}` : ""}`}>{v.toLocaleString()}</span>;
     const oneSided = t.status === "leftOnly" || t.status === "rightOnly";
+    const dir = plan.tables.get(t.id);
+    const rowsPicked = plan.rows.get(t.id)?.size ?? 0;
     return (
       <div
-        className={`db-trow${t.id === selectedTable ? " selected" : ""}${t.error ? " err" : ""}`}
+        className={`db-trow${t.id === selectedTable ? " selected" : ""}${t.error ? " err" : ""}${dir ? ` planned ${dir}` : ""}`}
         onClick={() => setSelectedTable(t.id)}
       >
         <span className="check">
-          <input
-            type="checkbox"
-            checked={checkedTables.has(t.id)}
+          <MoveArrows
+            value={dir}
+            onChange={(d) => pickTables([t.id], d)}
+            hints={tableHints(labels)}
             disabled={!scriptable(t)}
-            onClick={(e) => e.stopPropagation()}
-            onChange={(e) => setCheckedTables((c) => toggle(c, [t.id], e.target.checked))}
-            aria-label="Include in the sync script"
+            disabledHint={blockedTableHint(t)}
+            partial={rowsPicked > 0}
           />
         </span>
         <span className="name" title={name}>
@@ -525,7 +595,10 @@ export function DbCompare({ left, right, onPathsChange, settings, onSettingsChan
         {oneSided ? <span /> : n(t.different, "s-different-fg")}
         {oneSided ? <span /> : n(t.leftOnly, "s-leftOnly-fg")}
         {oneSided ? <span /> : n(t.rightOnly, "s-rightOnly-fg")}
-        {status}
+        <span className="db-tstatus">
+          {status}
+          {rowsPicked > 0 && <span className="db-rows-picked">{rowsPicked.toLocaleString()} picked</span>}
+        </span>
       </div>
     );
   };
@@ -593,11 +666,12 @@ export function DbCompare({ left, right, onPathsChange, settings, onSettingsChan
           <Settings2 size={14} /> Options
         </button>
         <button
-          onClick={() => setScriptFor(mode)}
-          disabled={!result || isBusy || scriptIds.size === 0}
-          title={scriptIds.size ? `Generate a sync script for ${scriptIds.size} selected item(s)` : "Select differences to script"}
+          className={plannedTotal ? "primary" : ""}
+          onClick={() => setReviewing(true)}
+          disabled={busy.schema || busy.data || plannedTotal === 0}
+          title={plannedTotal ? "See the changes in plain words, then apply them" : "Use the ← → arrows next to a difference to plan a change"}
         >
-          <ScrollText size={14} /> Generate script
+          <ClipboardCheck size={14} /> Review changes{plannedTotal > 0 && <span className="sync-count">{plannedTotal}</span>}
         </button>
       </div>
 
@@ -696,7 +770,13 @@ export function DbCompare({ left, right, onPathsChange, settings, onSettingsChan
             </div>
             <div className="db-detail">
               {selected ? (
-                <ObjectDetail obj={selected} diff={ddl?.id === selected.id ? ddl.diff : null} labels={labels} />
+                <ObjectDetail
+                  obj={selected}
+                  diff={ddl?.id === selected.id ? ddl.diff : null}
+                  labels={labels}
+                  dir={plan.objects.get(selected.id)}
+                  onPick={(d) => pickObjects([selected.id], d)}
+                />
               ) : (
                 <div className="empty-state">Select an object to see its differences.</div>
               )}
@@ -709,14 +789,14 @@ export function DbCompare({ left, right, onPathsChange, settings, onSettingsChan
             <div className="db-tables">
               <div className="db-trow db-thead">
                 <span className="check">
-                  <input
-                    type="checkbox"
-                    checked={tables.some(scriptable) && tables.filter(scriptable).every((t) => checkedTables.has(t.id))}
+                  <MoveArrows
+                    value={commonDir(plan.tables, tables.filter(scriptable).map((t) => t.id))}
+                    onChange={(d) => pickTables(tables.filter(scriptable).map((t) => t.id), d)}
+                    hints={{
+                      toRight: `Make every differing table in ${labels.right} match ${labels.left}`,
+                      toLeft: `Make every differing table in ${labels.left} match ${labels.right}`,
+                    }}
                     disabled={!tables.some(scriptable)}
-                    onChange={(e) =>
-                      setCheckedTables((c) => toggle(c, tables.filter(scriptable).map((t) => t.id), e.target.checked))
-                    }
-                    title="Include all differing tables in the sync script"
                   />
                 </span>
                 <span>Table</span>
@@ -738,6 +818,11 @@ export function DbCompare({ left, right, onPathsChange, settings, onSettingsChan
             <div className="db-rows">
               {selectedSummary ? (
                 <TablePane
+                  labels={labels}
+                  tableDir={plan.tables.get(selectedSummary.id)}
+                  rowPicks={plan.rows.get(selectedSummary.id)}
+                  onPickTable={(d) => pickTables([selectedSummary.id], d)}
+                  onPickRow={(row, d) => pickRow(selectedSummary.id, row, d)}
                   summary={selectedSummary}
                   diff={tableDiff}
                   busy={tableBusy}
@@ -755,6 +840,28 @@ export function DbCompare({ left, right, onPathsChange, settings, onSettingsChan
         )}
       </div>
 
+      {plannedTotal > 0 && (
+        <div className="db-plan">
+          <span className="db-plan-label">Planned:</span>
+          {planned.toLeft > 0 && (
+            <span className="db-plan-chip" title={`Changes that will be made in ${labels.left}`}>
+              <ArrowLeft size={12} /> {planned.toLeft} to {labels.left}
+            </span>
+          )}
+          {planned.toRight > 0 && (
+            <span className="db-plan-chip" title={`Changes that will be made in ${labels.right}`}>
+              {planned.toRight} to {labels.right} <ArrowRight size={12} />
+            </span>
+          )}
+          <span className="muted">Nothing is changed until you apply.</span>
+          <span className="spacer" />
+          <button onClick={() => setPlan(emptyPlan())}>Clear</button>
+          <button className="primary" onClick={() => setReviewing(true)} disabled={busy.schema || busy.data}>
+            <ClipboardCheck size={14} /> Review &amp; apply…
+          </button>
+        </div>
+      )}
+
       <div className="statusbar">
         {mode === "schema" && s && schema && (
           <>
@@ -769,7 +876,7 @@ export function DbCompare({ left, right, onPathsChange, settings, onSettingsChan
               </>
             )}
             <span className="spacer" />
-            <span className="muted">{checkedObjs.size} selected for sync</span>
+            <span className="muted">Use ← → to copy a difference ({shortcutLabel("database.copyToLeft")} / {shortcutLabel("database.copyToRight")})</span>
           </>
         )}
         {mode === "data" && data && (
@@ -784,7 +891,7 @@ export function DbCompare({ left, right, onPathsChange, settings, onSettingsChan
               </>
             )}
             <span className="spacer" />
-            <span className="muted">{checkedTables.size} selected for sync</span>
+            <span className="muted">Use ← → to copy a table or single rows</span>
           </>
         )}
       </div>
@@ -824,22 +931,25 @@ export function DbCompare({ left, right, onPathsChange, settings, onSettingsChan
         />
       )}
 
-      {scriptFor && result && (
-        <ScriptDialog
-          mode={scriptFor}
+      {reviewing && (
+        <DbReviewDialog
+          plan={plan}
+          schema={schema}
+          data={data}
           paths={{ left, right }}
           labels={labels}
-          sides={{ left: result.left, right: result.right }}
+          sides={anySides}
           schemaOptions={schemaOptions}
           dataOptions={dataOptions}
-          ids={[...(scriptFor === "schema" ? checkedObjs : checkedTables)]}
-          options={scriptOptions}
-          onOptionsChange={setScriptOptions}
-          onClose={() => setScriptFor(null)}
-          onExecuted={(text) => {
-            setScriptFor(null);
-            setNotice({ tone: "ok", text });
-            compare(scriptFor);
+          onRemove={removeRef}
+          onClose={() => setReviewing(false)}
+          onApplied={(text, ok) => {
+            setNotice({ tone: ok ? "ok" : "error", text });
+            if (ok) {
+              setReviewing(false);
+              setPlan(emptyPlan());
+            }
+            refreshAll();
           }}
         />
       )}
@@ -969,21 +1079,27 @@ function ObjectDetail({
   obj,
   diff,
   labels,
+  dir,
+  onPick,
 }: {
   obj: ObjectDiff;
   diff: TextDiffResult | null;
   labels: Record<Side, string>;
+  dir: MoveDir | undefined;
+  onPick: (dir: MoveDir | undefined) => void;
 }) {
   const KindIcon = KIND_ICON[obj.kind];
   const StatusIcon = STATUS_ICON[obj.status];
+  const hints = objectHints(obj, labels);
   const summary =
     obj.status === "same"
       ? "The definitions match."
       : obj.status === "leftOnly"
-        ? `Exists only in ${labels.left}. Syncing left → right creates it; right → left drops it.`
+        ? `Exists only in ${labels.left}.`
         : obj.status === "rightOnly"
-          ? `Exists only in ${labels.right}. Syncing right → left creates it; left → right drops it.`
+          ? `Exists only in ${labels.right}.`
           : null;
+  const plannedChange = dir ? describeObject(obj, dir, labels) : null;
   return (
     <div className="db-detail-inner">
       <div className="db-detail-head">
@@ -992,7 +1108,27 @@ function ObjectDetail({
         <span className={`db-pill s-${obj.status}-fg`}>
           <StatusIcon size={12} /> {STATUS_LABEL[obj.status]}
         </span>
+        <span className="spacer" />
+        {obj.status !== "same" &&
+          (["toLeft", "toRight"] as MoveDir[]).map((d) => (
+            <button
+              key={d}
+              className={`db-move-big ${d}${dir === d ? " on" : ""}`}
+              onClick={() => onPick(dir === d ? undefined : d)}
+              title={dir === d ? "Click again to undo" : undefined}
+              aria-pressed={dir === d}
+            >
+              {d === "toLeft" && <ArrowLeft size={14} />}
+              {hints[d]}
+              {d === "toRight" && <ArrowRight size={14} />}
+            </button>
+          ))}
       </div>
+      {plannedChange && (
+        <div className={`db-planned-note t-${plannedChange.tone}`}>
+          <b>Planned:</b> {plannedChange.title} in {labels[dir === "toRight" ? "right" : "left"]}.
+        </div>
+      )}
       {(obj.changes.length > 0 || summary) && (
         <ul className="db-changes">
           {obj.changes.map((c, i) => (
@@ -1027,6 +1163,11 @@ function ObjectDetail({
 // ---------- data rows ----------
 
 function TablePane({
+  labels,
+  tableDir,
+  rowPicks,
+  onPickTable,
+  onPickRow,
   summary,
   diff,
   busy,
@@ -1036,6 +1177,11 @@ function TablePane({
   keyOverridden,
   onEditKey,
 }: {
+  labels: Record<Side, string>;
+  tableDir: MoveDir | undefined;
+  rowPicks: Map<string, RowPick> | undefined;
+  onPickTable: (dir: MoveDir | undefined) => void;
+  onPickRow: (row: DataRow, dir: MoveDir | undefined) => void;
   summary: TableDataSummary;
   diff: TableDataDiff | null;
   busy: boolean;
@@ -1069,7 +1215,7 @@ function TablePane({
   else if (summary.status === "same") body = <div className="empty-state">All {summary.same.toLocaleString()} rows are identical.</div>;
   else if (error) body = <div className="banner error">{error}</div>;
   else if (busy || !diff) body = <div className="empty-state">Loading rows…</div>;
-  else body = <DataGrid diff={diff} filter={filter} />;
+  else body = <DataGrid diff={diff} filter={filter} labels={labels} tableDir={tableDir} rowPicks={rowPicks} onPickRow={onPickRow} />;
 
   return (
     <>
@@ -1090,6 +1236,12 @@ function TablePane({
           </span>
         )}
         <span className="spacer" />
+        {scriptable(summary) && (
+          <span className="db-table-move">
+            <span className="muted">Whole table</span>
+            <MoveArrows value={tableDir} onChange={onPickTable} hints={tableHints(labels)} partial={!!rowPicks?.size} />
+          </span>
+        )}
         {diff?.truncated && (
           <span className="tbl-warn">
             <TriangleAlert size={12} /> Showing the first {diff.rows.length.toLocaleString()} of {counts.all.toLocaleString()} differing rows
@@ -1119,7 +1271,21 @@ function TablePane({
 }
 
 /** Side-by-side row grid in Table Compare's style: left values | right values, differing cells marked. */
-function DataGrid({ diff, filter }: { diff: TableDataDiff; filter: RowFilter }) {
+function DataGrid({
+  diff,
+  filter,
+  labels,
+  tableDir,
+  rowPicks,
+  onPickRow,
+}: {
+  diff: TableDataDiff;
+  filter: RowFilter;
+  labels: Record<Side, string>;
+  tableDir: MoveDir | undefined;
+  rowPicks: Map<string, RowPick> | undefined;
+  onPickRow: (row: DataRow, dir: MoveDir | undefined) => void;
+}) {
   const { summary } = diff;
   const columns = summary.columns;
   const keyCount = summary.key.length;
@@ -1204,11 +1370,21 @@ function DataGrid({ diff, filter }: { diff: TableDataDiff; filter: RowFilter }) 
 
   const renderRow = (i: number) => {
     const r = rows[i];
+    const dir = tableDir ?? rowPicks?.get(rowKeyId(r.key))?.dir;
     return (
-      <div className={`tbl-row s-${r.status}`}>
+      <div className={`tbl-row s-${r.status}${dir ? ` planned ${dir}` : ""}`}>
         <span className="ln">{r.left ? i + 1 : ""}</span>
         {cells(r.left, r.diffs)}
-        <span className="mid" />
+        <span className="mid db-row-move">
+          <MoveArrows
+            value={dir}
+            onChange={(d) => onPickRow(r, d)}
+            hints={rowHints(r.status, labels)}
+            disabled={!!tableDir}
+            disabledHint="The whole table is already planned; undo that to pick single rows"
+            size={11}
+          />
+        </span>
         <span className="ln">{r.right ? i + 1 : ""}</span>
         {cells(r.right, r.diffs)}
       </div>
@@ -1546,236 +1722,66 @@ function KeyDialog({
   );
 }
 
-// ---------- sync script ----------
+// ---------- ← / → pick buttons ----------
 
-function ScriptDialog({
-  mode,
-  paths,
-  labels,
-  sides,
-  schemaOptions,
-  dataOptions,
-  ids,
-  options,
-  onOptionsChange,
-  onClose,
-  onExecuted,
+/**
+ * The two arrows next to a difference: ← copies it into the left database,
+ * → into the right one. Clicking the active arrow again undoes the pick.
+ */
+function MoveArrows({
+  value,
+  onChange,
+  hints,
+  disabled,
+  disabledHint,
+  hidden,
+  partial,
+  size = 13,
 }: {
-  mode: Mode;
-  paths: Record<Side, string>;
-  labels: Record<Side, string>;
-  sides: Record<Side, SideInfo>;
-  schemaOptions: SchemaCompareOptions;
-  dataOptions: DataCompareOptions;
-  ids: string[];
-  options: Omit<ScriptOptions, "ids">;
-  onOptionsChange: (o: Omit<ScriptOptions, "ids">) => void;
-  onClose: () => void;
-  onExecuted: (message: string) => void;
+  value: MoveDir | undefined;
+  onChange: (dir: MoveDir | undefined) => void;
+  hints: Record<MoveDir, string>;
+  disabled?: boolean;
+  /** Shown on the wrapper, since disabled buttons get no tooltip. */
+  disabledHint?: string;
+  hidden?: boolean;
+  /** Some (not all) of what this controls is picked — e.g. single rows of a table. */
+  partial?: boolean;
+  size?: number;
 }) {
-  const [script, setScript] = useState<SyncScript | null>(null);
-  const [busy, setBusy] = useState<"generate" | "run" | null>("generate");
-  const [error, setError] = useState<string | null>(null);
-  const [confirming, setConfirming] = useState(false);
-  const [copied, setCopied] = useState(false);
-  const target: Side = options.direction === "leftToRight" ? "right" : "left";
-  const targetEngine = sides[target].engine;
-  const set = (patch: Partial<ScriptOptions>) => {
-    setConfirming(false);
-    onOptionsChange({ ...options, ...patch });
-  };
-
-  const key = JSON.stringify([options, ids]);
-  useEffect(() => {
-    let stale = false;
-    setBusy("generate");
-    setError(null);
-    const opts: ScriptOptions = { ...options, ids };
-    const req =
-      mode === "schema"
-        ? dbApi.schemaScript(paths.left, paths.right, schemaOptions, opts)
-        : dbApi.dataScript(paths.left, paths.right, dataOptions, opts);
-    req
-      .then((s) => !stale && setScript(s))
-      .catch((e) => {
-        if (stale) return;
-        setScript(null);
-        setError(errorMessage(e));
-      })
-      .finally(() => !stale && setBusy(null));
-    return () => {
-      stale = true;
-    };
-    // `key` captures options + ids; paths and compare options are fixed while the dialog is open.
-  }, [key]);
-
-  const count = script?.statements.length ?? 0;
-  const lines = useMemo(() => (script ? script.text.split("\n") : []), [script]);
-
-  const copy = async () => {
-    if (!script) return;
-    await navigator.clipboard.writeText(script.text);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 1500);
-  };
-
-  const saveAs = async () => {
-    if (!script) return;
-    const path = await save({
-      title: "Save sync script",
-      defaultPath: `sync-${basename(labels[target]).replace(/[^\w.-]+/g, "_")}.sql`,
-      filters: [{ name: "SQL script", extensions: ["sql"] }],
-    });
-    if (!path) return;
-    try {
-      await mergeApi.saveTextFile(path, script.text, { encoding: "UTF-8", hasBom: false, lineEnding: "lf" });
-    } catch (e) {
-      setError(errorMessage(e));
-    }
-  };
-
-  const run = async () => {
-    if (!script) return;
-    setBusy("run");
-    setError(null);
-    try {
-      await dbApi.executeScript(paths[target], script.statements, script.transactional);
-      onExecuted(`Ran ${count} statement${count === 1 ? "" : "s"} on ${labels[target]}. Comparing again…`);
-    } catch (e) {
-      setError(errorMessage(e));
-      setConfirming(false);
-      setBusy(null);
-    }
-  };
-
-  type Flag = "includeDrops" | "includeInserts" | "includeUpdates" | "transactional" | "disableForeignKeys";
-  const toggles: [Flag, string][] =
-    mode === "schema"
-      ? [
-          ["includeDrops", "Drop objects that exist only in the target"],
-          ["transactional", "Wrap in a transaction"],
-        ]
-      : [
-          ["includeInserts", "Insert missing rows"],
-          ["includeUpdates", "Update differing rows"],
-          ["includeDrops", "Delete rows that exist only in the target"],
-          ["disableForeignKeys", "Disable foreign key checks while applying"],
-          ["transactional", "Wrap in a transaction"],
-        ];
-
-  const ddlNoRollback = mode === "schema" && targetEngine === "mysql";
-
   return (
-    <Modal
-      title={`${mode === "schema" ? "Schema" : "Data"} sync script`}
-      wide
-      onClose={onClose}
-      footer={
-        confirming ? (
-          <>
-            <span className="db-confirm-q">
-              Run {count} statement{count === 1 ? "" : "s"} on <b>{labels[target]}</b>?
-            </span>
-            <span className="spacer" />
-            <button onClick={() => setConfirming(false)} disabled={busy === "run"}>
-              Cancel
-            </button>
-            <button className="danger" onClick={run} disabled={busy === "run"} autoFocus>
-              {busy === "run" ? <LoaderCircle size={14} className="db-spin" /> : <Play size={14} />}
-              {busy === "run" ? "Running…" : `Run on ${labels[target]}`}
-            </button>
-          </>
-        ) : (
-          <>
-            <button onClick={copy} disabled={!script || !count}>
-              <Copy size={14} /> {copied ? "Copied" : "Copy"}
-            </button>
-            <button onClick={saveAs} disabled={!script || !count}>
-              <Save size={14} /> Save as…
-            </button>
-            <span className="spacer" />
-            <button onClick={onClose}>Close</button>
-            <button className="primary" onClick={() => setConfirming(true)} disabled={!script || !count || busy !== null}>
-              <Play size={14} /> Run on {labels[target]}…
-            </button>
-          </>
-        )
-      }
+    <span
+      className={`db-move${hidden ? " hidden" : ""}${partial && !value ? " partial" : ""}`}
+      onClick={(e) => e.stopPropagation()}
+      onDoubleClick={(e) => e.stopPropagation()}
+      title={disabled ? disabledHint : undefined}
     >
-      <div className="db-script-opts">
-        <label className="field">
-          <span>Direction</span>
-          <select value={options.direction} onChange={(e) => set({ direction: e.target.value as ScriptOptions["direction"] })}>
-            <option value="leftToRight">Make right match left ({labels.left} → {labels.right})</option>
-            <option value="rightToLeft">Make left match right ({labels.right} → {labels.left})</option>
-          </select>
-        </label>
-        <div className="db-script-toggles">
-          {toggles.map(([k, label]) => (
-            <label key={k} className="field check">
-              <input type="checkbox" checked={options[k]} onChange={(e) => set({ [k]: e.target.checked })} />
-              {label}
-            </label>
-          ))}
-        </div>
-      </div>
-
-      {confirming && (
-        <div className="sync-confirm-warn db-confirm">
-          <p>
-            <TriangleAlert size={14} /> This changes <b>{labels[target]}</b> — {ENGINE_INFO[targetEngine].label}{" "}
-            <code>{sides[target].label}</code> — by running {count} statement{count === 1 ? "" : "s"}. Make sure you have a
-            backup.
-          </p>
-          <p>
-            {script?.transactional
-              ? "The statements run in one transaction and are rolled back if any of them fails."
-              : "Statements run one at a time; ones that already ran stay applied if a later one fails."}
-            {ddlNoRollback &&
-              " MySQL and MariaDB commit DDL implicitly, so schema changes that ran before an error cannot be rolled back."}
-          </p>
-        </div>
-      )}
-
-      {error && <div className="banner error db-script-banner">{error}</div>}
-      {script && script.warnings.length > 0 && (
-        <ul className="db-warnings">
-          {script.warnings.map((w, i) => (
-            <li key={i}>
-              <TriangleAlert size={12} /> {w}
-            </li>
-          ))}
-        </ul>
-      )}
-
-      <div className="db-script-head">
-        <span>
-          {busy === "generate"
-            ? "Generating…"
-            : script
-              ? `${count} statement${count === 1 ? "" : "s"} · ${ids.length} ${mode === "schema" ? "object" : "table"}${ids.length === 1 ? "" : "s"} · target ${ENGINE_INFO[targetEngine].label}`
-              : ""}
-        </span>
-      </div>
-      <pre className="db-script">
-        {!script ? (
-          busy === "generate" ? (
-            "…"
-          ) : (
-            ""
-          )
-        ) : count === 0 ? (
-          <span className="muted">-- Nothing to do: the selected items already match.</span>
-        ) : lines.length > HIGHLIGHT_LINES ? (
-          script.text
-        ) : (
-          lines.map((l, i) => (
-            <div key={i} className={/^\s*--/.test(l) ? "c" : /^\s*GO\s*$/i.test(l) ? "go" : undefined}>
-              {l || " "}
-            </div>
-          ))
-        )}
-      </pre>
-    </Modal>
+      {(["toLeft", "toRight"] as MoveDir[]).map((d) => {
+        const on = value === d;
+        const Icon = d === "toLeft" ? ArrowLeft : ArrowRight;
+        return (
+          <button
+            key={d}
+            type="button"
+            className={`db-move-btn ${d}${on ? " on" : ""}`}
+            disabled={disabled}
+            title={disabled ? undefined : on ? `${hints[d]} — click again to undo` : hints[d]}
+            aria-label={hints[d]}
+            aria-pressed={on}
+            onClick={() => onChange(on ? undefined : d)}
+          >
+            <Icon size={size} />
+          </button>
+        );
+      })}
+    </span>
   );
+}
+
+/** Why a table's rows can't be copied. */
+function blockedTableHint(t: TableDataSummary): string {
+  if (t.error) return `Can't copy rows: ${t.error}`;
+  if (t.status === "leftOnly" || t.status === "rightOnly")
+    return "This table exists on one side only. Copy it in the Schema view first, then compare data again.";
+  return "The rows already match";
 }

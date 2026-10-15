@@ -186,6 +186,12 @@ pub trait Dialect: Send + Sync {
         format!("ALTER TABLE {} RENAME TO {}", self.qualified(from), self.quote_ident(to_name))
     }
 
+    /// The last step of a table rebuild: the copy takes the dropped table's
+    /// name. Views and triggers that weren't part of the sync still name it.
+    fn rebuild_rename(&self, from: &ObjectName, to_name: &str) -> Vec<String> {
+        vec![self.rename_table(from, to_name)]
+    }
+
     /// True when foreign keys can only be declared inside CREATE TABLE
     /// (SQLite): `create_table` then includes them and adding/dropping one
     /// means rebuilding the table.
