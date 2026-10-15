@@ -2794,8 +2794,12 @@ mod feature_tests {
         let seen = seen.into_inner().unwrap();
         // Root plus five subfolders, on both sides.
         assert_eq!(seen.len(), 12);
-        let last = seen.iter().max_by_key(|s| s.scanned).unwrap();
-        assert_eq!((last.scanned, last.folders), (20, 12));
+        // The two counters advance separately, so a single report from parallel
+        // listing may pair one's total with the other's previous value; each
+        // still peaks at the full count.
+        let scanned = seen.iter().map(|s| s.scanned).max().unwrap();
+        let folders = seen.iter().map(|s| s.folders).max().unwrap();
+        assert_eq!((scanned, folders), (20, 12));
 
         let cancel = AtomicBool::new(true);
         let control = ScanControl {
