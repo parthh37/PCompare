@@ -1,4 +1,4 @@
-// Folder Compare file operations (src-tauri/src/fileops.rs, bc5:file-ops):
+// Folder Compare file operations (src-tauri/src/fileops.rs, ops):
 // copy / move to the other side or a folder, delete, rename, new folder,
 // attributes and touch. Operations run in the background; this module keeps
 // the app-wide list of them (every Folder Compare tab shows the same

@@ -75,9 +75,9 @@ export interface SyncTask {
   left: string;
   right: string;
   mode: SyncMode;
-  /** bc5:sync-matrix — used in `custom` mode; mirrors the preset otherwise. */
+  /** used in `custom` mode; mirrors the preset otherwise. */
   matrix?: SyncMatrix;
-  /** bc5:sync-matrix — don't create orphan folders that hold no files. */
+  /** don't create orphan folders that hold no files. */
   skipEmptyFolders?: boolean;
   conflicts: ConflictPolicy;
   compare: FolderCompareOptions;

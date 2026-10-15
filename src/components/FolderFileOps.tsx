@@ -1,6 +1,6 @@
-// Multi-selection and file operations for Folder Compare (bc5:file-ops).
+// Multi-selection and file operations for Folder Compare.
 //
-// Selection works like Beyond Compare: a click selects the row on the side
+// Selection: a click selects the row on the side
 // that was clicked (the middle status column selects both sides), Ctrl/⌘
 // toggles rows, Shift extends a range, Ctrl+A selects everything shown, and
 // ↑/↓ (with Shift) move through the list. Operations — copy / move to the
@@ -187,7 +187,7 @@ export function useFolderFileOps({
     scrollIntoView(next);
   };
 
-  // araxis:folder — "Select…" by criteria: replace the selection, or add to it.
+  // "Select…" by criteria: replace the selection, or add to it.
   const selectRows = (rows: string[], side: SelSide, add: boolean) =>
     setSel((s) => {
       const keep = add && s.rows.size > 0;
@@ -201,7 +201,6 @@ export function useFolderFileOps({
         focus: first ?? s.focus,
       };
     });
-  // araxis:folder end
 
   const selectAll = () =>
     setSel((s) => ({ ...s, rows: new Set(flat.map((r) => r.entry.relPath)), anchor: s.anchor ?? flat[0]?.entry.relPath ?? null }));
@@ -372,7 +371,7 @@ export function useFolderFileOps({
       const target = e.target as HTMLElement | null;
       if (target?.closest("input, textarea, select, [contenteditable='true']")) return;
       if (document.querySelector(".modal-backdrop")) return;
-      if (target?.closest(".fc-embed")) return; // araxis:folder — keys belong to the split view's viewer
+      if (target?.closest(".fc-embed")) return; // keys belong to the split view's viewer
       if (keys.current(e)) e.preventDefault();
     };
     window.addEventListener("keydown", onKey);
@@ -566,6 +565,6 @@ export function useFolderFileOps({
     );
   }
 
-  // araxis:folder — selectRows added
+  // selectRows added
   return { sel, selected, onRowClick, onRowContext, menuEntries, rowClass, toolbar, copyOther, menuItems, panel, overlay, selectRows };
 }

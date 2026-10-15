@@ -507,7 +507,7 @@ pub fn same_contents(a: &Path, b: &Path) -> io::Result<bool> {
     pcompare_core::folder::files_equal(a, b).map_err(|e| io::Error::other(e.to_string()))
 }
 
-// ---------- attributes, NTFS security and short names (bc5:file-ops) ----------
+// ---------- attributes, NTFS security and short names ----------
 
 /// Attribute bits to switch on and off. DOS bits ([`pcompare_core::folder::attr`])
 /// apply on Windows; on Unix only read-only maps (onto the write bits), and
@@ -592,8 +592,8 @@ pub fn copy_short_name(src: &Path, dst: &Path) -> io::Result<()> {
     }
 }
 
-/// Gives `dst` the creation date ("birth time") of `src` (bc5:sync-matrix,
-/// BC's "Copy creation dates"). Windows and macOS let it be set; elsewhere
+/// Gives `dst` the creation date ("birth time") of `src`
+/// ("Copy creation dates"). Windows and macOS let it be set; elsewhere
 /// this does nothing.
 pub fn copy_created(src: &Path, dst: &Path) -> io::Result<()> {
     #[cfg(any(windows, target_os = "macos"))]

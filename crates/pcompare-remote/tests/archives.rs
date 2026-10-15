@@ -1,4 +1,4 @@
-//! bc5:archives — archive paths through the RemoteManager routing, and
+//! archive paths through the RemoteManager routing, and
 //! Folder Sync writing into a zip archive.
 
 use std::io::Read;

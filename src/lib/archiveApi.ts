@@ -1,4 +1,4 @@
-// bc5:archives — archives, folder snapshots and svn: repositories as folders.
+// archives, folder snapshots and svn: repositories as folders.
 // Mirrors src-tauri/src/archive.rs and pcompare-archive (serde camelCase).
 import { Channel, invoke } from "@tauri-apps/api/core";
 
@@ -9,8 +9,8 @@ export type ContainerKind =
   | { type: "archive"; format: ArchiveFormat }
   | { type: "snapshot" }
   | { type: "svn" }
-  | { type: "git" } // araxis:vcs
-  | { type: "hg" }; // araxis:vcs
+  | { type: "git" }
+  | { type: "hg" };
 
 export interface SnapshotSummary {
   files: number;
@@ -33,7 +33,7 @@ export interface SideInfo {
   /** Why the side can't be written to. */
   readOnly: string | null;
   snapshot: SnapshotInfo | null;
-  /** For svn: sides, whether the `svn` client is installed (araxis:vcs — git:/hg: sides: `git` / `hg`). */
+  /** For svn: sides, whether the `svn` client is installed (git:/hg: sides: `git` / `hg`). */
   svnAvailable: boolean | null;
 }
 
@@ -97,12 +97,10 @@ export function containerLabel(kind: ContainerKind): string {
       return "snapshot";
     case "svn":
       return "Subversion repository";
-    // araxis:vcs
     case "git":
       return "Git revision";
     case "hg":
       return "Mercurial revision";
-    // araxis:vcs end
     case "archive": {
       const names: Record<ArchiveFormat, string> = {
         zip: "zip archive",

@@ -4,12 +4,12 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>PCompare: fast, free file, folder & database comparison for Windows and macOS</title>
-  <meta name="description" content="PCompare is a free, open-source Beyond Compare alternative: text, folder, table, picture, hex and database compare, 3-way merge, fail-safe folder sync and scheduled sync automation, built with Rust and Tauri.">
+  <meta name="description" content="PCompare is a free, open-source file and folder comparison tool: text, folder, table, picture, hex and database compare, 3-way merge, fail-safe folder sync and scheduled sync automation, built with Rust and Tauri.">
   <meta name="theme-color" content="#0b1120">
   <meta property="og:title" content="PCompare: compare anything, merge with confidence">
   <meta property="og:description" content="Free, open-source file, folder and database comparison for Windows and macOS. Built with Rust + Tauri.">
   <meta property="og:type" content="website">
-  <meta property="og:image" content="screenshots/bc5/text-compare.png">
+  <meta property="og:image" content="screenshots/text/side-by-side.png">
   <link rel="icon" type="image/svg+xml" href="favicon.svg">
   <link rel="stylesheet" href="style.css">
 </head>
@@ -90,7 +90,7 @@
           <div class="del"><span>−</span>closed-source, per-seat, one machine at a time</div>
           <div class="add"><span>+</span>PCompare: fast, free, scriptable, open source</div>
         </div>
-        <p class="lede">A modern Beyond Compare alternative for files, folders, archives, cloud drives and databases. Compare, merge and sync with previews before anything changes, all in a native app built on Rust.</p>
+        <p class="lede">A modern compare, merge and sync tool for files, folders, archives, cloud drives and databases. Compare, merge and sync with previews before anything changes, all in a native app built on Rust.</p>
         <div class="hero-actions">
           <a class="btn primary" id="hero-download" href="https://github.com/parthh37/PCompare/releases/latest">
             <svg class="i"><use href="#i-download"/></svg><span data-dl-label>Download PCompare</span>
@@ -100,7 +100,7 @@
         <p class="hero-note" data-dl-note>Windows 10/11 installer · macOS for Apple Silicon and Intel · signed automatic updates</p>
       </div>
       <figure class="hero-shot window">
-        <img src="screenshots/bc5/text-compare.png" alt="PCompare Text Compare: side-by-side diff of two Rust files with word-level highlights" width="1600" height="1000">
+        <img src="screenshots/text/side-by-side.png" alt="PCompare Text Compare: side-by-side diff of two Rust files with word-level highlights" width="1600" height="1000">
       </figure>
     </div>
 
@@ -108,7 +108,7 @@
       <div><b>15</b><span>comparison viewers</span></div>
       <div><b>4</b><span>database engines</span></div>
       <div><b>12</b><span>cloud &amp; remote backends</span></div>
-      <div><b>BC</b><span>compatible scripts &amp; exit codes</span></div>
+      <div><b>CLI</b><span>scripts, switches &amp; exit codes</span></div>
     </div>
   </section>
 
@@ -160,7 +160,7 @@
         <button role="tab" data-shot="8">Patches</button>
       </div>
       <figure class="tour-stage window">
-        <img id="tour-img" src="screenshots/bc5/text-compare.png" alt="" width="1600" height="1000">
+        <img id="tour-img" src="screenshots/text/side-by-side.png" alt="" width="1600" height="1000">
       </figure>
       <p class="tour-caption" id="tour-caption"></p>
     </div>
@@ -268,13 +268,13 @@
     <div class="wrap split">
       <div>
         <p class="eyebrow">Command line &amp; scripting</p>
-        <h2>Drop-in for your Beyond Compare workflows</h2>
-        <p>PCompare speaks Beyond Compare's switches, script language and exit codes, so CI jobs, hooks and nightly scripts written for BC run unchanged.</p>
+        <h2>Built for scripts, hooks and CI</h2>
+        <p>PCompare speaks the common compare-tool switches, script language and exit codes, so existing CI jobs, hooks and nightly scripts run unchanged.</p>
         <ul class="checks">
-          <li><svg class="i"><use href="#i-terminal"/></svg><span><code>pcompare @nightly.txt</code> runs BC scripts headlessly: load, filter, select, compare, sync, reports, snapshots and more.</span></li>
+          <li><svg class="i"><use href="#i-terminal"/></svg><span><code>pcompare @nightly.txt</code> runs compare scripts headlessly: load, filter, select, compare, sync, reports, snapshots and more.</span></li>
           <li><svg class="i"><use href="#i-zap"/></svg><span><code>/qc</code> quick compare and <code>/automerge</code> merge without opening a window.</span></li>
           <li><svg class="i"><use href="#i-git-merge"/></svg><span>One click sets PCompare up as git's difftool and mergetool, with <code>--wait</code>. Snippets for Mercurial, Perforce and Subversion.</span></li>
-          <li><svg class="i"><use href="#i-download"/></svg><span>Import saved sessions from Beyond Compare 3/4/5, WinMerge, FreeFileSync and Meld.</span></li>
+          <li><svg class="i"><use href="#i-download"/></svg><span>Import saved sessions from other compare and sync tools.</span></li>
         </ul>
       </div>
       <div class="terminal">
@@ -293,7 +293,7 @@
 <span class="p">$</span> pcompare "$LOCAL" "$REMOTE" "$BASE" "$MERGED" \
     /automerge /reviewconflicts
 
-<span class="c"># run a Beyond Compare script, no window</span>
+<span class="c"># run a compare script, no window</span>
 <span class="p">$</span> pcompare @nightly.txt "D:/work" "E:/backup"</code></pre>
       </div>
     </div>
@@ -336,7 +336,7 @@
       <div>
         <p class="eyebrow">What's next</p>
         <h2>On the roadmap</h2>
-        <p>PCompare already covers Beyond Compare's feature set. These go beyond it:</p>
+        <p>PCompare already covers the full desktop-compare feature set. These go further:</p>
       </div>
       <ul class="todo">
         <li>Structural diff for JSON, YAML and XML (key-order-insensitive)</li>

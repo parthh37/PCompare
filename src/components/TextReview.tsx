@@ -1,4 +1,4 @@
-// araxis:text-review — review features for Text Compare, as one hook so the
+// review features for Text Compare, as one hook so the
 // view only places what it returns: toolbar buttons (Comments, Statistics,
 // Archive), the Bookmarks & comments panel, the dialogs, and comment marks
 // for the line-number gutter.

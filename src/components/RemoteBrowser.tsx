@@ -56,7 +56,7 @@ export function RemoteBrowser({ directory, initial, onPick, onClose, onManagePro
   );
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  // bc5:remote-write — create / rename / delete on the remote.
+  // create / rename / delete on the remote.
   const [edit, setEdit] = useState<Edit>(null);
   const [busy, setBusy] = useState(false);
   const [reload, setReload] = useState(0);

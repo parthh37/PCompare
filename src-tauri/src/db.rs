@@ -1,5 +1,5 @@
 //! Tauri commands for Database Compare sessions (Schema + Data compare and
-//! sync scripts, SQL Delta style).
+//! sync scripts).
 //!
 //! A session side is either a saved connection, `db://<id>[/<database>]`, or
 //! a local SQLite file path (dropping two `.sqlite` files opens an ad-hoc

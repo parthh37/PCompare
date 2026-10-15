@@ -1,7 +1,7 @@
 //! The file report commands (`file-report`, `text-report`, `hex-report`,
 //! `data-report`, …): which file pairs they cover, how each pair is read
 //! (the "File formats" rules convert documents to text; binary files get a
-//! hex comparison) and Beyond Compare's layouts — side-by-side,
+//! hex comparison) and the standard layouts — side-by-side,
 //! interleaved, summary, statistics, XML and patches in normal, context or
 //! unified form.
 
@@ -676,7 +676,7 @@ mod tests {
     #[test]
     fn the_comparison_argument_names_files_or_a_session() {
         let d = fixture();
-        // BC's sample: file-report with the pair as %1 %2 and the report as %3.
+        // Sample: file-report with the pair as %1 %2 and the report as %3.
         let script = "file-report layout:side-by-side &\n options:display-mismatches &\n output-to:\"%3\" \"%1\" \"%2\"\n";
         let params = ["l/sub/changed.txt", "r/sub/changed.txt", "out/pair.txt"].map(String::from);
         let r = run_with(d.path(), script, &params, &LocalHost::temporary(), false, false);

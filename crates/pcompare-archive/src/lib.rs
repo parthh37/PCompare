@@ -28,7 +28,7 @@ mod formats;
 pub mod snapshot;
 pub mod svn;
 mod tree;
-pub mod vcs; // araxis:vcs
+pub mod vcs;
 
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
@@ -46,7 +46,7 @@ pub use archive::ArchiveFs;
 pub use expand::ExpandFs;
 pub use snapshot::SnapshotFs;
 pub use svn::SvnFs;
-pub use vcs::VcsFs; // araxis:vcs
+pub use vcs::VcsFs;
 
 /// The archive formats PCompare reads.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
@@ -143,10 +143,9 @@ pub enum ContainerKind {
     Archive(ArchiveKind),
     Snapshot,
     Svn,
-    // araxis:vcs — `git:` / `hg:` revisions
+    // `git:` / `hg:` revisions
     Git,
     Hg,
-    // araxis:vcs end
 }
 
 /// Checksums a container stores for its files (zip and 7z headers,
@@ -250,12 +249,10 @@ pub fn is_svn(path: &str) -> bool {
         .is_some_and(|p| p.eq_ignore_ascii_case(SVN_PREFIX))
 }
 
-// araxis:vcs
 /// `svn:`, `git:` and `hg:` paths: repositories reached through a client.
 pub fn is_repo_path(path: &str) -> bool {
     is_svn(path) || vcs::is_vcs(path)
 }
-// araxis:vcs end
 
 /// Writes `src` to `dest` through a temp file in the same folder, so a
 /// crash or a concurrent reader never sees half a file.
@@ -289,10 +286,9 @@ pub struct Archives {
     archives: Mutex<HashMap<(PathBuf, String, bool), Arc<ArchiveFs>>>,
     snapshots: Mutex<HashMap<PathBuf, (snapshot::Stamp, Arc<SnapshotFs>)>>,
     repos: Mutex<HashMap<String, (Instant, Arc<SvnFs>)>>,
-    // araxis:vcs — git/hg trees by location@rev, and refs with slashes seen per location
+    // git/hg trees by location@rev, and refs with slashes seen per location
     vcs: Mutex<HashMap<String, (Instant, Arc<VcsFs>)>>,
     vcs_refs: Mutex<HashMap<(vcs::VcsKind, String), Vec<String>>>,
-    // araxis:vcs end
 }
 
 impl Archives {
@@ -304,8 +300,8 @@ impl Archives {
             archives: Mutex::new(HashMap::new()),
             snapshots: Mutex::new(HashMap::new()),
             repos: Mutex::new(HashMap::new()),
-            vcs: Mutex::new(HashMap::new()),      // araxis:vcs
-            vcs_refs: Mutex::new(HashMap::new()), // araxis:vcs
+            vcs: Mutex::new(HashMap::new()),
+            vcs_refs: Mutex::new(HashMap::new()),
         }
     }
 
@@ -366,7 +362,6 @@ impl Archives {
         fs
     }
 
-    // araxis:vcs
     /// The tree behind a `git:` / `hg:` path (listing cached; moving
     /// revisions such as `HEAD` briefly).
     pub fn open_vcs(&self, root: &vcs::VcsPath) -> Arc<VcsFs> {
@@ -415,7 +410,6 @@ impl Archives {
             inner,
         })
     }
-    // araxis:vcs end
 
     /// Resolves a local path into an archive or snapshot, or an `svn:`
     /// path. `None` for ordinary paths (and for a bare archive file unless
@@ -434,7 +428,6 @@ impl Archives {
                 snapshot: None,
             }));
         }
-        // araxis:vcs
         if vcs::is_vcs(path) {
             let p = self.resolve_vcs_path(path)?;
             return Ok(Some(Resolved {
@@ -449,7 +442,6 @@ impl Archives {
                 snapshot: None,
             }));
         }
-        // araxis:vcs end
         if !may_be_container_path(path) {
             return Ok(None);
         }

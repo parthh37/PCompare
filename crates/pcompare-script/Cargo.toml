@@ -1,6 +1,6 @@
 [package]
 name = "pcompare-script"
-description = "Beyond Compare-style script processor and headless quick compare for PCompare"
+description = "Script processor and headless quick compare for PCompare"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

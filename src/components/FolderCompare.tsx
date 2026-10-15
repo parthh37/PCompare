@@ -90,7 +90,7 @@ import { autoRefreshTitle, useAutoRefresh } from "../lib/useAutoRefresh";
 import { FolderSettingsDialog, type FolderSettingsPage } from "./FolderSettingsDialog";
 import { FileIcon } from "./icons";
 import { StackButton, StackMenuButton } from "./StackButton";
-// bc5:converters — external comparison tools.
+// external comparison tools.
 import { openExternalIfAlways } from "../lib/convertApi";
 import { externalToolItems } from "../lib/externalToolMenu";
 import { SEPARATOR, type MenuItems } from "../lib/nativeMenu";
@@ -98,11 +98,11 @@ import { useContextMenu } from "./ContextMenu";
 import { FileFormatsDialog } from "./FileFormatsDialog";
 import { PathBar } from "./PathBar";
 import { VirtualList } from "./VirtualList";
-import { ReportDialog } from "./ReportDialog"; // bc5:reports-script
-import { useFolderFileOps } from "./FolderFileOps"; // bc5:file-ops
-import { ArchiveBanner } from "./ArchiveBanner"; // bc5:archives
-import { SnapshotDialog } from "./SnapshotDialog"; // bc5:archives
-import { useFolderReview } from "./FolderReview"; // araxis:text-review
+import { ReportDialog } from "./ReportDialog";
+import { useFolderFileOps } from "./FolderFileOps";
+import { ArchiveBanner } from "./ArchiveBanner";
+import { SnapshotDialog } from "./SnapshotDialog";
+import { useFolderReview } from "./FolderReview";
 import { embedFocused } from "../lib/embeddedPane";
 import { matches, shortcutLabel } from "../lib/keymap";
 import { getPrefs, setPrefs, usePref } from "../lib/prefs";
@@ -121,9 +121,9 @@ interface Props {
   /** Opens a text compare; `rules` carries this session's text rules over. */
   onOpenFiles: (left: string, right: string, rules: TextDiffOptions) => void;
   onOpenHex: (left: string, right: string) => void;
-  /** Opens a Folder Sync session on the same two folders (bc5:sync-matrix: `scope` limits it to those items). */
+  /** Opens a Folder Sync session on the same two folders (`scope` limits it to those items). */
   onOpenSync: (left: string, right: string, scope?: string[]) => void;
-  /** bc5:editor-patch — opens one side's file in Text Edit. */
+  /** opens one side's file in Text Edit. */
   onEditFile?: (path: string) => void;
   settings?: Record<string, unknown>;
   onSettingsChange?: (s: FolderSettings) => void;
@@ -260,7 +260,7 @@ export function FolderCompare({
   onOpenFiles,
   onOpenHex,
   onOpenSync,
-  onEditFile, // bc5:editor-patch
+  onEditFile,
   settings,
   onSettingsChange,
   onDirtyChange,
@@ -287,9 +287,9 @@ export function FolderCompare({
   }, [log, cfg.showLog]);
   /** Free space under each side's folder (local folders only). */
   const [free, setFree] = useState<Record<Side, { free: number; volume: string } | null>>({ left: null, right: null });
-  const [toolsDialog, setToolsDialog] = useState(false); // bc5:converters
-  const [snapshotting, setSnapshotting] = useState(false); // bc5:archives
-  const [reporting, setReporting] = useState(false); // bc5:reports-script
+  const [toolsDialog, setToolsDialog] = useState(false);
+  const [snapshotting, setSnapshotting] = useState(false);
+  const [reporting, setReporting] = useState(false);
   const [selecting, setSelecting] = useState(false);
   /** Where View > Legend is open, if it is. */
   const [legendAt, setLegendAt] = useState<{ x: number; y: number } | null>(null);
@@ -345,7 +345,7 @@ export function FolderCompare({
    * refreshes (auto-refresh) skip the quick pass; their rows replace settled
    * ones only when final, so nothing flickers.
    */
-  const expandArchives = !!cfg.expandArchives; // bc5:archives
+  const expandArchives = !!cfg.expandArchives;
   const run = useCallback(
     async (mode: RunMode = "refresh") => {
       // One folder is enough: it lists on its own until the other side is picked.
@@ -472,7 +472,7 @@ export function FolderCompare({
 
   /**
    * After a file operation: compares just the rows it changed (tree paths)
-   * and swaps them into the tree, Beyond Compare's partial refresh. Rescans
+   * and swaps them into the tree (a partial refresh). Rescans
    * instead while a compare runs or when a row's folder isn't in the tree.
    */
   const refreshRows = async (rels: string[]) => {
@@ -631,7 +631,7 @@ export function FolderCompare({
     // An orphan (or any file while only one folder is loaded) opens with the missing side blank.
     const p: [string, string] = [e.left ? sidePath(e, "left") : "", e.right ? sidePath(e, "right") : ""];
     if (!p[0] && !p[1]) return;
-    // bc5:converters — pairs matching an "always use" external tool open there instead.
+    // pairs matching an "always use" external tool open there instead.
     (p[0] && p[1] ? openExternalIfAlways(...p) : Promise.resolve(false))
       .then((launched) => !launched && onOpenFiles(...p, engineOptions.rules))
       .catch((err) => setError(errorMessage(err)));
@@ -661,7 +661,7 @@ export function FolderCompare({
     if (failures.length) setError(failures.slice(0, 3).join("\n") + (failures.length > 3 ? "\n…" : ""));
   };
 
-  // araxis:text-review — bookmarks with comments, Statistics, Save comparison archive.
+  // bookmarks with comments, Statistics, Save comparison archive.
   const review = useFolderReview({
     bookmarks: cfg.bookmarks ?? [],
     onBookmarks: (bookmarks) => update({ bookmarks }),
@@ -677,9 +677,8 @@ export function FolderCompare({
     engineOptions,
     settings: { filter: cfg.filter, flatten: cfg.flatten, showAttributes: cfg.showAttributes },
   });
-  // araxis:text-review end
 
-  // bc5:file-ops — multi-selection, file operations and the Operations panel.
+  // multi-selection, file operations and the Operations panel.
   const fops = useFolderFileOps({
     root,
     result,
@@ -805,7 +804,7 @@ export function FolderCompare({
   };
 
   const menu = useContextMenu(({ entry, side }: MenuTarget): Promise<MenuItems> | MenuItems => {
-    // bc5:file-ops — context-menu actions cover the whole selection.
+    // context-menu actions cover the whole selection.
     const list = fops.menuEntries(entry);
     const files = list.flatMap((e) => (e.isDir ? pairedFiles(e.children) : paths(e) ? [e] : []));
     const pair = !entry.isDir ? paths(entry) : null;
@@ -815,17 +814,17 @@ export function FolderCompare({
         ? [
             { label: "Open in Text Compare", onClick: () => onOpenFiles(...pair, engineOptions.rules) },
             { label: "Open in Hex Compare", onClick: () => onOpenHex(...pair) },
-            ...tools, // bc5:converters — third-party comparison tools
+            ...tools, // third-party comparison tools
             SEPARATOR,
           ]
         : []),
-      // bc5:editor-patch — edit the clicked side's file on its own
+      // edit the clicked side's file on its own
       onEditFile && !entry.isDir && entry[side] && { label: `Edit ${side} file`, onClick: () => onEditFile(path) },
       SEPARATOR,
-      ...review.menuItems(entry), // araxis:text-review
+      ...review.menuItems(entry),
       SEPARATOR,
-      ...fops.menuItems(), // bc5:file-ops
-      // bc5:sync-matrix — Folder Sync limited to the selection
+      ...fops.menuItems(),
+      // Folder Sync limited to the selection
       {
         label: list.length > 1 ? `Synchronize ${list.length} items…` : "Synchronize selection…",
         disabled: !left || !right,
@@ -893,7 +892,7 @@ export function FolderCompare({
 
   const renderSide = (e: FolderEntry, side: "left" | "right", depth: number) => {
     const meta = e[side];
-    // Beyond Compare draws the newer of two differing files in red and the older in grey;
+    // The newer of two differing files in red and the older in grey;
     // a folder is bold on the side all newer files below it are on.
     const newer = e.isDir
       ? !e.ignored && countsNewer(e.counts) === side
@@ -905,7 +904,7 @@ export function FolderCompare({
           ? " older"
           : "";
     const tones = e.isDir ? toneStyle(folderTones(e)) : undefined;
-    // Beyond Compare draws what the filters leave out in teal; a half-filtered pair only on that side.
+    // What the filters leave out is drawn in teal; a half-filtered pair only on that side.
     const filtered = e.filtered === "both" || e.filtered === side ? " filtered" : "";
     const showChevron = e.isDir && meta && !cfg.flatten;
     return (
@@ -937,7 +936,7 @@ export function FolderCompare({
                   <Link size={11} />
                 </span>
               )}
-              {review.mark(e, side) /* araxis:text-review */}
+              {review.mark(e, side)}
             </>
           )}
         </div>
@@ -955,7 +954,7 @@ export function FolderCompare({
     const checked = e.contentChecked && e.contentChecked !== "off";
     return (
       <div
-        className={`frow s-${e.pending ? "pending" : effectiveStatus(e)} d-${detailOf(e)}${e.ignored ? " ignored" : ""}${fops.rowClass(e.relPath)}${review.rowClass(e.relPath) /* araxis:text-review */}`}
+        className={`frow s-${e.pending ? "pending" : effectiveStatus(e)} d-${detailOf(e)}${e.ignored ? " ignored" : ""}${fops.rowClass(e.relPath)}${review.rowClass(e.relPath)}`}
         onClick={(ev) => fops.onRowClick(ev, e)}
         onDoubleClick={() => open(e)}
         onContextMenu={(ev) => {
@@ -966,7 +965,7 @@ export function FolderCompare({
           fops.onRowContext(e, side);
           menu.open(ev, { entry: e, side });
         }}
-        title={review.title(e.relPath, rowTitle(e)) /* araxis:text-review */}
+        title={review.title(e.relPath, rowTitle(e))}
       >
         {renderSide(e, "left", depth)}
         <div className={`fcell status${checked ? " checked" : ""}${e.filtered === "both" ? " filtered" : ""}`}>
@@ -1105,7 +1104,6 @@ export function FolderCompare({
         <button className="icon-btn" title="Synchronize these folders" disabled={!left || !right} onClick={() => onOpenSync(left, right)}>
           <FolderSync size={14} />
         </button>
-        {/* bc5:reports-script */}
         <button
           className="icon-btn"
           title="Folder comparison report: summary or detailed, as HTML, text or CSV, honouring the display filter"
@@ -1122,8 +1120,7 @@ export function FolderCompare({
         >
           <PanelBottom size={14} />
         </button>
-        {review.toolbar /* araxis:text-review */}
-        {/* bc5:archives */}
+        {review.toolbar}
         <button
           className="icon-btn"
           title="Save a snapshot of a side: names, sizes, dates (and optionally CRCs) to compare against later"
@@ -1132,7 +1129,7 @@ export function FolderCompare({
         >
           <Camera size={14} />
         </button>
-        {fops.toolbar /* bc5:file-ops */}
+        {fops.toolbar}
         <button
           className={`icon-btn${legendAt ? " active" : ""}`}
           title="View: ignore folder structure, attributes, split view, log, and the legend of colours and icons"
@@ -1235,11 +1232,10 @@ export function FolderCompare({
               <div className="empty-state">Choose a folder on either side — its contents list right away.</div>
             )}
             {error && <div className="banner error">{error}</div>}
-            {/* bc5:archives */}
             <ArchiveBanner left={left} right={right} content={engineOptions.content} onOpenHex={onOpenHex} />
             {result && flat.length === 0 && <div className="empty-state">Nothing to show for this filter.</div>}
             {result && <VirtualList className="folder-list" count={flat.length} rowHeight={24} renderRow={renderRow} />}
-            {review.layer /* araxis:text-review — Bookmarks & comments panel */}
+            {review.layer /* Bookmarks & comments panel */}
           </div>
           {/* Per side: what is selected there and the free space on its volume. */}
           <div className="fheader fc-sidefoot">
@@ -1276,7 +1272,7 @@ export function FolderCompare({
           </>
         )}
       </div>
-      {fops.panel /* bc5:file-ops — docked Operations panel */}
+      {fops.panel /* docked Operations panel */}
       {cfg.showLog && (
         <div className="fc-log" role="log" aria-label="Log">
           <div className="fc-log-lines" ref={logBox}>
@@ -1350,7 +1346,7 @@ export function FolderCompare({
       {copyMenu.element}
       {legendAt && <LegendPopover {...legendAt} onClose={() => setLegendAt(null)} />}
 
-      {/* bc5:reports-script — the report lists what the view shows (re-checks and ignore marks included). */}
+      {/* the report lists what the view shows (re-checks and ignore marks included). */}
       {reporting && result && (
         <ReportDialog
           source={{
@@ -1364,8 +1360,8 @@ export function FolderCompare({
           bookmarks={(cfg.bookmarks ?? []).map((b) => ({ path: b.relPath, comment: b.comment }))}
         />
       )}
-      {fops.overlay /* bc5:file-ops */}
-      {review.dialogs /* araxis:text-review */}
+      {fops.overlay}
+      {review.dialogs}
       {selecting && result && (
         <FolderSelectDialog
           count={(c, reach) => rowsMatching(c, reach).rows.length}
@@ -1374,8 +1370,7 @@ export function FolderCompare({
           onClose={() => setSelecting(false)}
         />
       )}
-      {snapshotting && <SnapshotDialog folders={[left, right]} onClose={() => setSnapshotting(false)} /> /* bc5:archives */}
-      {/* bc5:converters */}
+      {snapshotting && <SnapshotDialog folders={[left, right]} onClose={() => setSnapshotting(false)} />}
       {toolsDialog && <FileFormatsDialog initialPage="tools" onClose={() => setToolsDialog(false)} />}
       {settingsPage && (
         <FolderSettingsDialog

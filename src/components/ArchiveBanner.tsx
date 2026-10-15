@@ -1,4 +1,4 @@
-// bc5:archives — tells the user when a Folder Compare side is an archive,
+// tells the user when a Folder Compare side is an archive,
 // snapshot or Subversion repository: what it is, whether it can be written
 // to, and how contents are compared against a snapshot.
 import { Binary, FileArchive } from "lucide-react";
@@ -26,14 +26,13 @@ function describe(side: string, info: SideInfo): string {
     );
   }
   const what = containerLabel(info.container);
-  // araxis:vcs — git:/hg: sides (svnAvailable reports their client too)
+  // git:/hg: sides (svnAvailable reports their client too)
   if (info.container.type === "git" || info.container.type === "hg") {
     const client = info.container.type;
     return info.svnAvailable === false
       ? `${side}: ${what} — the ${client} command-line client isn't installed, so it can't be listed.`
       : `${side}: ${what} (read-only).`;
   }
-  // araxis:vcs end
   if (info.container.type === "svn") {
     return info.svnAvailable === false
       ? `${side}: Subversion repository — the svn command-line client isn't installed, so it can't be listed.`

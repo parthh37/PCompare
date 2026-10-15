@@ -666,7 +666,7 @@
   flex: 1;
 }
 
-/* bc5:sync-matrix — custom sync table, per-row actions */
+/* custom sync table, per-row actions */
 .sync-matrix {
   display: flex;
   flex-direction: column;

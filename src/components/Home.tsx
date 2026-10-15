@@ -8,10 +8,10 @@ import { COMPARE_KINDS, SESSIONS, type SessionKind } from "../lib/sessions";
 import type { RecentSession, Workspace } from "../lib/workspaceApi";
 import "./AppShell.css";
 import { SessionIcon } from "./SessionIcon";
-import { FileFormatsDialog } from "./FileFormatsDialog"; // bc5:converters
-import { SnapshotDialog } from "./SnapshotDialog"; // bc5:archives
-import { GettingStarted } from "./GettingStarted"; // araxis:vcs
-import { setPrefs } from "../lib/prefs"; // araxis:vcs
+import { FileFormatsDialog } from "./FileFormatsDialog";
+import { SnapshotDialog } from "./SnapshotDialog";
+import { GettingStarted } from "./GettingStarted";
+import { setPrefs } from "../lib/prefs";
 import { ImportSessionsDialog } from "./ImportSessionsDialog";
 
 interface Props {
@@ -32,8 +32,8 @@ interface Props {
   onClearRecent: () => void;
 }
 
-// bc5:archives — "Archive Compare" shipped: archives open as folders.
-// araxis:vcs — "Git integration" shipped: git:/hg: sides, difftool / mergetool setup.
+// "Archive Compare" shipped: archives open as folders.
+// "Git integration" shipped: git:/hg: sides, difftool / mergetool setup.
 const COMING = ["Structural JSON / XML diff"];
 
 /** Remote paths get a small globe so cloud locations stand out in the list. */
@@ -161,10 +161,10 @@ export function Home(props: Props) {
   const { onNew, saved, workspaces, recent } = props;
   const autoSave = usePref("autoSaveSessions");
   const [query, setQuery] = useState("");
-  const [fileFormats, setFileFormats] = useState(false); // bc5:converters
-  const [snapshotting, setSnapshotting] = useState(false); // bc5:archives
+  const [fileFormats, setFileFormats] = useState(false);
+  const [snapshotting, setSnapshotting] = useState(false);
   const [importing, setImporting] = useState(false);
-  // araxis:vcs — the Getting started overview, once at first run and on request.
+  // the Getting started overview, once at first run and on request.
   const overviewDismissed = usePref("gettingStartedDismissed");
   const [overview, setOverview] = useState(false);
   // Only the Home tab in front shows it (inactive tabs stay mounted, hidden).
@@ -181,7 +181,6 @@ export function Home(props: Props) {
     setOverview(false);
     if (!overviewDismissed) setPrefs({ gettingStartedDismissed: true });
   };
-  // araxis:vcs end
   const q = query.trim().toLowerCase();
   const hit = (...values: (string | undefined)[]) => !q || values.some((v) => v?.toLowerCase().includes(q));
   const shownSaved = saved.filter((s) => hit(s.name, s.left, s.right));
@@ -190,39 +189,37 @@ export function Home(props: Props) {
   const total = saved.length + workspaces.length + recent.length;
 
   return (
-    <div className="home" ref={homeRef /* araxis:vcs */}>
+    <div className="home" ref={homeRef}>
       <header>
         <h1>PCompare</h1>
         <p className="muted">Choose a session, or drop two files or folders anywhere in this window.</p>
-        {/* bc5:converters — file format rules (document converters) and external tools */}
+        {/* file format rules (document converters) and external tools */}
         <p className="muted">
           <button className="link" onClick={() => setFileFormats(true)}>
             File formats and external tools…
           </button>
         </p>
         {fileFormats && <FileFormatsDialog onClose={() => setFileFormats(false)} />}
-        {/* bc5:archives — snapshots of a folder to compare against later */}
+        {/* snapshots of a folder to compare against later */}
         <p className="muted">
           <button className="link" onClick={() => setSnapshotting(true)}>
             Save folder snapshot…
           </button>
         </p>
         {snapshotting && <SnapshotDialog folders={[]} onClose={() => setSnapshotting(false)} />}
-        {/* araxis:vcs — first-run overview, reopenable */}
+        {/* first-run overview, reopenable */}
         <p className="muted">
           <button className="link" onClick={() => setOverview(true)}>
             Getting started overview…
           </button>
         </p>
         {(overview || (!overviewDismissed && visible)) && <GettingStarted onClose={closeOverview} />}
-        {/* araxis:vcs end */}
-        {/* araxis:text-review — review a saved comparison (.pcmpz) read-only */}
+        {/* review a saved comparison (.pcmpz) read-only */}
         <p className="muted">
           <button className="link" onClick={() => onNew("review")}>
             Open comparison archive…
           </button>
         </p>
-        {/* araxis:text-review end */}
       </header>
       <div className="cards">
         {[...COMPARE_KINDS, "profiles" as const, "automation" as const /* automation:ui */].map((kind) => {
@@ -279,7 +276,7 @@ export function Home(props: Props) {
 
       <div className="saved-head">
         <h2>Saved sessions</h2>
-        <button className="link muted" onClick={() => setImporting(true)} title="Import sessions from Beyond Compare, WinMerge, FreeFileSync or Meld">
+        <button className="link muted" onClick={() => setImporting(true)} title="Import sessions from other compare and sync tools">
           <FileInput size={12} /> Import…
         </button>
       </div>
@@ -291,7 +288,7 @@ export function Home(props: Props) {
           No saved sessions yet. Open a comparison and press <kbd>{shortcutLabel("app.saveSession") || "Save session"}</kbd>{" "}
           to save it with a name, or{" "}
           <button className="link" onClick={() => setImporting(true)}>
-            import sessions from Beyond Compare and other tools
+            import sessions from other compare tools
           </button>
           .
         </p>

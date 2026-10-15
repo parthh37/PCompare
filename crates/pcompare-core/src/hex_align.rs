@@ -278,7 +278,7 @@ fn fill_gap(a: &[u8], b: &[u8], lr: Range<usize>, rr: Range<usize>, out: &mut Ve
     if n == 0 && m == 0 {
         return;
     }
-    // Same length: a straight substitution reads best (and is what BC shows).
+    // Same length: a straight substitution reads best.
     if n == 0 || m == 0 || n == m || n + m > MYERS_WINDOW {
         out.push(Segment::change(lr.start as u64, rr.start as u64, n as u64, m as u64));
         return;

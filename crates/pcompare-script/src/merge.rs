@@ -1,5 +1,5 @@
 //! Headless text merge (`pcompare left right base output /automerge`), the
-//! way version control systems call Beyond Compare as a merge tool.
+//! way version control systems call a merge tool.
 //!
 //! - Without conflicts the merge is written to the output and the exit code
 //!   is 0.
@@ -16,13 +16,13 @@ use pcompare_core::textfile;
 use pcompare_merge::{ChunkKind, MergeResult};
 use std::path::Path;
 
-/// Beyond Compare's exit code: the merge had conflicts (written with
+/// Exit code: the merge had conflicts (written with
 /// markers because of `/force`).
 pub const EXIT_CONFLICTS: i32 = 14;
-/// Beyond Compare's exit code: the merge had conflicts and the output was
+/// Exit code: the merge had conflicts and the output was
 /// not written.
 pub const EXIT_CONFLICTS_NOT_WRITTEN: i32 = 101;
-/// Beyond Compare's exit code for errors (unreadable files, …).
+/// Exit code for errors (unreadable files, …).
 pub const EXIT_ERROR: i32 = 100;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]

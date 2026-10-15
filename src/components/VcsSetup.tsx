@@ -1,4 +1,4 @@
-// araxis:vcs — Settings → Source control: sets PCompare up as git's diff and
+// Settings → Source control: sets PCompare up as git's diff and
 // merge tool (after showing the exact `git config --global` commands and
 // asking), and copy-paste configuration for Mercurial, Perforce and Subversion.
 import { Check, Copy, GitBranch, Terminal } from "lucide-react";

@@ -11,7 +11,7 @@ interface Props {
   disabled?: boolean;
 }
 
-/** A Beyond Compare–style toolbar button: a large colour icon above a short label. */
+/** A toolbar button: a large colour icon above a short label. */
 export function ToolButton({ icon, label, onClick, title, active, disabled }: Props) {
   return (
     <button

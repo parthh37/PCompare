@@ -9,7 +9,7 @@ import {
   type TextDiffOptions,
 } from "./api";
 import type { DisplayFilter, FolderStructure } from "./folderTree";
-import type { FolderBookmark } from "./reviewApi"; // araxis:text-review
+import type { FolderBookmark } from "./reviewApi";
 
 /** Settings that change what the engine computes (editing them re-runs the compare). */
 export interface CompareSettings {
@@ -54,7 +54,7 @@ export interface CompareSettings {
   /** One `Left* => Right*` wildcard rule per line. */
   alignRules: string;
   followLinks: boolean;
-  /** bc5:archives — list zip/tar/7z files in the trees as folders (Beyond Compare's default: compare them as files). */
+  /** list zip/tar/7z files in the trees as folders (default: compare them as files). */
   expandArchives: boolean;
 }
 
@@ -71,11 +71,11 @@ export interface FolderSettings extends CompareSettings {
   autoRefresh: boolean;
   /** Show the Attributes column. */
   showAttributes: boolean;
-  /** Beyond Compare's "Suppress filters": show what the filters leave out, in teal. */
+  /** "Suppress filters": show what the filters leave out, in teal. */
   suppressFilters: boolean;
   /** Relative paths marked "ignore" (shown as same). */
   ignored: string[];
-  /** araxis:text-review — bookmarked rows (by relative path) with review comments. */
+  /** bookmarked rows (by relative path) with review comments. */
   bookmarks?: FolderBookmark[];
 }
 
@@ -113,7 +113,7 @@ export const DEFAULT_FOLDER_SETTINGS: FolderSettings = {
   extensionGroups: "",
   alignRules: "",
   followLinks: true,
-  expandArchives: false, // bc5:archives
+  expandArchives: false,
   filter: "all",
   structure: "structure",
   ignoreMinor: true,
@@ -127,7 +127,7 @@ export const DEFAULT_FOLDER_SETTINGS: FolderSettings = {
 
 /**
  * Toolbar shortcuts for the most common quick-test/content combinations. The
- * first three carry Araxis Merge's names: Quick (metadata only), Thorough
+ * first three are named Quick (metadata only), Thorough
  * (contents, honouring the text rules) and Byte-by-byte.
  */
 export const COMPARE_PRESETS = {

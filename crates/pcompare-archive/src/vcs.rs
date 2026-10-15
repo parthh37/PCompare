@@ -1,5 +1,5 @@
 //! Git and Mercurial revisions as read-only folders and files, through the
-//! `git` and `hg` command-line clients (araxis:vcs).
+//! `git` and `hg` command-line clients.
 //!
 //! A path is `git:<working-tree path>[@<revision>][/<path inside>]` (or
 //! `hg:` …), e.g. `git:/src/app/main.c@HEAD~1` (one file one commit back),

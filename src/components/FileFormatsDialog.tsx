@@ -37,7 +37,7 @@ function move<T>(list: T[], i: number, delta: number): T[] {
 }
 
 /**
- * Beyond Compare's "File formats" and "External tools" settings: which files
+ * The "File formats" and "External tools" settings: which files
  * are converted to text (built-in converter or an external command) before a
  * text compare, made read-only or given a grammar; and which pairs open in a
  * third-party comparison tool. Saved to the app config folder.

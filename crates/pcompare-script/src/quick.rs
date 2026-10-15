@@ -1,6 +1,6 @@
 //! Headless quick compare (`pcompare /qc left right`): decides whether two
 //! files or folders are the same without opening a window, and exits with
-//! Beyond Compare's codes:
+//! the standard codes:
 //!
 //! | code | meaning |
 //! |------|---------|
@@ -84,7 +84,7 @@ pub struct QuickResult {
 }
 
 impl QuickResult {
-    /// Beyond Compare's quick compare exit code (see the module docs).
+    /// The quick compare exit code (see the module docs).
     pub fn exit_code(&self) -> i32 {
         let rules = self.method == QuickMethod::Rules;
         match self.verdict {
@@ -97,7 +97,7 @@ impl QuickResult {
     }
 }
 
-/// Beyond Compare's default text rules for a rules-based quick compare:
+/// The default text rules for a rules-based quick compare:
 /// whitespace changes are unimportant (similar, exit 12), not differences.
 fn rules() -> TextDiffOptions {
     TextDiffOptions {

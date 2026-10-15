@@ -1,4 +1,4 @@
-//! Parser for PCompare scripts, which use Beyond Compare's script language:
+//! Parser for PCompare scripts, which use the common compare-script language:
 //! one command per line (a trailing `&` continues it on the next line), `#`
 //! comments (whole lines, or after whitespace at the end of one),
 //! double-quoted arguments, `%1`–`%9` script parameters, `%date%`,
@@ -64,7 +64,7 @@ pub struct Criteria {
 }
 
 impl Default for Criteria {
-    /// Beyond Compare's default: timestamp (2 s) and size.
+    /// The usual default: timestamp (2 s) and size.
     fn default() -> Self {
         Self {
             timestamp: true,
@@ -224,7 +224,7 @@ pub struct Columns {
 }
 
 impl Default for Columns {
-    /// Beyond Compare's default: size and timestamp.
+    /// The usual default: size and timestamp.
     fn default() -> Self {
         Self {
             size: true,
@@ -301,7 +301,7 @@ impl ReportKind {
 pub enum FileLayout {
     SideBySide,
     Summary,
-    /// One column, differences one above the other (BC's deprecated
+    /// One column, differences one above the other (the deprecated
     /// `over-under` and `composite`).
     Interleaved,
     Patch,
@@ -485,7 +485,7 @@ pub enum Command {
 }
 
 /// `%date%` (2012-12-31), `%time%` (23:59:59) and `%fn_time%` (23-59-59),
-/// as Beyond Compare expands them.
+/// as compare scripts expect them.
 pub fn builtin_var(name: &str, now: &DateTime<Local>) -> Option<String> {
     let fmt = match name.to_ascii_lowercase().as_str() {
         "date" => "%Y-%m-%d",
@@ -923,7 +923,7 @@ fn parse_attr_changes<'a>(parts: impl IntoIterator<Item = &'a str>) -> Result<(u
     Ok((set, clear))
 }
 
-/// Turns a BC folder mask (`obj\`, `\src\gen\`) into a glob.
+/// Turns a script folder mask (`obj\`, `\src\gen\`) into a glob.
 fn folder_glob(mask: &str) -> String {
     mask.replace('\\', "/").trim_matches('/').to_owned()
 }
@@ -1220,7 +1220,7 @@ fn print_option(v: &str) -> bool {
     )
 }
 
-/// Beyond Compare writes plain text unless an `html-*` output option asks
+/// Reports are plain text unless an `html-*` output option asks
 /// for HTML; PCompare also goes by the extension (`.html`, `.csv`, `.xml`).
 fn format_for(path: &str) -> OutputFormat {
     let lower = path.to_ascii_lowercase();
@@ -1470,7 +1470,7 @@ fn parse_file_report(kind: ReportKind, args: &[&str]) -> Result<Command, String>
                         "patch-normal" => r.patch = PatchStyle::Normal,
                         "patch-context" => r.patch = PatchStyle::Context,
                         "patch-unified" => r.patch = PatchStyle::Unified,
-                        // Deprecated in BC: descriptive stats became the summary layout,
+                        // Deprecated: descriptive stats became the summary layout,
                         // tabular is what the statistics layout always is.
                         "stats-descriptive" => r.layout = FileLayout::Summary,
                         "stats-tabular" => {}
@@ -2379,7 +2379,7 @@ mod tests {
     #[test]
     fn beyond_compare_sample_scripts_parse() {
         let params = ["My File.txt", "Your File.txt", "My Report.txt"].map(String::from);
-        for (i, script) in crate::tests::BC_SAMPLES.iter().enumerate() {
+        for (i, script) in crate::tests::SAMPLE_SCRIPTS.iter().enumerate() {
             if let Err(e) = parse_script(script, &params, &no_env) {
                 panic!("sample {i}: {e:?}");
             }

@@ -12,7 +12,7 @@
 //! `left/a.txt` = `right/a.txt` = "hello\n", `left/sub/b.txt` = "one\n",
 //! `right/sub/b.txt` = "two!\n", and `left/orphan.txt`.
 //!
-//! Besides reading, every profile is exercised for writing (bc5:remote-write):
+//! Besides reading, every profile is exercised for writing:
 //! file and folder operations, ranged reads and offset writes, parallel reads
 //! over the shared connection, and Folder Sync in both directions — including
 //! transfers that drop part-way and resume. Everything written goes into
