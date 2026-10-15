@@ -393,6 +393,35 @@ fn open_provider_console(app: AppHandle, kind: ProviderKind) -> CmdResult<()> {
     app.opener().open_url(url, None::<&str>).map_err(|e| e.to_string())
 }
 
+/// A file on this machine's disk, for "Open With" / "Reveal": remote, archive
+/// and version-control sides have no such file and are refused, and so is
+/// anything that isn't an absolute path to an existing file (a URL, say).
+fn local_file(path: &str) -> CmdResult<std::path::PathBuf> {
+    let p = std::path::Path::new(path);
+    if !p.is_absolute() || !p.is_file() {
+        return Err(format!("{path} is not a file on this computer"));
+    }
+    Ok(p.to_path_buf())
+}
+
+/// Opens a local file in the application the OS associates with its type.
+#[tauri::command]
+fn open_in_default_app(app: AppHandle, path: String) -> CmdResult<()> {
+    let file = local_file(&path)?;
+    app.opener()
+        .open_path(file.to_string_lossy(), None::<&str>)
+        .map_err(|e| format!("cannot open {path}: {e}"))
+}
+
+/// Shows a local file selected in Finder / Explorer / the desktop's file manager.
+#[tauri::command]
+fn reveal_in_file_manager(app: AppHandle, path: String) -> CmdResult<()> {
+    let file = local_file(&path)?;
+    app.opener()
+        .reveal_item_in_dir(file)
+        .map_err(|e| format!("cannot show {path}: {e}"))
+}
+
 #[tauri::command]
 async fn remote_list(app: AppHandle, path: String) -> CmdResult<Vec<RemoteEntry>> {
     blocking(move || {
@@ -547,6 +576,8 @@ fn main() {
             sign_in_profile,
             cancel_sign_in,
             open_provider_console,
+            open_in_default_app,
+            reveal_in_file_manager,
             remote_list,
             // bc5:remote-write — remote browser writes + SSH sign-in prompts
             remote::remote_mkdir,

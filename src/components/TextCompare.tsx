@@ -47,6 +47,7 @@ import {
   DEFAULT_TEXT_OPTIONS,
   errorMessage,
   isRemote,
+  shellApi,
   type DiffRow,
   type LineEnding,
   type Segment,
@@ -54,16 +55,16 @@ import {
   type TextDiffResult,
   type TextFileInfo,
 } from "../lib/api";
-import { formatSize } from "../lib/format";
+import { basename, formatSize } from "../lib/format";
 import { joinLines, type TextDocument, type TextFormat } from "../lib/mergeApi";
 // bc5:text-engine — grammar-aware diffing, rules dialog, per-side encodings, save backups.
 import { EyeOff, SlidersHorizontal } from "lucide-react";
 import { FilePen } from "lucide-react"; // bc5:editor-patch
-import { addRange, lineEndingsFor, loadBackups, textApi, type DiffSide } from "../lib/textApi";
+import { addRange, lineEndingsFor, loadBackups, removeRange, textApi, type DiffSide } from "../lib/textApi";
 import { SEPARATOR, type MenuEntry, type MenuItems } from "../lib/nativeMenu";
 import { useContextMenu } from "./ContextMenu";
 import { TextEncodingPicker } from "./TextEncodingPicker";
-import { TextRulesDialog } from "./TextRulesDialog";
+import { TextRulesDialog, type RulesPage } from "./TextRulesDialog";
 import { autoRefreshTitle, useAutoRefresh } from "../lib/useAutoRefresh";
 // bc5:text-ui — find/replace, bookmarks, wrap, line details, syntax, line editing, clipboard sides.
 import { readClipboardText, writeClipboardText } from "../lib/clipboard";
@@ -115,7 +116,7 @@ import { isComposing } from "../lib/ime";
 import { isMac, matches as keyMatches, shortcutLabel } from "../lib/keymap";
 import { setPrefs, usePref } from "../lib/prefs";
 import { indentRange, indentUnitOf } from "../lib/textEdit";
-import { changedRegion, EOL_GLYPH, eolsOfText, linkedLayout, shiftLinePairs } from "../lib/textLinks";
+import { changedRegion, EOL_GLYPH, eolsOfText, linkedLayout, shiftLinePairs, shiftLineRanges } from "../lib/textLinks";
 import { TextLinkedView } from "./TextLinkedView";
 // araxis:text-view end
 // araxis:text-review — bookmark comments, statistics, comparison archives.
@@ -295,6 +296,40 @@ const compareHits = (a: FindHit, b: FindHit) => a.row - b.row || sideOrder(a.sid
 /** Joined text of a row side's segments. */
 const segText = (segs: Segment[]) => (segs.length === 1 ? segs[0].text : segs.map((s) => s.text).join(""));
 
+/** The text from a side's first changed segment through its last ("" when nothing changed there). */
+function changedSpan(segs: Segment[] | null): string {
+  if (!segs) return "";
+  const first = segs.findIndex((s) => s.changed);
+  if (first < 0) return "";
+  const last = segs.length - 1 - [...segs].reverse().findIndex((s) => s.changed);
+  return segText(segs.slice(first, last + 1));
+}
+
+/**
+ * "Replacement…": the left text a row's difference replaced and what replaced
+ * it, or null when the row is not a changed line pair. Whole changed words are
+ * kept, but punctuation and spaces both sides share at the edges are dropped
+ * (`clients:` → `sessions:` becomes `clients` → `sessions`).
+ */
+function replacementOf(row: DiffRow | undefined): { left: string; right: string } | null {
+  if (!row || row.leftNo == null || row.rightNo == null) return null;
+  let left = changedSpan(row.left);
+  let right = changedSpan(row.right);
+  const shared = (a: string | undefined, b: string | undefined) => a !== undefined && a === b && /\W/.test(a);
+  while (shared(left.at(-1), right.at(-1))) [left, right] = [left.slice(0, -1), right.slice(0, -1)];
+  while (shared(left[0], right[0])) [left, right] = [left.slice(1), right.slice(1)];
+  left = left.trim();
+  return left ? { left, right: right.trim() } : null;
+}
+
+/** A path the OS can open or show: a file on this computer, not remote://, git:, svn: or hg:. */
+const isLocalPath = (p: string) => !!p && !isRemote(p) && !/^[a-z][a-z0-9+.-]+:(?![\\/])/i.test(p);
+const FILE_MANAGER = isMac
+  ? "Reveal in Finder"
+  : typeof navigator !== "undefined" && /Win/.test(navigator.platform)
+    ? "Show in Explorer"
+    : "Show in File Manager";
+
 /** Engine grammar tokens (when the diff carries them) mapped onto the TS tokenizer's classes. */
 const ENGINE_KIND: Record<string, TokenKind> = { comment: "com", string: "str", keyword: "kw", number: "num" };
 
@@ -318,6 +353,8 @@ interface Props {
   readOnlySides?: { left: boolean; right: boolean };
   /** Opens another comparison in a new tab (blame: a commit's change to the file). */
   onOpenCompare?: (left: string, right: string) => void;
+  /** Opens a Text Compare of two in-memory texts in a new tab (Compare Selection to Clipboard). */
+  onCompareTexts?: (memory: NonNullable<TextSettings["memory"]>) => void;
 }
 
 /** One side's file as edited in memory. */
@@ -435,12 +472,15 @@ export function TextCompare({
   onOpenEditor, // bc5:editor-patch
   readOnlySides, // bc5:reports-script
   onOpenCompare,
+  onCompareTexts,
 }: Props) {
   const [options, setOptions] = useState<TextDiffOptions>({ ...DEFAULT_TEXT_OPTIONS, ...settings?.options });
   const [mode, setMode] = useState<ViewMode>(settings?.mode ?? "all");
   const [autoRefresh, setAutoRefresh] = useState(settings?.autoRefresh ?? false);
   const [ignoreMinor, setIgnoreMinor] = useState(settings?.ignoreMinor ?? true);
   const [editingRules, setEditingRules] = useState(false);
+  /** Opens the Rules dialog on a page with a draft (Replacement… adds a rule from the current difference). */
+  const [rulesDraft, setRulesDraft] = useState<{ page: RulesPage; options: TextDiffOptions } | null>(null);
   const [reporting, setReporting] = useState(false); // bc5:reports-script
   // bc5:converters — File formats dialog and the formatted (rendered) HTML view.
   const [fileFormatsOpen, setFileFormatsOpen] = useState(false);
@@ -453,6 +493,8 @@ export function TextCompare({
   // bc5:text-ui — view toggles and bookmarks are saved with the session.
   // araxis:text-view — padding off (linked lines) has no word wrap: each side has its own row heights.
   const padding = usePref("textPadding");
+  /** The left pane's gutter sits at its right edge, so both copy arrows meet in the middle. */
+  const leftGutterRight = usePref("textLeftGutterRight");
   const [wordWrapOn, setWordWrap] = useState(settings?.wordWrap ?? false);
   const wordWrap = wordWrapOn && padding;
   const [showEol, setShowEol] = useState(settings?.showEol ?? false);
@@ -552,6 +594,13 @@ export function TextCompare({
     ];
   };
 
+  /** Isolate (or undo it) for the selected lines, or `row`'s line, on `side`. */
+  const isolateItems = (side: Side, row: number): MenuItems => {
+    const target = linesIn(rowsAt(side, row), side);
+    const undo = isIsolated(side, target);
+    return [menuItem(undo ? "Remove Isolation" : "Isolate", null, !fresh || !target, () => isolate(side, row, undo))];
+  };
+
   // Right-click menus; built after the right-click's caret/hunk change renders.
   // The text menu follows the reference layout: copy, clipboard, line edits,
   // section and alignment commands, then this side's file.
@@ -561,6 +610,7 @@ export function TextCompare({
     const h = rowHunk[row];
     const resolvedHere = rangeResolved(resolveRange());
     const lines = selRange ? "Selected Lines" : "Line";
+    const ownLines = rowsAt(side, row) === selRange ? "Selected Lines" : "Line";
     const editable = fresh && !readOnly[side];
     return [
       ...copyItems(side, row),
@@ -584,7 +634,6 @@ export function TextCompare({
       line != null && menuItem("Insert Line Before", null, !editable, () => insertLine(side, row, false)),
       line != null && menuItem("Insert Line After", null, !editable, () => insertLine(side, row, true)),
       SEPARATOR,
-      menuItem("Select Section", null, h < 0, () => selectSection(side, h)),
       // araxis:text-view
       menuItem(
         syncPick && syncPick.side !== side ? `Align With ${syncPick.side} line ${syncPick.line}` : "Align With… (Sync Point)",
@@ -593,10 +642,18 @@ export function TextCompare({
         () => setSyncPoint(side, row),
       ),
       line != null && syncLines[side].has(line) && menuItem("Remove Sync Point", null, false, () => removeSyncPoint(side, row)),
+      ...isolateItems(side, row),
+      menuItem("Replacement…", null, !replacementOf(rows[row]), () => draftReplacement(row)),
       menuItem(resolvedHere ? "Unmark Resolved" : "Mark Resolved (Ignore)", shortcutLabel("text.markResolved") || null, false, () =>
         markResolved(resolvedHere),
       ),
       // araxis:text-view end
+      SEPARATOR,
+      menuItem("Select Section", null, h < 0, () => selectSection(side, h)),
+      onCompareTexts &&
+        menuItem(`Compare ${ownLines} to Clipboard`, null, !shown || !linesIn(rowsAt(side, row), side), () =>
+          void compareToClipboard(side, row),
+        ),
       SEPARATOR,
       menuItem("Toggle Bookmark", "Ctrl+F2", false, toggleBookmark),
       menuItem("Comment…", null, false, () => review.commentRow(side, row)), // araxis:text-review
@@ -605,6 +662,12 @@ export function TextCompare({
       SEPARATOR,
       !memory[side] && menuItem(`Save ${sideName(side)} File`, null, !sideSavable(side) || saving, () => save(side)),
       menuItem(`Open Clipboard on ${sideName(side)}`, null, false, () => loadClipboard(side)),
+      onDisk(side) && {
+        label: "Open With",
+        submenu: [menuItem("Associated Application", null, false, () => shellOpen(side, false))],
+      },
+      onDisk(side) && menuItem(FILE_MANAGER, null, false, () => shellOpen(side, true)),
+      SEPARATOR,
       menuItem("Copy All to Right", shortcutLabel("text.copyAllToRight") || null, readOnly.right, () => replaceFile("left")),
       menuItem("Copy All to Left", shortcutLabel("text.copyAllToLeft") || null, readOnly.left, () => replaceFile("right")),
     ];
@@ -633,6 +696,7 @@ export function TextCompare({
       ),
       line != null && syncLines[side].has(line) && menuItem("Remove Sync Point", null, false, () => removeSyncPoint(side, row)),
       // araxis:text-view end
+      ...isolateItems(side, row),
     ];
   });
 
@@ -680,6 +744,11 @@ export function TextCompare({
       setShowEol((v) => !v),
     ),
     menuItem(showMoves ? "Don't Highlight Moved Blocks" : "Highlight Moved Blocks", null, false, () => setShowMoves((v) => !v)),
+    {
+      label: "Right Side Gutter for Left Pane",
+      checked: leftGutterRight,
+      onClick: () => setPrefs({ textLeftGutterRight: !leftGutterRight }),
+    },
   ]);
   /** A short status message (e.g. how many matches Replace All changed). */
   const [notice, setNotice] = useState<string | null>(null);
@@ -1099,6 +1168,13 @@ export function TextCompare({
       setResolved((m) => shiftBookmarks(m, side, start, removed, inserted));
       if (removed !== inserted && options.anchors.length)
         setOptions((o) => ({ ...o, anchors: shiftLinePairs(o.anchors, side, start, removed, inserted) }));
+      // Isolated lines stay with their text too.
+      if (removed !== inserted && options.isolated?.[side].length)
+        setOptions((o) =>
+          o.isolated
+            ? { ...o, isolated: { ...o.isolated, [side]: shiftLineRanges(o.isolated[side], start, removed, inserted) } }
+            : o,
+        );
     }
   };
   // araxis:text-view end
@@ -1281,6 +1357,82 @@ export function TextCompare({
     setAnchor(hunks[h].startRow);
     setCursor({ side, row: hunks[h].endRow - 1 });
   };
+
+  /** The selection when it is on `side`, else just `row`. */
+  const rowsAt = (side: Side, row: number): [number, number] =>
+    selRange && cursor?.side === side && row >= selRange[0] && row <= selRange[1] ? selRange : [row, row];
+
+  /** `side`'s lines (1-based, inclusive) in the rows of `range`, or null when it has none there. */
+  const linesIn = (range: [number, number], side: Side) => {
+    const span = lineSpan(rows, range[0], range[1] + 1, side);
+    return span.end > span.start ? { start: span.start + 1, end: span.end } : null;
+  };
+
+  /** Whether every line of `lines` on `side` is isolated. */
+  const isIsolated = (side: Side, lines: { start: number; end: number } | null) => {
+    const ranges = options.isolated?.[side] ?? [];
+    if (!lines || !ranges.length) return false;
+    for (let n = lines.start; n <= lines.end; n++) if (!ranges.some((r) => n >= r.start && n <= r.end)) return false;
+    return true;
+  };
+
+  /**
+   * Isolate: the selected lines (or `row`'s line) on `side` match nothing and
+   * the rest of the file is aligned around them; `undo` removes the isolation.
+   */
+  const isolate = (side: Side, row: number, undo: boolean) => {
+    const lines = linesIn(rowsAt(side, row), side);
+    if (!fresh || !lines) return;
+    setOptions((o) => {
+      const cur = o.isolated?.[side] ?? [];
+      const next = undo ? removeRange(cur, lines.start, lines.end) : addRange(cur, lines.start, lines.end);
+      return { ...o, isolated: { left: [], right: [], ...o.isolated, [side]: next } };
+    });
+    setAnchor(null);
+    const what = lines.start === lines.end ? `line ${lines.start}` : `lines ${lines.start}–${lines.end}`;
+    setNotice(`${sideName(side)} ${what} ${undo ? "aligned normally again" : "isolated (Rules ▸ Alignment lists them)"}`);
+  };
+
+  /** Replacement…: the Rules dialog's Replacements page with a rule drafted from `row`'s difference. */
+  const draftReplacement = (row: number) => {
+    const rep = replacementOf(rows[row]);
+    if (!rep) return;
+    const exists = options.replacements.some((r) => !r.regex && r.left === rep.left && r.right === rep.right);
+    setRulesDraft({
+      page: "replacements",
+      options: exists ? options : { ...options, replacements: [...options.replacements, { ...rep, regex: false }] },
+    });
+    setEditingRules(true);
+  };
+
+  /** Compare Selection to Clipboard: the selected lines (or `row`'s line) against the clipboard, in a new tab. */
+  const compareToClipboard = async (side: Side, row: number) => {
+    const lines = linesIn(rowsAt(side, row), side);
+    if (!onCompareTexts || !shown || !docs || !lines) return;
+    let clip: string;
+    try {
+      clip = await readClipboardText();
+    } catch (e) {
+      setError(`Could not read the clipboard: ${errorMessage(e)}`);
+      return;
+    }
+    const name = docs[side].memory ? docs[side].info.path : basename(docs[side].info.path);
+    const what = lines.start === lines.end ? `line ${lines.start}` : `lines ${lines.start}–${lines.end}`;
+    onCompareTexts({
+      left: { text: shown[side].slice(lines.start - 1, lines.end).join("\n"), label: `${name} (${what})` },
+      right: { text: clip, label: CLIPBOARD_LABEL },
+    });
+  };
+
+  /** Open With ▸ Associated Application / Reveal: `side`'s file handed to the OS. */
+  const shellOpen = (side: Side, reveal: boolean) => {
+    const path = side === "left" ? left : right;
+    (reveal ? shellApi.revealInFileManager(path) : shellApi.openInDefaultApp(path)).catch((e) =>
+      setNotice(errorMessage(e)),
+    );
+  };
+  /** `side` is a file on this computer (not clipboard text, remote or version-control). */
+  const onDisk = (side: Side) => !memory[side] && !!docs && !docs[side].memory && isLocalPath(side === "left" ? left : right);
 
   // ---------- line editing ----------
 
@@ -1630,6 +1782,8 @@ export function TextCompare({
     options.unimportantLines.right.length +
     options.anchors.length +
     options.breaks.length +
+    (options.isolated?.left.length ?? 0) +
+    (options.isolated?.right.length ?? 0) +
     [options.ignoreComments, options.ignoreStrings, options.compareLineEndings].filter(Boolean).length +
     (options.pageHeaderLines || options.pageFooterLines ? 1 : 0) +
     // araxis:text-engine
@@ -2263,6 +2417,7 @@ export function TextCompare({
     // araxis:text-view — edit markers, sync points, dragging a selection by its line numbers.
     const edit = n != null && editedKeys.has(`${side}:${n}`);
     const synced = n != null && syncLines[side].has(n);
+    const iso = n != null && !!options.isolated?.[side].some((r) => n >= r.start && n <= r.end);
     const picked = n != null && syncPick?.side === side && syncPick.line === n;
     const inSel = !!selRange && cursor?.side === side && rowIdx >= selRange[0] && rowIdx <= selRange[1];
     const hints = [
@@ -2270,11 +2425,12 @@ export function TextCompare({
       review.comment(side, n) ?? "", // araxis:text-review
       edit ? "edited since the last save" : "",
       synced ? "sync point (right-click to remove)" : "",
+      iso ? "isolated: matches no line of the other side (right-click ▸ Remove Isolation)" : "",
       inSel ? "drag the selection to move it, or onto the other side to copy it" : "",
     ];
     return (
       <span
-        className={`ln${marked ? " tc-bm" : ""}${edit ? " tc-edited" : ""}${synced ? " tc-syncln" : ""}${
+        className={`ln${marked ? " tc-bm" : ""}${edit ? " tc-edited" : ""}${synced ? " tc-syncln" : ""}${iso ? " tc-isoln" : ""}${
           picked ? " tc-syncpick" : ""
         }${inSel && fresh ? " tc-draggable" : ""}${dropCls(rowIdx, side)}`}
         title={hints.filter(Boolean).join(" · ")}
@@ -2346,7 +2502,7 @@ export function TextCompare({
     if (!pos) return null;
     return (
       <div className="vrow tc-editor-layer" style={{ top: pos.top, height: pos.height }}>
-        <div className="trow">{editorArea(editor.side === "left" ? 2 : 5)}</div>
+        <div className="trow">{editorArea(editor.side === "left" ? (leftGutterRight ? 1 : 2) : 5)}</div>
       </div>
     );
   };
@@ -2386,7 +2542,8 @@ export function TextCompare({
     if (index >= 0) linkedEditorPos.current = { side: editor.side, index };
     const pos = linkedEditorPos.current;
     if (!pos || pos.side !== editor.side) return null;
-    return { ...pos, node: <div className="trow tc-prow">{editorArea(2)}</div> };
+    const column = editor.side === "left" && leftGutterRight ? 1 : 2;
+    return { ...pos, node: <div className="trow tc-prow">{editorArea(column)}</div> };
   };
 
   /** One side's row in the linked view: its line number and text, or a hidden-lines gap. */
@@ -2479,7 +2636,10 @@ export function TextCompare({
   const lineState = rowStateLabel(cursor ? rows[cursor.row] : detail);
   // araxis:text-view end
   return (
-    <div className={`session tc-editable${blameOn ? " tc-blame-on" : ""}`} ref={root}>
+    <div
+      className={`session tc-editable${blameOn ? " tc-blame-on" : ""}${leftGutterRight ? " tc-lgutter-right" : ""}`}
+      ref={root}
+    >
       {/* Beyond Compare's text toolbar: view filters, Minor, Rules, section navigation, copy, swap, reload. */}
       <div className="toolbar tc-bc-toolbar">
         <div className="stack-group" role="group" aria-label="Show">
@@ -2501,7 +2661,7 @@ export function TextCompare({
         <StackButton
           icon={<SlidersHorizontal size={16} />}
           label={ruleCount ? `Rules · ${ruleCount}` : "Rules"}
-          onClick={() => setEditingRules(true)}
+          onClick={() => (setRulesDraft(null), setEditingRules(true))}
           title="Session rules: whitespace, case, algorithm, importance (grammar, regexes, columns), replacements, alignment"
         />
         <span className="sep" />
@@ -2697,10 +2857,11 @@ export function TextCompare({
       )}
       {editingRules && (
         <TextRulesDialog
-          options={options}
+          options={rulesDraft?.options ?? options}
+          initialPage={rulesDraft?.page}
           detected={diff ? { left: diff.leftGrammar ?? null, right: diff.rightGrammar ?? null } : undefined}
           lineCounts={docs ? { left: docs.left.lines.length, right: docs.right.lines.length } : undefined}
-          onClose={() => setEditingRules(false)}
+          onClose={() => (setEditingRules(false), setRulesDraft(null))}
           onApply={setOptions}
           onOpenFileFormats={() => (setEditingRules(false), setFileFormatsOpen(true))} // bc5:converters
         />

@@ -341,6 +341,29 @@ function AppearancePage({ prefs, set }: { prefs: Prefs; set: SetPrefs }) {
           </button>
         </div>
       </fieldset>
+      <fieldset>
+        <legend>Text Compare layout</legend>
+        <label className="field check">
+          <input
+            type="checkbox"
+            checked={prefs.textPadding}
+            onChange={(e) => set({ textPadding: e.target.checked })}
+          />
+          Vertical padding (blank rows keep both sides aligned)
+        </label>
+        <label className="field check">
+          <input
+            type="checkbox"
+            checked={prefs.textLeftGutterRight}
+            onChange={(e) => set({ textLeftGutterRight: e.target.checked })}
+          />
+          Right side gutter for left pane
+        </label>
+        <small className="muted settings-hint">
+          The left pane's copy arrows and line numbers move to its right edge, next to the right pane's, so both
+          arrows sit together in the middle.
+        </small>
+      </fieldset>
     </div>
   );
 }

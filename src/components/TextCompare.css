@@ -643,3 +643,67 @@
   padding: 0 5px;
   cursor: help;
 }
+
+/*
+ * "Right side gutter for left pane" (pref textLeftGutterRight): the left
+ * pane's gutter moves to its inner edge, so both sides' copy arrows sit
+ * together in the middle. `order` moves the left text cell first without
+ * changing the DOM, so the nth-child colour rules still apply.
+ */
+.tc-editable.tc-lgutter-right .trow {
+  grid-template-columns: 1fr 68px 14px 68px 1fr;
+}
+.tc-editable.tc-lgutter-right.tc-blame-on .trow {
+  grid-template-columns: 1fr 244px 14px 244px 1fr;
+}
+.tc-editable.tc-lgutter-right .tc-pane-left .trow.tc-prow {
+  grid-template-columns: 1fr 68px;
+}
+.tc-editable.tc-lgutter-right.tc-blame-on .tc-pane-left .trow.tc-prow {
+  grid-template-columns: 1fr 244px;
+}
+.tc-editable.tc-lgutter-right .tc-pane-right .trow.tc-prow {
+  grid-template-columns: 68px 1fr;
+}
+.tc-editable.tc-lgutter-right.tc-blame-on .tc-pane-right .trow.tc-prow {
+  grid-template-columns: 244px 1fr;
+}
+.tc-editable.tc-lgutter-right .trow > .tcell:nth-child(2) {
+  order: -1;
+}
+.tc-editable.tc-lgutter-right .tc-pane-right .trow > .tcell:nth-child(2) {
+  order: 0;
+}
+.tc-editable.tc-lgutter-right .trow .ln[data-tc-side="left"] {
+  padding-left: 6px;
+  padding-right: 18px;
+  text-align: left;
+}
+.tc-editable.tc-lgutter-right .ln[data-tc-side="left"] .tc-garrow {
+  left: auto;
+  right: 1px;
+}
+.tc-editable.tc-lgutter-right .ln[data-tc-side="left"] .tc-gbracket {
+  left: auto;
+  right: 9px;
+  border-left: none;
+  border-right: 1px solid var(--tc-bracket);
+}
+.tc-editable.tc-lgutter-right .trow .ln[data-tc-side="left"].tc-bm::before {
+  left: auto;
+  right: 20px;
+}
+.tc-editable.tc-lgutter-right .trow .ln[data-tc-side="left"].tc-syncln::after,
+.tc-editable.tc-lgutter-right .trow .ln[data-tc-side="left"].tc-syncpick::after {
+  right: auto;
+  left: 2px;
+}
+.tc-editable.tc-lgutter-right .trow .ln[data-tc-side="left"].tc-edited {
+  box-shadow: inset 3px 0 0 var(--tc-edited);
+}
+
+/* Isolated lines (right-click ▸ Isolate): their numbers are struck through. */
+.tc-editable .trow .ln.tc-isoln {
+  text-decoration: line-through;
+  text-decoration-color: var(--muted);
+}

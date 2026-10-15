@@ -160,6 +160,10 @@ pub struct TextDiffOptions {
     pub anchors: Vec<LinePair>,
     /// Forced separations: these lines are never shown side by side.
     pub breaks: Vec<LinePair>,
+    /// Isolated lines ("Isolate"): they match nothing and are never shown
+    /// next to a line of the other side, and the lines around them are
+    /// aligned as if they weren't there.
+    pub isolated: SideRanges,
     /// Numbers compare by value, within a tolerance; lines differing only
     /// in such numbers are unimportant.
     pub numeric_tolerance: NumericTolerance,
@@ -914,11 +918,24 @@ fn align_range(
 /// Aligns both sides, honoring manual anchors (diffing the stretches
 /// between them separately) and alignment breaks.
 fn align(lk: &[String], rk: &[String], opts: &TextDiffOptions) -> Vec<Item> {
+    let iso_l = range_mask(&opts.isolated.left, lk.len());
+    let iso_r = range_mask(&opts.isolated.right, rk.len());
+    // Isolated lines get keys nothing else has, so the diff aligns the
+    // other lines around them; the pairs that still form are split below.
+    let (lk_iso, rk_iso);
+    let (lk, rk) = if iso_l.iter().chain(&iso_r).any(|&b| b) {
+        lk_iso = isolate_keys(lk, &iso_l, '<');
+        rk_iso = isolate_keys(rk, &iso_r, '>');
+        (&lk_iso[..], &rk_iso[..])
+    } else {
+        (lk, rk)
+    };
     let mut anchors: Vec<(usize, usize)> = opts
         .anchors
         .iter()
         .filter(|a| (1..=lk.len()).contains(&a.left) && (1..=rk.len()).contains(&a.right))
         .map(|a| (a.left - 1, a.right - 1))
+        .filter(|&(l, r)| !iso_l[l] && !iso_r[r])
         .collect();
     anchors.sort_unstable();
     // Anchors that would cross an earlier one are dropped.
@@ -941,7 +958,7 @@ fn align(lk: &[String], rk: &[String], opts: &TextDiffOptions) -> Vec<Item> {
     }
     align_range(lk, rk, l..lk.len(), r..rk.len(), opts, &mut items);
 
-    if opts.breaks.is_empty() {
+    if opts.breaks.is_empty() && !iso_l.iter().chain(&iso_r).any(|&b| b) {
         return items;
     }
     let breaks: std::collections::HashSet<(usize, usize)> = opts
@@ -952,11 +969,34 @@ fn align(lk: &[String], rk: &[String], opts: &TextDiffOptions) -> Vec<Item> {
     items
         .into_iter()
         .flat_map(|item| match item {
-            Item::Pair { l, r, .. } if breaks.contains(&(l, r)) => {
+            Item::Pair { l, r, .. } if breaks.contains(&(l, r)) || iso_l[l] || iso_r[r] => {
                 vec![Item::Left(l), Item::Right(r)]
             }
             other => vec![other],
         })
+        .collect()
+}
+
+/// Which of `len` lines fall in `ranges` (1-based, inclusive; out-of-range
+/// parts are ignored).
+fn range_mask(ranges: &[LineRange], len: usize) -> Vec<bool> {
+    let mut out = vec![false; len];
+    for r in ranges {
+        let end = r.end.min(len);
+        if r.start >= 1 && r.start <= end {
+            out[r.start - 1..end].fill(true);
+        }
+    }
+    out
+}
+
+/// `keys` with every isolated line's key replaced by one no other line can
+/// have: a NUL (never in a line's text) plus the side and line number.
+fn isolate_keys(keys: &[String], isolated: &[bool], side: char) -> Vec<String> {
+    keys.iter()
+        .zip(isolated)
+        .enumerate()
+        .map(|(i, (k, &iso))| if iso { format!("\0{side}{i}") } else { k.clone() })
         .collect()
 }
 
@@ -1602,6 +1642,55 @@ mod tests {
         let last = &res.rows[res.rows.len() - 2..];
         assert_eq!(last[0].kind, RowKind::LeftOnly);
         assert_eq!(last[1].kind, RowKind::RightOnly);
+    }
+
+    #[test]
+    fn isolated_lines_stand_alone_and_the_rest_realigns() {
+        let l = "a\nb\nc\nd\n";
+        let r = "a\nb\nc\nd\n";
+        let opts = TextDiffOptions {
+            isolated: SideRanges {
+                left: vec![LineRange { start: 2, end: 3 }],
+                right: vec![],
+            },
+            ..Default::default()
+        };
+        let res = diff_text(l, r, &opts).unwrap();
+        // Left b and c match nothing; a and d still pair up.
+        let pairs: Vec<_> = res
+            .rows
+            .iter()
+            .filter_map(|row| Some((row.left_no?, row.right_no?)))
+            .collect();
+        assert_eq!(pairs, vec![(1, 1), (4, 4)]);
+        let kinds: Vec<_> = res.rows.iter().map(|row| row.kind).collect();
+        assert_eq!(kinds.iter().filter(|k| **k == RowKind::LeftOnly).count(), 2);
+        assert_eq!(kinds.iter().filter(|k| **k == RowKind::RightOnly).count(), 2);
+
+        // A changed line paired by similarity is split when one side is isolated,
+        // and a sync point on an isolated line is ignored.
+        let opts = TextDiffOptions {
+            isolated: SideRanges {
+                left: vec![],
+                right: vec![LineRange { start: 2, end: 2 }],
+            },
+            anchors: vec![LinePair { left: 2, right: 2 }],
+            ..Default::default()
+        };
+        let res = diff_text("x\nfoo(1)\ny\n", "x\nfoo(2)\ny\n", &opts).unwrap();
+        assert!(!res
+            .rows
+            .iter()
+            .any(|row| row.left_no.is_some() && row.right_no == Some(2)));
+        // Out-of-range isolation is ignored.
+        let opts = TextDiffOptions {
+            isolated: SideRanges {
+                left: vec![LineRange { start: 9, end: 12 }],
+                right: vec![LineRange { start: 0, end: 0 }],
+            },
+            ..Default::default()
+        };
+        assert!(diff_text("a\n", "a\n", &opts).unwrap().rows.iter().all(|r| r.kind == RowKind::Equal));
     }
 
     #[test]
