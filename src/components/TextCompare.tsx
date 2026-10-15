@@ -1,7 +1,13 @@
 import {
   ArrowDown,
   ArrowLeft,
+  ArrowLeftRight,
   ArrowRight,
+  Columns2,
+  Equal,
+  EqualNot,
+  Feather,
+  FoldVertical,
   ArrowUp,
   Binary,
   ChevronLeft,
@@ -34,6 +40,8 @@ import {
   type ClipboardEvent as ReactClipboardEvent,
   type KeyboardEvent as ReactKeyboardEvent,
   type MouseEvent as ReactMouseEvent,
+  type ButtonHTMLAttributes,
+  type ReactNode,
   type WheelEvent,
 } from "react";
 import {
@@ -41,13 +49,11 @@ import {
   errorMessage,
   isRemote,
   type DiffRow,
-  type Hunk,
   type LineEnding,
   type Segment,
   type TextDiffOptions,
   type TextDiffResult,
   type TextFileInfo,
-  type WhitespaceMode,
 } from "../lib/api";
 import { formatSize } from "../lib/format";
 import { joinLines, type TextDocument, type TextFormat } from "../lib/mergeApi";
@@ -62,6 +68,7 @@ import { TextRulesDialog } from "./TextRulesDialog";
 import { autoRefreshTitle, useAutoRefresh } from "../lib/useAutoRefresh";
 // bc5:text-ui — find/replace, bookmarks, wrap, line details, syntax, line editing, clipboard sides.
 import { readClipboardText, writeClipboardText } from "../lib/clipboard";
+import { differenceSections, isDifference, rowStateLabel } from "../lib/textSections";
 import {
   compileQuery,
   DEFAULT_FIND_OPTIONS,
@@ -137,7 +144,8 @@ const CLIPBOARD_LABEL = "Clipboard";
 /** Stands in for a side with no file while the other side has one (an orphan from a folder compare). */
 const NO_FILE_LABEL = "no file";
 
-type ViewMode = "all" | "context" | "diffs";
+/** BC's view filters: All, Diffs, Same and Context (differences plus a few lines around them). */
+type ViewMode = "all" | "context" | "diffs" | "same";
 type Side = "left" | "right";
 const SIDES: Side[] = ["left", "right"];
 const other = (s: Side): Side => (s === "left" ? "right" : "left");
@@ -147,6 +155,8 @@ export interface TextSettings {
   options: TextDiffOptions;
   mode: ViewMode;
   autoRefresh: boolean;
+  /** BC's "Minor" toggle: unimportant differences count as same (default on). */
+  ignoreMinor?: boolean;
   // bc5:text-ui
   wordWrap?: boolean;
   syntax?: boolean;
@@ -343,14 +353,13 @@ function reloadSide(cur: SideDoc, fresh: TextDocument): SideDoc | null {
 }
 const lineNo = (r: DiffRow, side: Side) => (side === "left" ? r.leftNo : r.rightNo);
 
-const isImportant = (r: DiffRow) => r.kind !== "equal" && r.kind !== "unimportant";
-
-function buildDisplay(rows: DiffRow[], mode: ViewMode): DisplayItem[] {
+function buildDisplay(rows: DiffRow[], mode: ViewMode, ignoreMinor: boolean): DisplayItem[] {
   if (mode === "all") return rows.map((_, row) => ({ row }));
   const ctx = mode === "context" ? CONTEXT_LINES : 0;
   const keep = new Uint8Array(rows.length);
   rows.forEach((r, i) => {
-    if (!isImportant(r)) return;
+    // "Same" keeps the lines the other filters hide, and vice versa.
+    if (isDifference(r, ignoreMinor) === (mode === "same")) return;
     for (let j = Math.max(0, i - ctx); j <= Math.min(rows.length - 1, i + ctx); j++) keep[j] = 1;
   });
   const out: DisplayItem[] = [];
@@ -412,6 +421,7 @@ export function TextCompare({
   const [options, setOptions] = useState<TextDiffOptions>({ ...DEFAULT_TEXT_OPTIONS, ...settings?.options });
   const [mode, setMode] = useState<ViewMode>(settings?.mode ?? "all");
   const [autoRefresh, setAutoRefresh] = useState(settings?.autoRefresh ?? false);
+  const [ignoreMinor, setIgnoreMinor] = useState(settings?.ignoreMinor ?? true);
   const [editingRules, setEditingRules] = useState(false);
   const [reporting, setReporting] = useState(false); // bc5:reports-script
   // bc5:converters — File formats dialog and the formatted (rendered) HTML view.
@@ -440,7 +450,8 @@ export function TextCompare({
   const [caretIdx, setCaretIdx] = useState(0);
   // araxis:text-view end
   const [syntaxOn, setSyntaxOn] = useState(settings?.syntax ?? true);
-  const [showDetails, setShowDetails] = useState(settings?.lineDetails ?? false);
+  // Beyond Compare keeps Line Details open under the panes.
+  const [showDetails, setShowDetails] = useState(settings?.lineDetails ?? true);
   const [bookmarks, setBookmarks] = useState<BookmarkMark[]>(settings?.bookmarks ?? []);
   const reportSettings = useRef(onSettingsChange);
   reportSettings.current = onSettingsChange;
@@ -450,6 +461,7 @@ export function TextCompare({
         options,
         mode,
         autoRefresh,
+        ignoreMinor,
         wordWrap: wordWrapOn, // araxis:text-view
         syntax: syntaxOn,
         lineDetails: showDetails,
@@ -458,7 +470,7 @@ export function TextCompare({
         showEol, // araxis:text-view
         resolved, // araxis:text-view
       }),
-    [options, mode, autoRefresh, wordWrapOn, syntaxOn, showDetails, bookmarks, encodings, showEol, resolved],
+    [options, mode, autoRefresh, ignoreMinor, wordWrapOn, syntaxOn, showDetails, bookmarks, encodings, showEol, resolved],
   );
 
   const [docs, setDocs] = useState<Docs | null>(null);
@@ -739,13 +751,29 @@ export function TextCompare({
   /** Row line numbers match the current text, so edits can be mapped onto it. */
   const fresh = !!diffed && !!docs && diffed.for.left === docs.left.lines && diffed.for.right === docs.right.lines;
   const rows = diff?.rows ?? [];
-  const hunks = diff?.hunks ?? [];
-  const display = useMemo(() => buildDisplay(rows, mode), [rows, mode]);
+  const hunks = useMemo(() => differenceSections(rows, diff?.hunks ?? [], ignoreMinor), [rows, diff, ignoreMinor]);
+  const display = useMemo(() => buildDisplay(rows, mode, ignoreMinor), [rows, mode, ignoreMinor]);
   const rowToDisplay = useMemo(() => {
     const map = new Int32Array(rows.length).fill(-1);
     display.forEach((d, i) => "row" in d && (map[d.row] = i));
     return map;
   }, [display, rows.length]);
+  /** The row each display item shows; a gap maps to the first row it hides (for the thumbnail). */
+  const displayRows = useMemo(() => {
+    const out = new Int32Array(display.length);
+    let next = 0;
+    display.forEach((d, i) => {
+      if ("row" in d) {
+        out[i] = d.row;
+        next = d.row + 1;
+      } else {
+        out[i] = next;
+        next += d.gap;
+      }
+    });
+    return out;
+  }, [display]);
+  const listScroller = useCallback(() => gridRef.current?.querySelector<HTMLElement>(".vlist") ?? null, []);
   const rowHunk = useMemo(() => {
     const map = new Int32Array(rows.length).fill(-1);
     hunks.forEach((h, i) => map.fill(i, h.startRow, h.endRow));
@@ -1784,8 +1812,20 @@ export function TextCompare({
     }
   };
 
-  const changePaths = (l: string, r: string) => {
-    if (!confirmDiscard("open the new files")) return;
+  /** BC's Swap Sides: the files (and their encodings, clipboard text) trade places. */
+  const swapSides = () => {
+    if (left === right) return;
+    if (!confirmDiscard("swap the sides")) return;
+    setEncodings((e) => ({ left: e.right, right: e.left }));
+    changePaths(right, left, true);
+  };
+
+  /** What a collapsed run of rows says: BC's Same view hides differences, the others hide same lines. */
+  const gapLabel = (n: number) =>
+    `⋯ ${n.toLocaleString()} ${mode === "same" ? "different" : "same"} line${n === 1 ? "" : "s"} hidden ⋯`;
+
+  const changePaths = (l: string, r: string, confirmed = false) => {
+    if (!confirmed && !confirmDiscard("open the new files")) return;
     // bc5:text-ui — a newly chosen file replaces that side's clipboard text; swapping swaps it too.
     if (memory.left || memory.right) {
       const swapped = l === right && r === left && l !== r;
@@ -2060,7 +2100,7 @@ export function TextCompare({
   const renderRow = (i: number) => {
     const item = display[i];
     if ("gap" in item) {
-      return <div className="tgap">⋯ {item.gap.toLocaleString()} identical lines hidden ⋯</div>;
+      return <div className="tgap">{gapLabel(item.gap)}</div>;
     }
     const row = rows[item.row];
     const h = rowHunk[item.row];
@@ -2153,7 +2193,7 @@ export function TextCompare({
   /** One side's row in the linked view: its line number and text, or a hidden-lines gap. */
   const renderSide = (side: Side, d: number) => {
     const item = display[d];
-    if ("gap" in item) return <div className="tgap">⋯ {item.gap.toLocaleString()} identical lines hidden ⋯</div>;
+    if ("gap" in item) return <div className="tgap">{gapLabel(item.gap)}</div>;
     const row = rows[item.row];
     const h = rowHunk[item.row];
     return (
@@ -2245,89 +2285,84 @@ export function TextCompare({
         ? `${sideName(cursor.side)} · Ln ${caretLine}, Col 1`
         : null;
   const syncHint = isMac ? "⌘+click" : "Ctrl+click";
+  /** BC's status-bar state of the caret line ("Important difference", "Same", …). */
+  const lineState = rowStateLabel(cursor ? rows[cursor.row] : detail);
   // araxis:text-view end
   return (
     <div className="session tc-editable" ref={root}>
-      <div className="toolbar">
-        <button onClick={() => goHunk(hunkIdx - 1)} disabled={!hunks.length} title="Previous difference (Alt+↑)">
-          <ArrowUp size={14} /> Prev
-        </button>
-        <button onClick={() => goHunk(hunkIdx + 1)} disabled={!hunks.length} title="Next difference (Alt+↓)">
-          <ArrowDown size={14} /> Next
-        </button>
-        <button
-          className="icon-btn"
-          onClick={() => copyTo("right")}
-          disabled={!(hasHunk || (fresh && selRange && cursor?.side === "left")) || readOnly.right}
+      {/* Beyond Compare's text toolbar: view filters, Minor, Rules, section navigation, copy, swap, reload. */}
+      <div className="toolbar tc-bc-toolbar">
+        <div className="bc-group" role="group" aria-label="Show">
+          {VIEW_FILTERS.map(({ mode: m, label, icon, title }) => (
+            <BcButton key={m} icon={icon} label={label} active={mode === m} onClick={() => setMode(m)} title={title} />
+          ))}
+        </div>
+        <BcButton
+          icon={<Feather size={16} />}
+          label="Minor"
+          active={ignoreMinor}
+          onClick={() => setIgnoreMinor((v) => !v)}
           title={
-            readOnly.right
-              ? READ_ONLY_HINT
-              : "Copy the selected left lines, or else the current difference, to the right (Alt+→)"
+            ignoreMinor
+              ? "Ignoring unimportant differences: they count as same (click to treat them as differences)"
+              : "Unimportant differences count as differences (click to ignore them)"
           }
-        >
-          <ArrowRight size={14} />
-        </button>
-        <button
-          className="icon-btn"
+        />
+        <BcButton
+          icon={<SlidersHorizontal size={16} />}
+          label={ruleCount ? `Rules · ${ruleCount}` : "Rules"}
+          onClick={() => setEditingRules(true)}
+          title="Session rules: whitespace, case, algorithm, importance (grammar, regexes, columns), replacements, alignment"
+        />
+        <span className="sep" />
+        <BcButton
+          icon={<ArrowUp size={16} />}
+          label="Prev Section"
+          onClick={() => goHunk(hunkIdx - 1)}
+          disabled={!hunks.length}
+          title="Previous difference section (Alt+↑)"
+        />
+        <BcButton
+          icon={<ArrowDown size={16} />}
+          label="Next Section"
+          onClick={() => goHunk(hunkIdx + 1)}
+          disabled={!hunks.length}
+          title="Next difference section (Alt+↓)"
+        />
+        <span className="sep" />
+        <BcButton
+          icon={<ArrowLeft size={16} />}
+          label="Copy Left"
           onClick={() => copyTo("left")}
           disabled={!(hasHunk || (fresh && selRange && cursor?.side === "right")) || readOnly.left}
           title={
-            readOnly.left ? READ_ONLY_HINT : "Copy the selected right lines, or else the current difference, to the left (Alt+←)"
+            readOnly.left ? READ_ONLY_HINT : "Copy the selected right lines, or else the current section, to the left (Alt+←)"
           }
-        >
-          <ArrowLeft size={14} />
-        </button>
+        />
+        <BcButton
+          icon={<ArrowRight size={16} />}
+          label="Copy Right"
+          onClick={() => copyTo("right")}
+          disabled={!(hasHunk || (fresh && selRange && cursor?.side === "left")) || readOnly.right}
+          title={
+            readOnly.right ? READ_ONLY_HINT : "Copy the selected left lines, or else the current section, to the right (Alt+→)"
+          }
+        />
         <span className="sep" />
-        <div className="seg-control">
-          {(["all", "context", "diffs"] as ViewMode[]).map((m) => (
-            <button key={m} className={mode === m ? "active" : ""} onClick={() => setMode(m)}>
-              {m === "all" ? "All" : m === "context" ? "Context" : "Diffs"}
-            </button>
-          ))}
-        </div>
-        <span className="sep" />
-        <label>
-          Whitespace
-          <select
-            value={options.whitespace}
-            onChange={(e) => setOptions({ ...options, whitespace: e.target.value as WhitespaceMode })}
-          >
-            <option value="compare">Compare</option>
-            <option value="ignoreTrailing">Ignore trailing</option>
-            <option value="ignoreChanges">Ignore changes</option>
-            <option value="ignoreAll">Ignore all</option>
-          </select>
-        </label>
-        <label className="check">
-          <input
-            type="checkbox"
-            checked={options.ignoreCase}
-            onChange={(e) => setOptions({ ...options, ignoreCase: e.target.checked })}
-          />
-          Ignore case
-        </label>
-        <label>
-          Algorithm
-          <select
-            value={options.algorithm}
-            onChange={(e) => setOptions({ ...options, algorithm: e.target.value as TextDiffOptions["algorithm"] })}
-          >
-            <option value="patience">Patience</option>
-            <option value="myers">Myers</option>
-          </select>
-        </label>
-        {/* bc5:text-engine — rules dialog and manual "unimportant" marks */}
-        <button
-          onClick={() => setEditingRules(true)}
-          title="Importance (grammar comments and strings, regexes, columns, page headers, line endings), replacements, alignment and backups"
-        >
-          <SlidersHorizontal size={14} /> Rules{ruleCount ? ` · ${ruleCount}` : ""}
-        </button>
+        <BcButton
+          icon={<ArrowLeftRight size={16} />}
+          label="Swap"
+          onClick={swapSides}
+          disabled={!left || !right || left === right}
+          title="Swap sides: exchange the left and right files"
+        />
+        <BcButton icon={<RefreshCw size={16} />} label="Reload" onClick={refresh} title="Reload both files (F5)" />
+        <span className="spacer" />
         <button
           className="icon-btn"
           onClick={markUnimportant}
           disabled={!fresh || (!cursor && !(hunkIdx >= 0 && hunkIdx < hunks.length))}
-          title="Mark the selected lines (or the current difference) as unimportant"
+          title="Mark the selected lines (or the current section) as unimportant"
         >
           <EyeOff size={14} />
         </button>
@@ -2342,7 +2377,6 @@ export function TextCompare({
             <AppWindow size={14} />
           </button>
         )}
-        <span className="spacer" />
         {/* bc5:text-ui — find, view toggles, bookmarks */}
         <button
           className={`icon-btn${findOpen ? " active" : ""}`}
@@ -2443,14 +2477,12 @@ export function TextCompare({
         </label>
         {/* bc5:reports-script */}
         <button
+          className="icon-btn"
           onClick={() => setReporting(true)}
           disabled={!docs || binary}
           title="Report: save, copy or print this comparison as HTML, plain text or a unified patch"
         >
-          <FileText size={14} /> Report…
-        </button>
-        <button onClick={refresh} title="Refresh (F5)">
-          <RefreshCw size={14} /> Refresh
+          <FileText size={14} />
         </button>
       </div>
       {/* bc5:reports-script — reports diff the text as shown, unsaved edits included. */}
@@ -2622,10 +2654,11 @@ export function TextCompare({
             </span>
             <Overview
               rows={rows}
-              hunks={hunks}
               marks={bookmarkRows}
               edits={editRows} // araxis:text-view
-              onJump={(row) => list.current?.scrollToRow(rowToDisplay[row])}
+              displayRows={displayRows}
+              scroller={listScroller}
+              listKind={linked ? "linked" : "padded"}
             />
             {/* araxis:text-view — padding off: linked lines */}
             {linked ? (
@@ -2680,9 +2713,10 @@ export function TextCompare({
           ) : (
             <>
               <span>
-                {hunks.length} difference{hunks.length === 1 ? "" : "s"}
+                {hunks.length} difference section{hunks.length === 1 ? "" : "s"}
                 {hunkIdx >= 0 && hunkIdx < hunks.length ? ` (at ${hunkIdx + 1})` : ""}
               </span>
+              {lineState && <span className="tc-linestate">{lineState}</span>}
               <span className="k-changed-fg">{stats!.changed} changed</span>
               <span className="k-leftOnly-fg">{stats!.leftOnly} left only</span>
               <span className="k-rightOnly-fg">{stats!.rightOnly} right only</span>
@@ -2723,41 +2757,193 @@ export function TextCompare({
   );
 }
 
-/** Thumbnail strip showing where differences (and bookmarks) sit in the whole file; click to jump. */
+/** A Beyond Compare-style toolbar button: icon above its label, pressed when `active`. */
+function BcButton({
+  icon,
+  label,
+  active,
+  ...rest
+}: { icon: ReactNode; label: string; active?: boolean } & ButtonHTMLAttributes<HTMLButtonElement>) {
+  return (
+    <button {...rest} className={`bc-btn${active ? " active" : ""}`} aria-pressed={active}>
+      {icon}
+      <span>{label}</span>
+    </button>
+  );
+}
+
+const VIEW_FILTERS: { mode: ViewMode; label: string; icon: ReactNode; title: string }[] = [
+  { mode: "all", label: "All", icon: <Columns2 size={16} />, title: "Show all lines" },
+  { mode: "diffs", label: "Diffs", icon: <EqualNot size={16} />, title: "Show only differences" },
+  { mode: "same", label: "Same", icon: <Equal size={16} />, title: "Show only lines that are the same" },
+  {
+    mode: "context",
+    label: "Context",
+    icon: <FoldVertical size={16} />,
+    title: `Show differences with ${CONTEXT_LINES} lines of context around them`,
+  },
+];
+
+/** Thumbnail bar colour per row kind (CSS variables, so themes and custom diff colours apply). */
+const THUMB_VAR: Record<string, string> = {
+  equal: "--faint",
+  unimportant: "--unimportant",
+  changed: "--chg-fg",
+  leftOnly: "--del-fg",
+  rightOnly: "--add-fg",
+};
+/** Characters a thumbnail half is wide; longer lines are clipped like BC's. */
+const THUMB_COLS = 100;
+
+/**
+ * Beyond Compare's thumbnail: a miniature of both files (each line a bar as
+ * long as the line, coloured by its difference kind), with a box over the
+ * visible part. Click or drag to scroll; bookmarks and edits are marked too.
+ */
 function Overview({
   rows,
-  hunks,
   marks,
   edits = [],
-  onJump,
+  displayRows,
+  scroller,
+  listKind,
 }: {
   rows: DiffRow[];
-  hunks: Hunk[];
   /** Bookmarked rows. */
   marks: number[];
   /** araxis:text-view — rows with edited lines. */
   edits?: number[];
-  onJump: (row: number) => void;
+  /** The row each display item shows (a hidden-lines gap maps to its first hidden row). */
+  displayRows: Int32Array;
+  /** The scrolling list element. */
+  scroller: () => HTMLElement | null;
+  /** Changes when the list element is replaced (padding on/off), to re-attach the scroll listener. */
+  listKind: string;
 }) {
   const total = Math.max(rows.length, 1);
+  const canvas = useRef<HTMLCanvasElement>(null);
+  const theme = usePref("theme");
+  const diffColors = usePref("diffColors");
+  const [view, setView] = useState<{ top: number; height: number } | null>(null);
+
+  // The miniature: one pass over the rows, redrawn on resize and theme changes.
+  useLayoutEffect(() => {
+    const c = canvas.current;
+    if (!c) return;
+    const draw = () => {
+      const dpr = window.devicePixelRatio || 1;
+      const w = c.clientWidth;
+      const h = c.clientHeight;
+      c.width = Math.round(w * dpr);
+      c.height = Math.round(h * dpr);
+      const g = c.getContext("2d");
+      if (!g || !h) return;
+      g.setTransform(dpr, 0, 0, dpr, 0, 0);
+      g.clearRect(0, 0, w, h);
+      const css = getComputedStyle(c);
+      const colour = Object.fromEntries(Object.entries(THUMB_VAR).map(([k, v]) => [k, css.getPropertyValue(v).trim()]));
+      const half = (w - 6) / 2;
+      const per = h / total;
+      const bar = Math.max(1, Math.min(per - (per > 2 ? 0.5 : 0), 3));
+      const drawSide = (segs: Segment[] | null, x0: number, y: number) => {
+        if (!segs) return;
+        const text = segText(segs);
+        const indent = text.length - text.trimStart().length;
+        const len = text.trim().length;
+        if (!len) return;
+        const a = Math.min(indent, THUMB_COLS) / THUMB_COLS;
+        const b = Math.min(indent + len, THUMB_COLS) / THUMB_COLS;
+        g.fillRect(x0 + a * half, y, Math.max(1, (b - a) * half), bar);
+      };
+      for (let i = 0; i < rows.length; i++) {
+        const r = rows[i];
+        const y = i * per;
+        g.globalAlpha = r.kind === "equal" ? 0.45 : 1;
+        g.fillStyle = colour[r.kind] || colour.changed;
+        // Differences get a faint full-width band so short or blank lines still show.
+        if (r.kind !== "equal") {
+          g.globalAlpha = 0.18;
+          g.fillRect(0, y, w, Math.max(bar, per));
+          g.globalAlpha = 1;
+        }
+        drawSide(r.left, 2, y);
+        drawSide(r.right, 4 + half, y);
+      }
+      g.globalAlpha = 1;
+    };
+    draw();
+    const ro = new ResizeObserver(draw);
+    ro.observe(c);
+    return () => ro.disconnect();
+  }, [rows, total, theme, diffColors]);
+
+  // The visible-region box follows the list's scroll position.
+  useEffect(() => {
+    const el = scroller();
+    if (!el) return;
+    const rowAt = (frac: number) => {
+      const n = displayRows.length;
+      if (!n) return 0;
+      return displayRows[Math.min(n - 1, Math.max(0, Math.floor(frac * n)))];
+    };
+    const update = () => {
+      if (!el.scrollHeight) return setView(null);
+      const a = rowAt(el.scrollTop / el.scrollHeight);
+      const b = rowAt((el.scrollTop + el.clientHeight) / el.scrollHeight - 1e-9) + 1;
+      setView({ top: a / total, height: Math.max(0, b - a) / total });
+    };
+    update();
+    el.addEventListener("scroll", update, { passive: true });
+    const ro = new ResizeObserver(update);
+    ro.observe(el);
+    return () => {
+      el.removeEventListener("scroll", update);
+      ro.disconnect();
+    };
+  }, [scroller, displayRows, total, listKind]);
+
+  /** Centres the list on the row under the pointer. */
+  const scrollToPointer = (clientY: number, rect: DOMRect) => {
+    const el = scroller();
+    const n = displayRows.length;
+    if (!el || !n) return;
+    const row = Math.floor(Math.min(0.9999, Math.max(0, (clientY - rect.top) / rect.height)) * total);
+    // First display item at or after `row` (display rows ascend).
+    let lo = 0;
+    let hi = n - 1;
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1;
+      if (displayRows[mid] < row) lo = mid + 1;
+      else hi = mid;
+    }
+    el.scrollTop = (lo / n) * el.scrollHeight - el.clientHeight / 2;
+  };
+
   return (
     <div
-      className="overview"
-      onClick={(e) => {
+      className="overview tc-thumb"
+      title="Thumbnail: click or drag to scroll"
+      onMouseDown={(e) => {
+        if (e.button !== 0) return;
+        e.preventDefault();
         const rect = e.currentTarget.getBoundingClientRect();
-        onJump(Math.floor(((e.clientY - rect.top) / rect.height) * total));
+        scrollToPointer(e.clientY, rect);
+        const move = (ev: MouseEvent) => scrollToPointer(ev.clientY, rect);
+        const up = () => {
+          window.removeEventListener("mousemove", move);
+          window.removeEventListener("mouseup", up);
+        };
+        window.addEventListener("mousemove", move);
+        window.addEventListener("mouseup", up);
       }}
     >
-      {hunks.map((h, i) => (
+      <canvas ref={canvas} className="tc-thumb-canvas" />
+      {view && (
         <div
-          key={i}
-          className={`ov-mark k-${rows[h.startRow].kind}`}
-          style={{
-            top: `${(h.startRow / total) * 100}%`,
-            height: `max(2px, ${((h.endRow - h.startRow) / total) * 100}%)`,
-          }}
+          className="tc-thumb-view"
+          style={{ top: `${view.top * 100}%`, height: `max(6px, ${view.height * 100}%)` }}
         />
-      ))}
+      )}
       {marks.map((row) => (
         <div key={`bm${row}`} className="ov-bm" style={{ top: `${(row / total) * 100}%` }} />
       ))}

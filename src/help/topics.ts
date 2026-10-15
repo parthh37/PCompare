@@ -63,10 +63,17 @@ PCompare always records the open tabs when it closes. Turn on *Restore last work
 Side-by-side line diff with word-level highlights inside changed lines. Both sides are editable.
 
 ## Toolbar
-- **Previous / Next difference** step through change blocks.
-- **Ignore rules**: whitespace (trailing, changes, all), case, diff algorithm (Patience or Myers) and regexes for text that never matters, e.g. version stamps. Matching text is shown as unimportant (blue).
-- **Refresh** reloads both files; unsaved edits are kept unless you confirm.
+Laid out like Beyond Compare's:
+- **All / Diffs / Same / Context** filter the lines: everything, only differences, only matching lines, or differences with a few lines around them.
+- **Minor** (on by default) ignores unimportant differences: they count as same, so Diffs hides them and section navigation skips them. Turn it off to treat them as differences.
+- **Rules**: whitespace (trailing, changes, all), case, diff algorithm (Patience or Myers) and regexes for text that never matters, e.g. version stamps. Matching text is shown as unimportant (blue).
+- **Prev / Next Section** step through difference sections; **Copy Left / Copy Right** copy the selected lines, or else the current section, to the other side.
+- **Swap** exchanges the left and right files; **Reload** reloads both (unsaved edits are kept unless you confirm).
 - **Undo / Redo** for edits and copied changes.
+
+## Thumbnail and status bar
+- The strip on the left is a miniature of both files, coloured by difference. The box marks what is on screen; click or drag to scroll.
+- The status bar counts difference sections and names the caret line's state (Same, Important / Unimportant difference, Left / Right orphan). Line Details under the panes is open by default.
 
 ## Editing
 - Gutter arrows (or the copy shortcuts) copy the current difference to the other side.
