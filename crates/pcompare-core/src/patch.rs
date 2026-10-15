@@ -739,6 +739,8 @@ pub fn hunk_rows(h: &PatchHunk) -> Vec<DiffRow> {
             right_spans: Vec::new(),
             left_eol: None,
             right_eol: None,
+            left_move: None,
+            right_move: None,
         }
     };
     let whole = |text: &str, changed: bool| {

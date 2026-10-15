@@ -437,3 +437,132 @@
   font-variant-numeric: tabular-nums;
 }
 /* araxis:text-view end */
+
+/* ---------- moved blocks ---------- */
+.tc-editable {
+  --tc-moved-bg: rgba(167, 139, 250, 0.14);
+  --tc-moved-fg: #b49bfc;
+}
+:root[data-theme="light"] .tc-editable {
+  --tc-moved-bg: rgba(124, 58, 237, 0.1);
+  --tc-moved-fg: #6d28d9;
+}
+.tc-editable .trow .tcell.tc-moved {
+  position: relative;
+  background: var(--tc-moved-bg);
+  box-shadow: inset 2px 0 0 var(--tc-moved-fg);
+}
+.tc-editable .trow .tcell.tc-moved.tc-sel {
+  box-shadow:
+    inset 2px 0 0 var(--tc-moved-fg),
+    inset 0 0 0 9999px var(--sel-bg);
+}
+.tc-move-tag {
+  position: absolute;
+  top: 2px;
+  right: 4px;
+  height: 16px;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 0 5px;
+  border: 1px solid var(--tc-moved-fg);
+  border-radius: 8px;
+  background: var(--panel);
+  color: var(--tc-moved-fg);
+  font-size: 10.5px;
+  line-height: 14px;
+  cursor: pointer;
+  opacity: 0.85;
+}
+.tc-move-tag:hover {
+  opacity: 1;
+}
+.ov-move {
+  position: absolute;
+  left: 0;
+  width: 3px;
+  height: 2px;
+  background: var(--tc-moved-fg);
+}
+.statusbar .tc-moved-fg {
+  color: var(--tc-moved-fg);
+}
+
+/* ---------- blame gutter: 170px of commit info before each line number ---------- */
+.tc-editable.tc-blame-on .trow {
+  grid-template-columns: 228px 1fr 40px 228px 1fr;
+}
+.tc-editable.tc-blame-on .trow.tc-prow {
+  grid-template-columns: 228px 1fr;
+}
+.tc-editable.tc-blame-on .trow .ln {
+  display: flex;
+  justify-content: space-between;
+  gap: 6px;
+}
+.tc-blame {
+  position: relative;
+  flex: 0 0 170px;
+  display: flex;
+  gap: 6px;
+  min-width: 0;
+  padding: 0 4px 0 8px;
+  overflow: hidden;
+  text-align: left;
+  font-size: 11px;
+  color: var(--muted);
+  border-right: 1px solid var(--border);
+}
+/* Age shading: the newest commits on this side get the strongest bar. */
+.tc-blame::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 3px;
+  background: var(--accent);
+  opacity: var(--blame-heat, 0);
+}
+.tc-blame[title] {
+  cursor: pointer;
+}
+.tc-blame[title]:hover {
+  background: var(--accent-tint);
+  color: var(--text);
+}
+.tc-blame-first {
+  box-shadow: inset 0 1px 0 var(--border);
+}
+.tc-blame-sha {
+  color: var(--accent);
+  flex-shrink: 0;
+}
+.tc-blame-who {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.tc-blame-age {
+  flex-shrink: 0;
+  font-variant-numeric: tabular-nums;
+}
+.tc-blame-new::before {
+  background: var(--warn);
+  opacity: 1;
+}
+.tc-blame-new .tc-blame-who {
+  font-style: italic;
+  color: var(--warn);
+}
+.tc-blame-note {
+  font-size: 11px;
+  color: var(--muted);
+  border: 1px dashed var(--border);
+  border-radius: 3px;
+  padding: 0 5px;
+  cursor: help;
+}
