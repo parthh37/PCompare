@@ -117,26 +117,24 @@ export function useFolderReview(a: Args) {
   const toolbar: ReactNode = (
     <>
       <button
-        className={`tool-btn${panel ? " active" : ""}`}
+        className={`icon-btn${panel ? " active" : ""}`}
         aria-pressed={panel}
         title={`Bookmarks & comments${a.bookmarks.length ? ` · ${a.bookmarks.length} bookmarks, ${commented} commented` : " (right-click a row → Comment…)"}`}
         onClick={() => setPanel((p) => !p)}
       >
-        <MessageSquare size={20} className="rv-tool" />
-        <span>{a.bookmarks.length ? `Comments · ${a.bookmarks.length}` : "Comments"}</span>
+        <MessageSquare size={14} />
+        {a.bookmarks.length > 0 && <span className="fop-count">{a.bookmarks.length}</span>}
       </button>
-      <button className="tool-btn" title="Comparison statistics" disabled={!a.result} onClick={() => setStats(true)}>
-        <ChartColumn size={20} className="rv-tool" />
-        <span>Stats</span>
+      <button className="icon-btn" title="Comparison statistics" disabled={!a.result} onClick={() => setStats(true)}>
+        <ChartColumn size={14} />
       </button>
       <button
-        className="tool-btn"
+        className="icon-btn"
         title="Save comparison archive (.pcmpz): the compared tree, rules, bookmarks and comments (and optionally differing text files) in one file to review elsewhere"
         disabled={!a.result}
         onClick={() => setArchiving(true)}
       >
-        <Package size={20} className="rv-tool" />
-        <span>Archive</span>
+        <Package size={14} />
       </button>
     </>
   );
