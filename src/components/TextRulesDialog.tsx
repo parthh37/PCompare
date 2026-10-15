@@ -416,6 +416,25 @@ export function TextRulesDialog({
               onChange={(v) => set("breaks", v)}
             />
           </fieldset>
+          <fieldset className="trd-span">
+            <legend>Isolated lines</legend>
+            <small className="muted">
+              Isolated lines match nothing and stand by themselves; the lines around them are aligned as if they
+              weren't there. Use “Isolate” in the right-click menu to isolate the selected lines.
+            </small>
+            <div className="trd-sides">
+              {(["left", "right"] as const).map((side) => (
+                <div key={side}>
+                  <strong>{side === "left" ? "Left" : "Right"}</strong>
+                  <RangeList
+                    value={o.isolated?.[side] ?? []}
+                    max={lineCounts?.[side]}
+                    onChange={(v) => set("isolated", { left: [], right: [], ...o.isolated, [side]: v })}
+                  />
+                </div>
+              ))}
+            </div>
+          </fieldset>
         </div>
       )}
 

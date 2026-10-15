@@ -678,6 +678,7 @@ export default function App() {
             // bc5:editor-patch — the one chosen file, edited on its own in this tab
             onOpenEditor={(p) => updateTab(t.id, { kind: "edit", left: p, right: "", settings: undefined })}
             onOpenCompare={(l, r) => openTab("text", l, r)}
+            onCompareTexts={(memory) => openTab("text", "", "", { settings: { memory } })}
           />
         );
       case "merge":

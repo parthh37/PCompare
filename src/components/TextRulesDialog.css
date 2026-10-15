@@ -72,3 +72,9 @@
 .trd-error + .trd-formats {
   margin-right: 0;
 }
+/* Isolated lines: the two sides' lists side by side. */
+.trd-sides {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
