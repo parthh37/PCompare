@@ -22,7 +22,7 @@ export const HELP_TOPICS: HelpTopic[] = [
     kinds: ["home"],
     globalKeys: true,
     body: `
-Pick a session type on Home, or drop two files or folders anywhere on the window to compare them. Dropping one item fills the empty side of the compare in front, or opens it on its own.
+Type or browse to two files or folders in **Quick Compare** at the top of Home and press **Compare** (or Enter): PCompare picks the viewer from what they are, as it does for two items dropped anywhere on the window. A path that doesn't exist is reported under the fields before anything opens. To start a particular kind of session, pick it under **New session** on the right. Dropping one item fills the empty side of the compare in front, or opens it on its own.
 
 ## Opening comparisons
 - **Command line**: \`pcompare <left> <right>\` picks the viewer from the paths; \`pcompare <left> <right> <base> [<output>]\` opens a 3-way merge (the usual mergetool order, usable as a git mergetool).
@@ -30,6 +30,7 @@ Pick a session type on Home, or drop two files or folders anywhere on the window
 - **Select Left Side** in a file list (or Explorer) remembers one path; **Compare to…** on another item compares the two.
 
 ## Home lists
+Your own work is on the left; once there are more than six entries, a filter box narrows all three lists.
 - **Workspaces**: named sets of open tabs. Open, rename or delete them here; save one with the **Workspace** button in the tab bar.
 - **Saved sessions**: comparisons saved with a name (Save session). Double-click or click the name to reopen.
 - **Recent sessions**: comparisons you closed without saving, kept automatically (newest 20) while *Auto-save sessions on close* is on.
@@ -81,7 +82,7 @@ The toolbar:
 - Files are watched: when one changes on disk the compare refreshes by itself (never over unsaved edits).
 
 ## Colours
-Changed lines are amber, lines only on the left red, only on the right green. Change them in *Settings → Colors*.
+Changed lines are amber, lines only on the left red, only on the right green. Beside each line number a sign says the same without colour: **~** changed, **−** only on the left, **+** only on the right, **≈** unimportant (turn the signs off in *Settings → Colors* or the **…** menu). Change the colours there too.
 ` +
       `
 ## Numbers and ignored blocks
@@ -183,6 +184,8 @@ Compares two folder trees. Red names differ (the older file is grey), purple ite
 
 ## Log and status
 The log under the folders says when a comparison was loaded, how long it took, and what was cancelled, refreshed or failed (**View → Log** shows or hides it). Under each side, the footer shows what is selected there and how much space is free on that disk.
+
+The counts in the status bar are filters too: click **4 different** (or same, left only, right only…) to show only those rows. The count stays pressed and the toolbar's **All · Diffs · Same** follow along. Click it again to show everything. **▲ / ▼** beside **Difference N of M** (Alt+↑ / Alt+↓) step through the differing files shown, opening folders on the way. A folder on one side only is one stop.
 
 ## Comparing contents
 The session settings choose quick tests (size, timestamp with tolerance) and an optional content compare: binary, CRC-32 or rules-based (text rules, so cosmetic changes count as similar). Right-click a file or folder to compare contents on demand.
@@ -344,7 +347,7 @@ Use \`remote://<profile>/path\` (or the globe button next to a path) on either s
     title: "Sync Automation",
     kinds: ["automation"],
     body: `
-Saved folder syncs that run by themselves: on a schedule, when files change, or when PCompare starts — with safety checks, retries, a run history and alerts when something goes wrong. Open it from **Automation** in the tab bar, the Home card, or the tray icon's menu. In a Folder Sync tab, **Automate…** turns the folders and settings you're using into a new task.
+Saved folder syncs that run by themselves: on a schedule, when files change, or when PCompare starts — with safety checks, retries, a run history and alerts when something goes wrong. Open it from **Automation** in the tab bar, **New session** on Home, or the tray icon's menu. In a Folder Sync tab, **Automate…** turns the folders and settings you're using into a new task.
 
 ## Tasks
 - Each task is a folder pair, a sync mode and its options — the same engine as Folder Sync, without the preview step. **Mirror** and **Two-way** delete files; the editor says so before you save.
@@ -387,7 +390,7 @@ The bottom panel lists runs for all tasks or the selected one: what started it, 
     title: "Text Edit",
     kinds: ["edit"],
     body: `
-Edits a single text file. Open it from the **Text Edit** card on Home, **Edit file** in a Folder Compare's right-click menu, or **Open in Text Edit** when a Text Compare has only one file. Leave the path empty to start a new file and use **Save As** to name it.
+Edits a single text file. Open it from **Text Edit** under **New session** on Home, **Edit file** in a Folder Compare's right-click menu, or **Open in Text Edit** when a Text Compare has only one file. Leave the path empty to start a new file and use **Save As** to name it.
 
 ## Editing
 - Click anywhere to type. Enter keeps the line's indentation; Backspace/Delete at the ends of a line join lines.
@@ -436,7 +439,7 @@ Shows a \`.patch\` or \`.diff\` file as a side-by-side comparison. Opening (or d
     body: `
 Open **Settings** in the tab bar.
 
-- **Appearance**: Dark, Light or System theme (System follows the OS setting live) and the diff colours — changed, inserted, deleted, unimportant text and the intra-line highlights. Each colour can be reset to the theme's default.
+- **Appearance**: Dark, Light or System theme (System follows the OS setting live) and the diff colours — changed, inserted, deleted, unimportant text and the intra-line highlights. Each colour can be reset to the theme's default. **Change glyphs** (on by default) put +, − or ~ beside Text Compare's line numbers, so differences can be told apart without relying on colour.
 - **Fonts**: the interface font and size, and the editor (monospace) font and size used by the text, merge, hex and table views.
 - **Keyboard**: every command with its shortcut. Click a shortcut and press the new keys; conflicts with another command in the same view are flagged. Shortcuts marked *built-in* can't be changed yet.
 `,

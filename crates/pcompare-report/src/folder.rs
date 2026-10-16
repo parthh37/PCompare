@@ -246,6 +246,9 @@ pub enum DisplayFilter {
     RightNewer,
     LeftNewerOrphans,
     RightNewerOrphans,
+    /// Only unimportant differences, whether or not the view counts them as same.
+    Similar,
+    Errors,
 }
 
 impl DisplayFilter {
@@ -263,6 +266,8 @@ impl DisplayFilter {
             DisplayFilter::RightNewer => "Right newer",
             DisplayFilter::LeftNewerOrphans => "Left newer and left orphans",
             DisplayFilter::RightNewerOrphans => "Right newer and right orphans",
+            DisplayFilter::Similar => "Similar (unimportant differences)",
+            DisplayFilter::Errors => "Errors",
         }
     }
 
@@ -290,6 +295,8 @@ impl DisplayFilter {
             DisplayFilter::RightNewerOrphans => {
                 status == Status::RightOnly || newer == Some(Newer::Right)
             }
+            DisplayFilter::Similar => status == Status::Similar,
+            DisplayFilter::Errors => status == Status::Error,
         }
     }
 }
@@ -1146,6 +1153,8 @@ fn filter_name(f: DisplayFilter) -> &'static str {
         DisplayFilter::RightNewer => "rightNewer",
         DisplayFilter::LeftNewerOrphans => "leftNewerOrphans",
         DisplayFilter::RightNewerOrphans => "rightNewerOrphans",
+        DisplayFilter::Similar => "similar",
+        DisplayFilter::Errors => "errors",
     }
 }
 
@@ -1515,6 +1524,8 @@ mod tests {
             "rightNewer",
             "leftNewerOrphans",
             "rightNewerOrphans",
+            "similar",
+            "errors",
         ] {
             let json = format!(r#"{{"filter":"{name}"}}"#);
             let o: FolderReportOptions =

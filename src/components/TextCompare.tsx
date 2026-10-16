@@ -14,7 +14,10 @@ import {
   FoldVertical,
   ArrowUp,
   Binary,
+  ChevronDown,
+  ChevronUp,
   Lock,
+  RefreshCcwDot,
   Redo2,
   RefreshCw,
   Save,
@@ -139,9 +142,11 @@ const TAB_SIZE = 4;
  * linking gutter with padding off, and the cell padding.
  */
 const LN_WIDTH = 68;
+/** Extra width of each gutter while change glyphs are shown (TextCompare.css `--tc-glyph-w`). */
+const GLYPH_WIDTH = 10;
 const DIVIDER_WIDTH = 14;
 const MID_WIDTH = 40;
-/** Extra width of each line-number gutter while blame is shown (TextCompare.css `.tc-blame-on`). */
+/** Extra width of each line-number gutter while blame is shown (TextCompare.css `--tc-blame-w`). */
 const BLAME_WIDTH = 176;
 const CELL_PAD = 6;
 /** While the inline editor is open, re-compare after this pause in typing. */
@@ -187,6 +192,18 @@ export interface TextSettings {
   blame?: boolean;
 }
 type DisplayItem = { row: number } | { gap: number };
+
+/**
+ * The change glyph beside a line number (pref textChangeGlyphs), so the kind
+ * of difference reads without colour: − removed, + added, ~ changed and
+ * ≈ unimportant (the same sign Folder Compare uses for similar files).
+ */
+const CHANGE_GLYPHS: Partial<Record<DiffRow["kind"], { glyph: string; title: string }>> = {
+  changed: { glyph: "~", title: "Changed line" },
+  leftOnly: { glyph: "−", title: "Removed: only on the left" },
+  rightOnly: { glyph: "+", title: "Added: only on the right" },
+  unimportant: { glyph: "≈", title: "Unimportant difference" },
+};
 
 /** Text compared from memory instead of a file (Compare clipboard contents). */
 interface MemoryText {
@@ -488,6 +505,8 @@ export function TextCompare({
   const padding = usePref("textPadding");
   /** The left pane's gutter sits at its right edge, so both copy arrows meet in the middle. */
   const leftGutterRight = usePref("textLeftGutterRight");
+  /** +, − and ~ beside the line numbers, so differences don't rely on colour alone. */
+  const changeGlyphs = usePref("textChangeGlyphs");
   const [wordWrapOn, setWordWrap] = useState(settings?.wordWrap ?? false);
   const wordWrap = wordWrapOn && padding;
   const [showEol, setShowEol] = useState(settings?.showEol ?? false);
@@ -736,6 +755,11 @@ export function TextCompare({
       label: "Right Side Gutter for Left Pane",
       checked: leftGutterRight,
       onClick: () => setPrefs({ textLeftGutterRight: !leftGutterRight }),
+    },
+    {
+      label: "Change Glyphs (+ − ~) by Line Numbers",
+      checked: changeGlyphs,
+      onClick: () => setPrefs({ textChangeGlyphs: !changeGlyphs }),
     },
   ]);
   /** A short status message (e.g. how many matches Replace All changed). */
@@ -988,7 +1012,7 @@ export function TextCompare({
     const listEl = grid.querySelector<HTMLElement>(".text-list");
     const measure = () => {
       const charW = probe.getBoundingClientRect().width / PROBE_CHARS || CHAR_WIDTH;
-      const lnW = LN_WIDTH + (blameOn ? BLAME_WIDTH : 0);
+      const lnW = LN_WIDTH + (changeGlyphs ? GLYPH_WIDTH : 0) + (blameOn ? BLAME_WIDTH : 0);
       const cellW = Math.max(40, ((listEl?.clientWidth ?? grid.clientWidth) - 2 * lnW - DIVIDER_WIDTH) / 2);
       const cols = Math.max(8, Math.floor((cellW - CELL_PAD - 4) / charW));
       setMetrics((m) => (m.charW === charW && m.cols === cols && m.cellW === cellW ? m : { charW, cols, cellW }));
@@ -999,7 +1023,7 @@ export function TextCompare({
     if (listEl) ro.observe(listEl);
     measure();
     return () => ro.disconnect();
-  }, [hasGrid, padding, blameOn]); // the linked view is a different list element
+  }, [hasGrid, padding, blameOn, changeGlyphs]); // the linked view is a different list element
 
   /** Word wrap: each row is as tall as the longer of its two wrapped lines, so both sides stay aligned. */
   const offsets = useMemo(() => {
@@ -2386,6 +2410,18 @@ export function TextCompare({
     return <span className={`tc-gbracket${rowIdx === last ? " end" : ""}`} />;
   };
 
+  /** `row`'s change glyph on `side` (a side with a line); moved lines keep theirs, in the moved-block colour. */
+  const changeGlyph = (row: DiffRow, side: Side) => {
+    const g = CHANGE_GLYPHS[row.kind];
+    if (!g) return null;
+    const moved = showMoves && (side === "left" ? row.leftMove : row.rightMove) != null;
+    return (
+      <span className={`tc-glyph g-${moved ? "moved" : row.kind}`} title={moved ? `${g.title}, part of a moved block` : g.title}>
+        {g.glyph}
+      </span>
+    );
+  };
+
   const renderLineNo = (rowIdx: number, row: DiffRow, side: Side) => {
     const n = lineNo(row, side);
     const marked = n != null && bookmarkKeys.has(`${side}:${n}`);
@@ -2425,6 +2461,7 @@ export function TextCompare({
         {gutterMark(rowIdx, side)}
         {blameOn && blame.cell(side, n)}
         {n ?? ""}
+        {changeGlyphs && n != null && changeGlyph(row, side)}
         {review.mark(side, n)}
       </span>
     );
@@ -2610,7 +2647,9 @@ export function TextCompare({
   const lineState = rowStateLabel(cursor ? rows[cursor.row] : detail);
   return (
     <div
-      className={`session tc-editable${blameOn ? " tc-blame-on" : ""}${leftGutterRight ? " tc-lgutter-right" : ""}`}
+      className={`session tc-editable${blameOn ? " tc-blame-on" : ""}${leftGutterRight ? " tc-lgutter-right" : ""}${
+        changeGlyphs ? " tc-glyphs-on" : ""
+      }`}
       ref={root}
     >
       {/* Text toolbar: view filters, Minor, Rules, section navigation, copy, swap, reload. */}
@@ -2797,13 +2836,17 @@ export function TextCompare({
         >
           <Save size={14} /> {saving ? "Saving…" : "Save"}
         </button>
-        <label
-          className={`check${watchState === "watching" || watchState === "polling" ? " live" : ""}`}
-          title={`${autoRefreshTitle(watchState)}; unsaved edits are never overwritten`}
+        {/* a toggle rather than a labelled checkbox, so the toolbar stays on one row */}
+        <button
+          className={`icon-btn tc-autorefresh${autoRefresh ? " active" : ""}${
+            watchState === "watching" || watchState === "polling" ? " live" : ""
+          }`}
+          aria-pressed={autoRefresh}
+          onClick={() => setAutoRefresh(!autoRefresh)}
+          title={`Auto-refresh ${autoRefresh ? "on" : "off"}: ${autoRefreshTitle(watchState)}; unsaved edits are never overwritten`}
         >
-          <input type="checkbox" checked={autoRefresh} onChange={(e) => setAutoRefresh(e.target.checked)} />
-          Auto-refresh
-        </label>
+          <RefreshCcwDot size={14} />
+        </button>
         <button
           className="icon-btn"
           onClick={() => setReporting(true)}
@@ -3040,9 +3083,31 @@ export function TextCompare({
             <span className="ok">{dirty ? "Texts are identical" : "Files are identical"}</span>
           ) : (
             <>
-              <span>
-                {hunks.length} difference section{hunks.length === 1 ? "" : "s"}
-                {hunkIdx >= 0 && hunkIdx < hunks.length ? ` (at ${hunkIdx + 1})` : ""}
+              {/* where you are among the differences, with the arrows to move on */}
+              <span className="tc-diffnav">
+                <button
+                  className="icon-btn"
+                  onClick={() => goHunk(hunkIdx - 1)}
+                  disabled={!hunks.length || hunkIdx === 0}
+                  title="Previous difference section (Alt+↑)"
+                  aria-label="Previous difference section"
+                >
+                  <ChevronUp size={13} />
+                </button>
+                <button
+                  className="icon-btn"
+                  onClick={() => goHunk(hunkIdx + 1)}
+                  disabled={!hunks.length || hunkIdx === hunks.length - 1}
+                  title="Next difference section (Alt+↓)"
+                  aria-label="Next difference section"
+                >
+                  <ChevronDown size={13} />
+                </button>
+                <span className="tc-diffpos" aria-live="polite">
+                  {hunkIdx >= 0 && hunkIdx < hunks.length
+                    ? `Difference ${hunkIdx + 1} of ${hunks.length}`
+                    : `${hunks.length} difference${hunks.length === 1 ? "" : "s"}`}
+                </span>
               </span>
               {lineState && <span className="tc-linestate">{lineState}</span>}
               <span className="k-changed-fg">{stats!.changed} changed</span>

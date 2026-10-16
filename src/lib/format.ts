@@ -36,6 +36,19 @@ export function formatTime(ms: number | null): string {
   return ms == null ? "" : dateFmt.format(new Date(ms));
 }
 
+/**
+ * When something happened, for lists people scan rather than read (Home's
+ * saved and recent sessions); the exact time stays in the row's tooltip.
+ * `now` is a parameter so the result is testable.
+ */
+export function formatWhen(ms: number, now: number = Date.now()): string {
+  // TODO(you): choose how recency reads, e.g. "Just now" / "5 min ago" /
+  // "Today 14:05" / "Yesterday" / "Mon 09:30" / a plain date for older ones.
+  // Until then this falls back to the full date and time.
+  void now;
+  return formatTime(ms);
+}
+
 export function hex(n: number, width: number): string {
   return n.toString(16).toUpperCase().padStart(width, "0");
 }

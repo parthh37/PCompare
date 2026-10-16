@@ -24,7 +24,9 @@ export type DisplayFilter =
   | "leftNewer"
   | "rightNewer"
   | "leftNewerOrphans"
-  | "rightNewerOrphans";
+  | "rightNewerOrphans"
+  | "similar"
+  | "errors";
 
 export const DISPLAY_FILTERS: { value: DisplayFilter; label: string; primary?: boolean }[] = [
   { value: "all", label: "All", primary: true },
@@ -39,7 +41,30 @@ export const DISPLAY_FILTERS: { value: DisplayFilter; label: string; primary?: b
   { value: "rightNewerOrphans", label: "Right newer and right orphans" },
   { value: "leftOrphans", label: "Left orphans" },
   { value: "rightOrphans", label: "Right orphans" },
+  { value: "similar", label: "Similar (unimportant differences)" },
+  { value: "errors", label: "Errors" },
 ];
+
+/**
+ * The status bar's counts, each a one-click filter: the `FolderStats` field
+ * it counts, the display filter it shows (the toolbar's All · Diffs ▾ · Same
+ * use the same ones, so both stay in step), the status whose colour it
+ * takes, and what its rows are, for its tooltip.
+ */
+export const COUNT_FILTERS = [
+  { stat: "same", filter: "same", status: "same", label: "same", what: "files that are the same" },
+  { stat: "similar", filter: "similar", status: "similar", label: "similar", what: "files with only unimportant differences" },
+  { stat: "different", filter: "diffsNoOrphans", status: "different", label: "different", what: "files that differ" },
+  { stat: "leftOnly", filter: "leftOrphans", status: "leftOnly", label: "left only", what: "items on the left side only" },
+  { stat: "rightOnly", filter: "rightOrphans", status: "rightOnly", label: "right only", what: "items on the right side only" },
+  { stat: "errors", filter: "errors", status: "error", label: "errors", what: "items that couldn’t be compared" },
+] as const satisfies readonly {
+  stat: keyof FolderStats;
+  filter: DisplayFilter;
+  status: EntryStatus;
+  label: string;
+  what: string;
+}[];
 
 /**
  * When folders show, whatever the display filter: every folder ("always"),
@@ -258,6 +283,11 @@ export function matchesFilter(entry: FolderEntry, f: DisplayFilter, ignoreMinor 
       return e.status === "leftOnly" || hasDetail(entry, "leftNewer");
     case "rightNewerOrphans":
       return e.status === "rightOnly" || hasDetail(entry, "rightNewer");
+    // Whatever Minor says: these are the rows the "similar" and "errors" counts count.
+    case "similar":
+      return e.status === "similar";
+    case "errors":
+      return e.status === "error";
   }
 }
 
@@ -300,6 +330,62 @@ export function visibleSet(
   };
   entries.forEach(visit);
   return out;
+}
+
+/** How Next / Previous difference walk the list. */
+export interface DiffStopOptions {
+  /** Ignore folder structure: the list holds files only. */
+  flatten?: boolean;
+  ignoreMinor?: boolean;
+}
+
+/** A row Next / Previous difference lands on (see {@link diffStops}). */
+function isDiffStop(e: FolderEntry, { flatten = false, ignoreMinor = true }: DiffStopOptions): boolean {
+  if (e.pending || !matchesFilter(e, "diffs", ignoreMinor)) return false;
+  if (flatten) return !e.isDir;
+  return !e.isDir || !e.left || !e.right || e.status === "error";
+}
+
+/**
+ * Where Next / Previous difference land, in list order (collapsed folders
+ * included): every differing file shown, but a folder on one side only is a
+ * single stop, since it is copied or deleted whole. Ignoring folder
+ * structure lists its files, so each of them is a stop then.
+ */
+export function diffStops(entries: FolderEntry[], visible: ReadonlySet<string>, opts: DiffStopOptions = {}): string[] {
+  const out: string[] = [];
+  const walk = (list: FolderEntry[]) => {
+    for (const e of list) {
+      if (!visible.has(e.relPath)) continue;
+      if (isDiffStop(e, opts)) out.push(e.relPath);
+      else if (e.isDir) walk(e.children);
+    }
+  };
+  walk(entries);
+  return out;
+}
+
+/** How many {@link diffStops} come before the row at `relPath` in list order; -1 when it isn't shown. */
+export function stopsBefore(
+  entries: FolderEntry[],
+  visible: ReadonlySet<string>,
+  relPath: string,
+  opts: DiffStopOptions = {},
+): number {
+  let n = 0;
+  const walk = (list: FolderEntry[]): boolean => {
+    for (const e of list) {
+      if (!visible.has(e.relPath)) continue;
+      if (e.relPath === relPath) return true;
+      const stop = isDiffStop(e, opts);
+      if (stop) n++;
+      // A stop's own rows only matter when the row is among them (it counts once, before them).
+      const into = !stop || relPath.startsWith(`${e.relPath}/`);
+      if (e.isDir && into && walk(e.children)) return true;
+    }
+    return false;
+  };
+  return walk(entries) ? n : -1;
 }
 
 export function allDirs(entries: FolderEntry[], out = new Set<string>()): Set<string> {
