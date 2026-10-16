@@ -12,6 +12,12 @@ export const DIFF_COLOR_VARS: Record<DiffColorKey, string> = {
   unimportant: "--unimportant",
   intralineDeleted: "--del-mark",
   intralineInserted: "--add-mark",
+  folderSame: "--fc-same",
+  folderNewer: "--fc-newer",
+  folderDifferent: "--fc-different",
+  folderOlder: "--fc-older",
+  folderOrphan: "--fc-orphan",
+  folderUnknown: "--fc-unknown",
 };
 
 const darkQuery = window.matchMedia("(prefers-color-scheme: dark)");

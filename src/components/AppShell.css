@@ -126,6 +126,17 @@
 .dp-absent {
   background: var(--hatch);
 }
+/* Folder Compare colours: the list's own font, an icon or spot before each name. */
+.folder-preview {
+  font-family: var(--ui);
+  font-size: 12.5px;
+  line-height: 22px;
+}
+.folder-preview .fp-side {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
 .dp-glyph {
   display: inline-block;
   width: 1ch;

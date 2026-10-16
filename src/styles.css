@@ -22,6 +22,16 @@
   --filtered: #3cc6c0;
   --different: #f2777a;
   --warn: #f5a35c;
+  /* Folder Compare's colour cues (folderColors.ts), each overridable in Settings → Colors:
+     same, the newer copy (or a difference with neither newer), the older copy, orphans,
+     not compared yet, and a folder row's own size and date. */
+  --fc-same: var(--text);
+  --fc-newer: #ec625c;
+  --fc-different: #ec625c;
+  --fc-older: #808080;
+  --fc-orphan: #a287f8;
+  --fc-unknown: #808080;
+  --fc-info: #606060;
   --ok: #6fcf97;
   --hatch: repeating-linear-gradient(135deg, transparent 0 5px, rgba(255, 255, 255, 0.035) 5px 10px);
   /*
@@ -100,6 +110,12 @@
   --filtered: #0b8580;
   --different: #b32c3e;
   --warn: #b35f0c;
+  --fc-newer: #ff0000;
+  --fc-different: #ff0000;
+  --fc-older: #808080;
+  --fc-orphan: #6a00d5;
+  --fc-unknown: #808080;
+  --fc-info: #808080;
   --ok: #1d8049;
   --hatch: repeating-linear-gradient(135deg, transparent 0 5px, rgba(0, 0, 0, 0.045) 5px 10px);
   --glyph-ink: #000;
