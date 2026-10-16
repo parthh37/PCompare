@@ -1,6 +1,7 @@
 // Applies the appearance preferences (theme, fonts, diff colours) to the
 // document as CSS variables, live: imported once by App, it follows every
 // prefs change and, for the "system" theme, the OS light/dark setting.
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { getPrefs, onPrefsChange, type DiffColorKey, type Prefs } from "./prefs";
 
 /** CSS variable each overridable diff colour drives (defaults live in styles.css). */
@@ -22,9 +23,27 @@ export function resolvedTheme(p: Prefs = getPrefs()): "dark" | "light" {
 
 const quote = (font: string) => (/^[\w-]+$/.test(font) ? font : `"${font.replace(/["\\]/g, "")}"`);
 
+let windowTheme: Prefs["theme"] | undefined;
+
+/** Native title bar and menus follow the app's theme, not just the OS's:
+ *  otherwise the dark app sits under a white Windows title bar. */
+function applyWindowTheme(theme: Prefs["theme"]) {
+  if (theme === windowTheme) return;
+  windowTheme = theme;
+  // Outside Tauri (plain vite, mock harness) there is no native window.
+  try {
+    getCurrentWindow()
+      .setTheme(theme === "system" ? null : theme)
+      .catch(() => {});
+  } catch {
+    // no window
+  }
+}
+
 function apply(p: Prefs) {
   const root = document.documentElement;
   root.dataset.theme = resolvedTheme(p);
+  applyWindowTheme(p.theme);
   const set = (name: string, value: string | null) =>
     value ? root.style.setProperty(name, value) : root.style.removeProperty(name);
   set("--ui", p.uiFont ? `${quote(p.uiFont)}, system-ui, sans-serif` : null);
