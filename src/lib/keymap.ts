@@ -84,6 +84,8 @@ export const COMMANDS: CommandDef[] = [
 
   // ---- Folder Compare / Merge ----
   { id: "folder.refresh", label: "Rescan folders", scope: ["folder"], binding: "F5", fixed: true },
+  { id: "folder.nextDiff", label: "Next difference", scope: ["folder"], binding: "Alt+Down" },
+  { id: "folder.prevDiff", label: "Previous difference", scope: ["folder"], binding: "Alt+Up" },
   // selection and file operations
   { id: "folder.selectAll", label: "Select all", scope: ["folder"], binding: "Ctrl+A" },
   { id: "folder.copyToRight", label: "Copy to right", scope: ["folder"], binding: "Ctrl+R" },

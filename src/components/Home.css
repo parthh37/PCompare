@@ -1,0 +1,224 @@
+/* Home: Quick Compare on top, the user's own work on the left and the
+   session types, grouped, on the right. */
+
+.home {
+  margin: 0 auto;
+  max-width: 1180px;
+  padding: 32px 40px 48px;
+  width: 100%;
+}
+.home h2 {
+  margin: 0;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+}
+
+/* ---------- header ---------- */
+.home-head {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 18px;
+}
+.home-head h1 {
+  margin: 0 0 4px;
+  font-size: 24px;
+  font-weight: 650;
+  letter-spacing: -0.4px;
+}
+.home-head p {
+  margin: 0;
+}
+.home-head-btn {
+  background: transparent;
+  border-color: transparent;
+  color: var(--muted);
+}
+.home-head-btn:hover:not(:disabled) {
+  background: var(--tool-hover);
+  border-color: transparent;
+  color: var(--text);
+}
+
+/* ---------- quick compare ---------- */
+.quick-compare {
+  padding: 14px 16px 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--panel-2);
+  box-shadow: 0 1px 2px var(--shadow);
+}
+.qc-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+}
+.qc-row .pathfield input {
+  height: 32px;
+  font-size: 12.5px;
+}
+/* Browse buttons sit quietly beside the field until hovered. */
+.qc-row .pathfield .icon-btn {
+  height: 32px;
+  padding: 2px 7px;
+  background: transparent;
+  border-color: transparent;
+  color: var(--muted);
+}
+.qc-row .pathfield .icon-btn:hover:not(:disabled) {
+  background: var(--tool-hover);
+  color: var(--text);
+}
+.qc-swap {
+  height: 28px;
+  background: transparent;
+  border-color: transparent;
+  color: var(--muted);
+}
+.qc-go {
+  height: 32px;
+  padding: 0 18px;
+}
+.qc-hint {
+  margin: 9px 2px 0;
+  font-size: 12px;
+}
+.qc-error {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 5px;
+  color: var(--danger-text);
+}
+.qc-error code {
+  overflow-wrap: anywhere;
+}
+
+/* ---------- two columns ---------- */
+.home-cols {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 340px;
+  gap: 32px;
+  margin-top: 28px;
+  align-items: start;
+}
+@media (max-width: 900px) {
+  .home-cols {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+.home-main .saved-head {
+  margin: 22px 0 8px;
+  min-height: 20px;
+}
+.home-main .saved-head:first-child,
+.home-filter + .saved-head {
+  margin-top: 0;
+}
+.home-note {
+  margin: 0;
+  font-size: 12.5px;
+}
+.home-filter {
+  position: relative;
+  margin: 0 0 18px;
+}
+.home-filter .saved-search {
+  width: 100%;
+  padding-left: 28px;
+  height: 30px;
+}
+.home-filter-icon {
+  position: absolute;
+  left: 9px;
+  top: 8px;
+  color: var(--faint);
+}
+.home-empty {
+  padding: 22px 24px;
+  border: 1px dashed var(--border);
+  border-radius: 10px;
+  color: var(--muted);
+  line-height: 1.55;
+}
+.home-empty h2 {
+  margin-bottom: 8px;
+}
+.home-empty p {
+  margin: 0 0 6px;
+}
+
+/* saved / recent rows */
+.home .saved-list {
+  background: var(--panel);
+}
+.home .saved-row {
+  padding: 9px 12px;
+}
+.home .saved-name {
+  font-weight: 600;
+}
+
+/* ---------- new session list ---------- */
+.home-side h2 {
+  margin-bottom: 8px;
+}
+.kind-group + .kind-group {
+  margin-top: 12px;
+}
+.kind-group-title {
+  padding: 0 8px 4px;
+  font-size: 11.5px;
+  color: var(--faint);
+}
+.kind-row,
+.more-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  text-align: left;
+  border-color: transparent;
+  background: transparent;
+}
+.kind-row {
+  padding: 5px 8px;
+  border-radius: 7px;
+}
+.kind-row:hover:not(:disabled),
+.more-row:hover:not(:disabled) {
+  background: var(--tool-hover);
+  border-color: transparent;
+}
+.kind-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.kind-label {
+  font-weight: 550;
+  white-space: nowrap;
+}
+.kind-desc {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11.5px;
+  color: var(--muted);
+}
+.more-row {
+  padding: 5px 8px;
+  border-radius: 6px;
+  color: var(--muted);
+}
+.more-row:hover:not(:disabled) {
+  color: var(--text);
+}
+.more-row svg {
+  margin: 0 7px 0 7px;
+}

@@ -1,21 +1,25 @@
-import { FileInput, Globe, Layers, Pencil, Trash, X } from "lucide-react";
+import { Camera, FileCog, FileInput, Globe, Layers, Lightbulb, Package, Pencil, Search, Trash, X } from "lucide-react";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { isRemote, type SavedSession } from "../lib/api";
-import { formatTime } from "../lib/format";
+import { formatTime, formatWhen } from "../lib/format";
 import { shortcutLabel } from "../lib/keymap";
 import { usePref } from "../lib/prefs";
-import { COMPARE_KINDS, SESSIONS, type SessionKind } from "../lib/sessions";
+import { HOME_GROUPS, SESSIONS, type SessionKind } from "../lib/sessions";
 import type { RecentSession, Workspace } from "../lib/workspaceApi";
 import "./AppShell.css";
+import "./Home.css";
 import { SessionIcon } from "./SessionIcon";
 import { FileFormatsDialog } from "./FileFormatsDialog";
 import { SnapshotDialog } from "./SnapshotDialog";
 import { GettingStarted } from "./GettingStarted";
 import { setPrefs } from "../lib/prefs";
 import { ImportSessionsDialog } from "./ImportSessionsDialog";
+import { QuickCompare } from "./QuickCompare";
 
 interface Props {
   onNew: (kind: Exclude<SessionKind, "home">) => void;
+  /** Quick Compare: open two paths in whichever viewer suits them. */
+  onCompare: (left: string, right: string) => void;
   saved: SavedSession[];
   onOpenSaved: (s: SavedSession) => void;
   onRenameSaved: (s: SavedSession, name: string) => void;
@@ -31,10 +35,6 @@ interface Props {
   onRemoveRecent: (r: RecentSession) => void;
   onClearRecent: () => void;
 }
-
-// "Archive Compare" shipped: archives open as folders.
-// "Git integration" shipped: git:/hg: sides, difftool / mergetool setup.
-const COMING = ["Structural JSON / XML diff"];
 
 /** Remote paths get a small globe so cloud locations stand out in the list. */
 function PathText({ path }: { path: string }) {
@@ -111,7 +111,9 @@ function ListRow({
         )}
         {detail}
       </div>
-      <span className="muted saved-time">{formatTime(time)}</span>
+      <span className="muted saved-time" title={formatTime(time)}>
+        {formatWhen(time)}
+      </span>
       <div className="saved-actions">
         {onRename && (
           <button
@@ -190,64 +192,116 @@ export function Home(props: Props) {
 
   return (
     <div className="home" ref={homeRef}>
-      <header>
-        <h1>PCompare</h1>
-        <p className="muted">Choose a session, or drop two files or folders anywhere in this window.</p>
-        {/* file format rules (document converters) and external tools */}
-        <p className="muted">
-          <button className="link" onClick={() => setFileFormats(true)}>
-            File formats and external tools…
-          </button>
-        </p>
-        {fileFormats && <FileFormatsDialog onClose={() => setFileFormats(false)} />}
-        {/* snapshots of a folder to compare against later */}
-        <p className="muted">
-          <button className="link" onClick={() => setSnapshotting(true)}>
-            Save folder snapshot…
-          </button>
-        </p>
-        {snapshotting && <SnapshotDialog folders={[]} onClose={() => setSnapshotting(false)} />}
-        {/* first-run overview, reopenable */}
-        <p className="muted">
-          <button className="link" onClick={() => setOverview(true)}>
-            Getting started overview…
-          </button>
-        </p>
-        {(overview || (!overviewDismissed && visible)) && <GettingStarted onClose={closeOverview} />}
-        {/* review a saved comparison (.pcmpz) read-only */}
-        <p className="muted">
-          <button className="link" onClick={() => onNew("review")}>
-            Open comparison archive…
-          </button>
-        </p>
-      </header>
-      <div className="cards">
-        {[...COMPARE_KINDS, "profiles" as const, "automation" as const /* automation:ui */].map((kind) => {
-          const info = SESSIONS[kind];
-          return (
-            <button key={kind} className="card" onClick={() => onNew(kind)}>
-              <SessionIcon kind={kind} size={18} tile />
-              <span className="card-title">
-                {info.label}
-                {info.windowsOnly && <span className="badge">Windows</span>}
-              </span>
-              <span className="card-text">{info.description}</span>
-            </button>
-          );
-        })}
-      </div>
-
-      {total > 6 && (
-        <div className="home-filter">
-          <input
-            className="saved-search"
-            placeholder="Filter workspaces and sessions…"
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-          />
+      <header className="home-head">
+        <div>
+          <h1>PCompare</h1>
+          <p className="muted">Compare, merge and sync files, folders and data.</p>
         </div>
-      )}
+        {/* first-run overview, reopenable */}
+        <button className="home-head-btn" onClick={() => setOverview(true)}>
+          <Lightbulb size={14} /> Getting started
+        </button>
+        {(overview || (!overviewDismissed && visible)) && <GettingStarted onClose={closeOverview} />}
+      </header>
 
+      <QuickCompare onCompare={props.onCompare} />
+
+      <div className="home-cols">
+        <div className="home-main">
+          {total === 0 ? (
+            <section className="home-empty">
+              <h2>Your comparisons</h2>
+              <p>
+                Comparisons you open are listed here, so you can pick up where you left off. Save one with a name using{" "}
+                <kbd>{shortcutLabel("app.saveSession") || "Save session"}</kbd> to keep it for good.
+              </p>
+              <p>
+                Coming from another compare or sync tool?{" "}
+                <button className="link" onClick={() => setImporting(true)}>
+                  Import its saved sessions…
+                </button>
+              </p>
+            </section>
+          ) : (
+            total > 6 && (
+              <div className="home-filter">
+                <Search size={14} className="home-filter-icon" aria-hidden />
+                <input
+                  className="saved-search"
+                  placeholder="Filter workspaces and sessions…"
+                  value={query}
+                  onChange={(e) => setQuery(e.target.value)}
+                />
+              </div>
+            )
+          )}
+          {importing && (
+            <ImportSessionsDialog saved={saved} onImported={props.onImported} onClose={() => setImporting(false)} />
+          )}
+          {total > 0 && <HomeLists {...props} {...{ shownSaved, shownWorkspaces, shownRecent, autoSave }} onImport={() => setImporting(true)} />}
+        </div>
+
+        <aside className="home-side" aria-label="New session">
+          <h2>New session</h2>
+          {HOME_GROUPS.map((g) => (
+            <div key={g.title} className="kind-group">
+              <div className="kind-group-title">{g.title}</div>
+              {g.kinds.map((kind) => {
+                const info = SESSIONS[kind];
+                return (
+                  <button key={kind} className="kind-row" onClick={() => onNew(kind)} title={info.description}>
+                    <SessionIcon kind={kind} size={14} tile />
+                    <span className="kind-text">
+                      <span className="kind-label">
+                        {info.label}
+                        {info.windowsOnly && <span className="badge">Windows</span>}
+                      </span>
+                      <span className="kind-desc">{info.description}</span>
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+          ))}
+          <div className="kind-group">
+            <div className="kind-group-title">More</div>
+            {/* review a saved comparison (.pcmpz) read-only */}
+            <button className="more-row" onClick={() => onNew("review")}>
+              <Package size={14} aria-hidden /> Open comparison archive…
+            </button>
+            {/* snapshots of a folder to compare against later */}
+            <button className="more-row" onClick={() => setSnapshotting(true)}>
+              <Camera size={14} aria-hidden /> Save folder snapshot…
+            </button>
+            {/* file format rules (document converters) and external tools */}
+            <button className="more-row" onClick={() => setFileFormats(true)}>
+              <FileCog size={14} aria-hidden /> File formats and external tools…
+            </button>
+            <button className="more-row" onClick={() => setImporting(true)}>
+              <FileInput size={14} aria-hidden /> Import sessions from other tools…
+            </button>
+          </div>
+          {fileFormats && <FileFormatsDialog onClose={() => setFileFormats(false)} />}
+          {snapshotting && <SnapshotDialog folders={[]} onClose={() => setSnapshotting(false)} />}
+        </aside>
+      </div>
+    </div>
+  );
+}
+
+/** Home's lists of the user's own work: workspaces, saved sessions and recent comparisons. */
+function HomeLists(
+  props: Props & {
+    shownSaved: SavedSession[];
+    shownWorkspaces: Workspace[];
+    shownRecent: RecentSession[];
+    autoSave: boolean;
+    onImport: () => void;
+  },
+) {
+  const { saved, workspaces, recent, shownSaved, shownWorkspaces, shownRecent, autoSave } = props;
+  return (
+    <>
       {workspaces.length > 0 && (
         <>
           <div className="saved-head">
@@ -276,21 +330,14 @@ export function Home(props: Props) {
 
       <div className="saved-head">
         <h2>Saved sessions</h2>
-        <button className="link muted" onClick={() => setImporting(true)} title="Import sessions from other compare and sync tools">
+        <button className="link muted" onClick={props.onImport} title="Import sessions from other compare and sync tools">
           <FileInput size={12} /> Import…
         </button>
       </div>
-      {importing && (
-        <ImportSessionsDialog saved={saved} onImported={props.onImported} onClose={() => setImporting(false)} />
-      )}
       {saved.length === 0 ? (
-        <p className="muted">
+        <p className="muted home-note">
           No saved sessions yet. Open a comparison and press <kbd>{shortcutLabel("app.saveSession") || "Save session"}</kbd>{" "}
-          to save it with a name, or{" "}
-          <button className="link" onClick={() => setImporting(true)}>
-            import sessions from other compare tools
-          </button>
-          .
+          to save it with a name.
         </p>
       ) : (
         <div className="saved-list">
@@ -320,7 +367,7 @@ export function Home(props: Props) {
             )}
           </div>
           {recent.length === 0 ? (
-            <p className="muted">Comparisons you close without saving are kept here automatically.</p>
+            <p className="muted home-note">Comparisons you close without saving are kept here automatically.</p>
           ) : (
             <div className="saved-list">
               {shownRecent.map((r) => (
@@ -339,15 +386,6 @@ export function Home(props: Props) {
           )}
         </>
       )}
-
-      <h2>On the roadmap</h2>
-      <div className="chips">
-        {COMING.map((c) => (
-          <span key={c} className="chip">
-            {c}
-          </span>
-        ))}
-      </div>
-    </div>
+    </>
   );
 }

@@ -63,8 +63,15 @@
   --backdrop: rgba(0, 0, 0, 0.5);
   --shadow: rgba(0, 0, 0, 0.45);
   --shadow-strong: rgba(0, 0, 0, 0.55);
+  /* pressed buttons, and the band under dialogs */
+  --tool-active: rgba(255, 255, 255, 0.1);
+  --panel-sunk: #171b22;
+  /* keyboard focus: a ring outside the control, never on mouse clicks */
+  --focus-ring: 0 0 0 2px var(--accent-border-strong);
+  --ease: cubic-bezier(0.2, 0.7, 0.2, 1);
 
   color-scheme: dark;
+  accent-color: var(--accent);
   font-family: var(--ui);
   font-size: var(--ui-font-size);
   color: var(--text);
@@ -122,6 +129,8 @@
   --backdrop: rgba(15, 20, 30, 0.35);
   --shadow: rgba(16, 24, 40, 0.16);
   --shadow-strong: rgba(16, 24, 40, 0.24);
+  --tool-active: rgba(0, 0, 0, 0.1);
+  --panel-sunk: #f7f8fa;
 
   color-scheme: light;
 }
@@ -156,19 +165,42 @@ button {
   border-radius: 5px;
   padding: 3px 10px;
   cursor: pointer;
+  transition:
+    background-color 90ms ease,
+    border-color 90ms ease,
+    color 90ms ease,
+    box-shadow 90ms ease;
 }
 button:hover:not(:disabled) {
   border-color: var(--btn-hover-border);
   background: var(--btn-hover-bg);
 }
+button:active:not(:disabled) {
+  background: var(--tool-active);
+}
 button:disabled {
   opacity: 0.45;
   cursor: default;
 }
+/* Coloured buttons keep their colour on hover (the generic hover above would
+   turn them grey with white text): a little lighter, then darker when pressed. */
 button.primary {
   background: var(--accent);
   border-color: var(--accent);
   color: var(--on-accent);
+  font-weight: 500;
+}
+button.primary:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--accent) 88%, #fff);
+  border-color: color-mix(in srgb, var(--accent) 88%, #fff);
+}
+button.primary:active:not(:disabled) {
+  background: color-mix(in srgb, var(--accent) 85%, #000);
+}
+/* Keyboard focus only (Tab), so mouse clicks don't leave rings behind. */
+:is(button, summary, [tabindex], a):focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
 }
 input,
 select {
@@ -177,10 +209,30 @@ select {
   border-radius: 5px;
   padding: 3px 7px;
   outline: none;
+  transition:
+    border-color 90ms ease,
+    box-shadow 90ms ease;
 }
 input:focus,
 select:focus {
   border-color: var(--accent);
+}
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible {
+  box-shadow: 0 0 0 3px var(--accent-tint);
+}
+input[type="checkbox"],
+input[type="radio"] {
+  box-shadow: none;
+}
+input[type="checkbox"]:focus-visible,
+input[type="radio"]:focus-visible {
+  outline: 2px solid var(--accent-border-strong);
+  outline-offset: 1px;
+}
+::placeholder {
+  color: var(--faint);
 }
 .muted {
   color: var(--muted);
@@ -214,7 +266,7 @@ select:focus {
   display: flex;
   align-items: center;
   gap: 6px;
-  padding: 6px 8px 6px 12px;
+  padding: 6px 6px 6px 12px;
   max-width: 280px;
   border: 1px solid transparent;
   border-bottom: none;
@@ -222,12 +274,21 @@ select:focus {
   color: var(--muted);
   cursor: pointer;
   user-select: none;
+  transition:
+    background-color 90ms ease,
+    color 90ms ease;
 }
+.tab:hover:not(.active) {
+  background: var(--tool-hover);
+  color: var(--text);
+}
+/* The tab in front: joined to the page below it, with an accent line on top. */
 .tab.active {
   background: var(--panel);
   border-color: var(--border);
   color: var(--text);
   margin-bottom: -1px;
+  box-shadow: inset 0 2px 0 var(--accent);
 }
 .tab-title {
   overflow: hidden;
@@ -242,6 +303,15 @@ select:focus {
   line-height: 18px;
   border-radius: 4px;
   color: var(--muted);
+}
+/* Close buttons show on the tab in front and the one under the mouse only. */
+.tab:not(.active):not(:hover) .tab-close:not(:focus-visible) {
+  opacity: 0;
+}
+.tab-close:hover:not(:disabled),
+.tab-new:hover:not(:disabled) {
+  background: var(--tool-hover);
+  color: var(--text);
 }
 .tab-new {
   align-self: center;
@@ -364,7 +434,9 @@ select:focus {
   gap: 16px;
   padding: 4px 10px;
   border-top: 1px solid var(--border);
+  background: var(--panel-sunk);
   font-size: 12px;
+  font-variant-numeric: tabular-nums;
   min-height: 25px;
   align-items: center;
 }
@@ -676,64 +748,6 @@ select:focus {
   background: var(--border);
 }
 
-/* ---------- home ---------- */
-.home {
-  margin: auto;
-  max-width: 1040px;
-  padding: 40px;
-  width: 100%;
-}
-.home h1 {
-  margin: 0 0 4px;
-  font-size: 28px;
-  letter-spacing: -0.5px;
-}
-.home h2 {
-  margin-top: 36px;
-  font-size: 13px;
-  text-transform: uppercase;
-  letter-spacing: 1px;
-  color: var(--muted);
-}
-.cards {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
-  gap: 14px;
-  margin-top: 24px;
-}
-.card {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 6px;
-  padding: 18px;
-  text-align: left;
-  border-radius: 10px;
-  background: var(--panel-2);
-}
-.card:hover {
-  border-color: var(--accent) !important;
-}
-.card-title {
-  font-size: 15px;
-  font-weight: 600;
-}
-.card-text {
-  color: var(--muted);
-  line-height: 1.45;
-}
-.chips {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-}
-.chip {
-  padding: 4px 10px;
-  border: 1px dashed var(--border);
-  border-radius: 999px;
-  color: var(--muted);
-}
-
 /* ---------- shared bits ---------- */
 button.link {
   border: none;
@@ -742,7 +756,8 @@ button.link {
   color: var(--accent);
   cursor: pointer;
 }
-button.link:hover:not(:disabled) {
+button.link:hover:not(:disabled),
+button.link:active:not(:disabled) {
   background: none;
   text-decoration: underline;
 }
@@ -750,6 +765,10 @@ button.danger {
   background: rgba(239, 68, 68, 0.18);
   border-color: rgba(239, 68, 68, 0.55);
   color: var(--danger-text);
+}
+button.danger:hover:not(:disabled) {
+  background: rgba(239, 68, 68, 0.26);
+  border-color: rgba(239, 68, 68, 0.7);
 }
 .banner.ok {
   margin: 8px 0;
@@ -782,11 +801,37 @@ kbd {
 .pad {
   padding: 10px 12px;
 }
+/* App-wide actions at the end of the tab strip: quiet until hovered, so the
+   tabs stay the strongest thing in the strip. */
 .tab-action {
   align-self: center;
-  margin: 0 2px 4px;
+  margin: 0 1px 4px;
+  padding: 3px 8px;
   font-size: 12px;
   white-space: nowrap;
+  background: transparent;
+  border-color: transparent;
+  color: var(--muted);
+}
+.tab-action:hover:not(:disabled) {
+  background: var(--tool-hover);
+  border-color: transparent;
+  color: var(--text);
+}
+.tab-action:active:not(:disabled) {
+  background: var(--tool-active);
+}
+.tab-action.update-badge {
+  color: var(--accent);
+  border-color: var(--accent-border);
+  background: var(--accent-tint);
+}
+.tab-actions-sep {
+  align-self: center;
+  width: 1px;
+  height: 16px;
+  margin: 0 4px 4px;
+  background: var(--border);
 }
 .toast {
   position: fixed;
@@ -856,22 +901,57 @@ kbd {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 10px 14px;
+  padding: 11px 16px;
   border-bottom: 1px solid var(--border);
+  font-size: calc(var(--ui-font-size) + 1px);
   font-weight: 600;
 }
 .modal-body {
-  padding: 14px;
+  padding: 16px;
   overflow: auto;
   min-height: 0;
 }
+/* Buttons sit on a slightly sunken band, as in native dialogs. */
 .modal-foot {
   display: flex;
   justify-content: flex-end;
   align-items: center;
   gap: 8px;
-  padding: 10px 14px;
+  padding: 10px 16px;
   border-top: 1px solid var(--border);
+  border-radius: 0 0 9px 9px;
+  background: var(--panel-sunk);
+}
+.modal-foot button {
+  min-width: 76px;
+  justify-content: center;
+}
+.modal-foot button.link {
+  min-width: 0;
+}
+/* Dialogs and menus appear with a short fade instead of popping in. */
+@media (prefers-reduced-motion: no-preference) {
+  .modal-backdrop {
+    animation: pc-fade 120ms ease-out;
+  }
+  .modal {
+    animation: pc-rise 160ms var(--ease);
+  }
+  .ctx-menu,
+  .path-recent {
+    animation: pc-fade 90ms ease-out;
+  }
+}
+@keyframes pc-fade {
+  from {
+    opacity: 0;
+  }
+}
+@keyframes pc-rise {
+  from {
+    opacity: 0;
+    transform: translateY(6px) scale(0.99);
+  }
 }
 .save-summary {
   font-family: var(--mono);
@@ -1168,6 +1248,7 @@ textarea:focus {
   text-align: left;
   padding: 5px 10px;
   border-radius: 4px;
+  transition: none;
 }
 .ctx-menu .ctx-key {
   margin-left: auto;

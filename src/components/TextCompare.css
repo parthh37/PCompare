@@ -501,10 +501,49 @@
   font-variant-numeric: tabular-nums;
 }
 
+/* ---------- Difference position (status bar) ---------- */
+.statusbar .tc-diffnav {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  margin-left: -4px;
+}
+.tc-diffnav .icon-btn {
+  padding: 1px 3px;
+  border-color: transparent;
+  background: transparent;
+}
+.tc-diffnav .icon-btn:hover:not(:disabled) {
+  background: var(--tool-hover);
+  border-color: transparent;
+}
+.tc-diffpos {
+  margin-left: 4px;
+  font-weight: 600;
+}
+
 /* ---------- Icon toolbar ---------- */
 .tc-icon-toolbar {
   gap: 4px;
   padding: 4px 8px;
+}
+/* Narrower windows: the toolbar drops its labels (names stay in the
+   tooltips) instead of wrapping onto a second row. */
+@media (max-width: 1360px) {
+  .tc-icon-toolbar .stack-btn {
+    min-width: 32px;
+    height: 32px;
+  }
+  .tc-icon-toolbar .stack-btn > span {
+    display: none;
+  }
+  .tc-icon-toolbar .sep {
+    height: 22px;
+  }
+}
+/* Auto-refresh: pressed while on (the shared .active look), green while it is actually watching. */
+.tc-editable .toolbar .tc-autorefresh.live {
+  color: var(--ok);
 }
 .tc-icon-toolbar .sep {
   height: 34px;

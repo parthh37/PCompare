@@ -14,7 +14,10 @@ import {
   FoldVertical,
   ArrowUp,
   Binary,
+  ChevronDown,
+  ChevronUp,
   Lock,
+  RefreshCcwDot,
   Redo2,
   RefreshCw,
   Save,
@@ -2833,13 +2836,17 @@ export function TextCompare({
         >
           <Save size={14} /> {saving ? "Saving…" : "Save"}
         </button>
-        <label
-          className={`check${watchState === "watching" || watchState === "polling" ? " live" : ""}`}
-          title={`${autoRefreshTitle(watchState)}; unsaved edits are never overwritten`}
+        {/* a toggle rather than a labelled checkbox, so the toolbar stays on one row */}
+        <button
+          className={`icon-btn tc-autorefresh${autoRefresh ? " active" : ""}${
+            watchState === "watching" || watchState === "polling" ? " live" : ""
+          }`}
+          aria-pressed={autoRefresh}
+          onClick={() => setAutoRefresh(!autoRefresh)}
+          title={`Auto-refresh ${autoRefresh ? "on" : "off"}: ${autoRefreshTitle(watchState)}; unsaved edits are never overwritten`}
         >
-          <input type="checkbox" checked={autoRefresh} onChange={(e) => setAutoRefresh(e.target.checked)} />
-          Auto-refresh
-        </label>
+          <RefreshCcwDot size={14} />
+        </button>
         <button
           className="icon-btn"
           onClick={() => setReporting(true)}
@@ -3076,9 +3083,31 @@ export function TextCompare({
             <span className="ok">{dirty ? "Texts are identical" : "Files are identical"}</span>
           ) : (
             <>
-              <span>
-                {hunks.length} difference section{hunks.length === 1 ? "" : "s"}
-                {hunkIdx >= 0 && hunkIdx < hunks.length ? ` (at ${hunkIdx + 1})` : ""}
+              {/* where you are among the differences, with the arrows to move on */}
+              <span className="tc-diffnav">
+                <button
+                  className="icon-btn"
+                  onClick={() => goHunk(hunkIdx - 1)}
+                  disabled={!hunks.length || hunkIdx === 0}
+                  title="Previous difference section (Alt+↑)"
+                  aria-label="Previous difference section"
+                >
+                  <ChevronUp size={13} />
+                </button>
+                <button
+                  className="icon-btn"
+                  onClick={() => goHunk(hunkIdx + 1)}
+                  disabled={!hunks.length || hunkIdx === hunks.length - 1}
+                  title="Next difference section (Alt+↓)"
+                  aria-label="Next difference section"
+                >
+                  <ChevronDown size={13} />
+                </button>
+                <span className="tc-diffpos" aria-live="polite">
+                  {hunkIdx >= 0 && hunkIdx < hunks.length
+                    ? `Difference ${hunkIdx + 1} of ${hunks.length}`
+                    : `${hunks.length} difference${hunks.length === 1 ? "" : "s"}`}
+                </span>
               </span>
               {lineState && <span className="tc-linestate">{lineState}</span>}
               <span className="k-changed-fg">{stats!.changed} changed</span>

@@ -308,3 +308,53 @@
 .fc-log-error {
   color: var(--warn);
 }
+
+/* ---------- Status bar: difference position, and counts that filter ---------- */
+/* Same look as Text Compare's difference position. */
+.statusbar .fc-diffnav {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  margin-left: -4px;
+}
+.fc-diffnav .icon-btn {
+  padding: 1px 3px;
+  border-color: transparent;
+  background: transparent;
+}
+.fc-diffnav .icon-btn:hover:not(:disabled) {
+  background: var(--tool-hover);
+  border-color: transparent;
+}
+.fc-diffpos {
+  margin-left: 4px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+.fc-counts {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  margin: -2px 0 -2px -6px;
+}
+/* Flat until hovered; the colour stays the status's own. */
+.statusbar .fc-count {
+  padding: 1px 6px;
+  border-color: transparent;
+  background: transparent;
+  font: inherit;
+  font-variant-numeric: tabular-nums;
+}
+.statusbar .fc-count:hover:not(:disabled) {
+  background: var(--tool-hover);
+  border-color: transparent;
+}
+/* The count whose rows are showing: pressed, like the toolbar's All · Diffs · Same. */
+.statusbar .fc-count[aria-pressed="true"] {
+  background: var(--accent-tint);
+  border-color: var(--accent-border);
+}
+.statusbar .fc-count[aria-pressed="true"]:hover:not(:disabled) {
+  background: var(--sel-bg-strong);
+  border-color: var(--accent-border-strong);
+}
