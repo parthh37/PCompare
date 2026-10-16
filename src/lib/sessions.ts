@@ -177,14 +177,16 @@ export const SESSIONS: Record<SessionKind, SessionInfo> = {
 
 /**
  * Home's "New session" list: every session type, grouped by what it opens, in
- * the order people reach for them. Quick Compare above the list already picks
- * the viewer for two paths, so these are for starting one deliberately.
+ * the order people reach for them: folders first, then files, with the rarely
+ * used media and binary viewers last. Quick Compare above the list already
+ * picks the viewer for two paths, so these are for starting one deliberately.
  */
 export const HOME_GROUPS: { title: string; kinds: Exclude<SessionKind, "home" | "review">[] }[] = [
-  { title: "Files", kinds: ["text", "merge", "table", "picture", "hex"] },
   { title: "Folders", kinds: ["folder", "sync", "folderMerge"] },
-  { title: "Data and system", kinds: ["database", "registry", "version", "mp3"] },
+  { title: "Files", kinds: ["text", "merge", "table"] },
+  { title: "Data and system", kinds: ["database", "registry"] },
   { title: "Edit and connect", kinds: ["edit", "patch", "profiles", "automation"] },
+  { title: "Media and binary", kinds: ["picture", "hex", "version", "mp3"] },
 ];
 
 export const isCompareKind = (k: SessionKind): k is CompareKind =>
