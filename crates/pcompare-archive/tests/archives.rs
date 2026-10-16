@@ -334,6 +334,74 @@ fn zip_takes_writes_from_several_threads() {
     }
 }
 
+#[test]
+fn one_zip_under_two_spellings_takes_one_write_at_a_time() {
+    // `a.zip/v1` beside `./a.zip/v2` in a script: each spelling has its own
+    // label, but both must queue on one lock, or two rewrites race and the
+    // later swap drops the other's change.
+    let (dir, archives) = setup();
+    let zip = dir.path().join("a.zip");
+    write_zip(&zip, FILES);
+    let plain = s(&zip);
+    let dotted = format!("{}/./a.zip", s(dir.path()));
+    let mut spellings = vec![plain.clone(), dotted.clone()];
+    // A case-insensitive disk (macOS, Windows) reaches it as `A.ZIP` too.
+    let upper = format!("{}/A.ZIP", s(dir.path()));
+    if Path::new(&upper).is_file() {
+        spellings.push(upper);
+    }
+    #[cfg(unix)]
+    {
+        let link = dir.path().join("link.zip");
+        std::os::unix::fs::symlink(&zip, &link).unwrap();
+        spellings.push(s(&link));
+    }
+    let views: Vec<_> = spellings
+        .iter()
+        .map(|p| archives.resolve(p, true).unwrap().unwrap().fs)
+        .collect();
+
+    // Errors name the entry under the path as it was written.
+    for (view, label) in views.iter().zip(&spellings) {
+        let err = view.open("missing.txt").err().unwrap().to_string();
+        assert!(err.contains(&format!("{label}/missing.txt")), "{err}");
+    }
+
+    std::thread::scope(|scope| {
+        for (t, view) in views.iter().enumerate() {
+            scope.spawn(move || {
+                for i in 0..6 {
+                    let body = format!("{t}.{i}");
+                    view.write(
+                        &format!("t{t}/{i}.txt"),
+                        0,
+                        &mut body.as_bytes(),
+                        &mut |_| Ok(()),
+                    )
+                    .unwrap();
+                }
+            });
+        }
+    });
+    // Nothing lost, and every spelling sees every write.
+    for view in &views {
+        for t in 0..spellings.len() {
+            for i in 0..6 {
+                assert_eq!(
+                    read_all(&**view, &format!("t{t}/{i}.txt")),
+                    format!("{t}.{i}").as_bytes()
+                );
+            }
+        }
+    }
+    // The symlink is still a symlink: the rewrite replaced the zip it points at.
+    #[cfg(unix)]
+    assert!(fs::symlink_metadata(dir.path().join("link.zip"))
+        .unwrap()
+        .file_type()
+        .is_symlink());
+}
+
 fn find<'a>(entries: &'a [FolderEntry], rel: &str) -> &'a FolderEntry {
     for e in entries {
         if e.rel_path == rel {

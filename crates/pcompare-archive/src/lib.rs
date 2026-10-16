@@ -284,6 +284,8 @@ pub struct Archives {
     cache_dir: PathBuf,
     /// Keyed by file, label and whether opened read-only.
     archives: Mutex<HashMap<(PathBuf, String, bool), Arc<ArchiveFs>>>,
+    /// What those share, keyed by the file's canonical path and format.
+    archive_files: Mutex<HashMap<(PathBuf, ArchiveKind), Arc<archive::ArchiveFile>>>,
     snapshots: Mutex<HashMap<PathBuf, (snapshot::Stamp, Arc<SnapshotFs>)>>,
     repos: Mutex<HashMap<String, (Instant, Arc<SvnFs>)>>,
     // git/hg trees by location@rev, and refs with slashes seen per location
@@ -298,6 +300,7 @@ impl Archives {
         Self {
             cache_dir,
             archives: Mutex::new(HashMap::new()),
+            archive_files: Mutex::new(HashMap::new()),
             snapshots: Mutex::new(HashMap::new()),
             repos: Mutex::new(HashMap::new()),
             vcs: Mutex::new(HashMap::new()),
@@ -310,6 +313,8 @@ impl Archives {
     }
 
     /// The archive in a local file, reused while the file is unchanged.
+    /// Messages name it `label`; every spelling of the file's path shares
+    /// one index and takes one write at a time.
     pub fn open_archive(
         &self,
         file: &Path,
@@ -322,14 +327,20 @@ impl Archives {
         if let Some(fs) = map.get(&key).filter(|fs| fs.kind() == kind) {
             return Ok(fs.clone());
         }
-        let scratch = self.cache_dir.join(hash_key(&key));
-        let fs = Arc::new(ArchiveFs::new(
-            file.to_owned(),
-            label.to_owned(),
-            kind,
-            scratch,
-            read_only,
-        ));
+        // Resolves `.`, `..` and symlinks, and on a case-insensitive disk
+        // gives the case the file has there.
+        let real = file.canonicalize().unwrap_or_else(|_| file.to_owned());
+        let shared = self
+            .archive_files
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .entry((real, kind))
+            .or_insert_with_key(|k| {
+                let scratch = self.cache_dir.join(hash_key(k));
+                Arc::new(archive::ArchiveFile::new(k.0.clone(), kind, scratch))
+            })
+            .clone();
+        let fs = Arc::new(ArchiveFs::new(shared, label.to_owned(), read_only));
         map.insert(key, fs.clone());
         Ok(fs)
     }
