@@ -15,9 +15,11 @@ import {
 } from "lucide-react";
 import { useEffect, useId, useLayoutEffect, useRef } from "react";
 import type { FolderEntry, StatusDetail } from "../lib/api";
-import { toneColor, type FolderLook, type Tone } from "../lib/folderColors";
+import { toneColor, type AnyTone, type FolderLook, type Tone } from "../lib/folderColors";
 import { countsNewer, detailOf } from "../lib/folderTree";
 import { FileIcon } from "./icons";
+// The glyphs' own styles (.fc-folder, .fc-spot), for every view that borrows them.
+import "./FolderCompare.css";
 
 export const DETAIL_ICON: Record<StatusDetail, LucideIcon> = {
   unknown: CircleDashed,
@@ -104,7 +106,7 @@ export function FolderToneIcon({ look, open, size = 16 }: { look: FolderLook; op
 }
 
 /** The colour spot before a file name: keeps the row's cue visible under a selection. */
-export const ToneSpot = ({ tone }: { tone: Tone }) => (
+export const ToneSpot = ({ tone }: { tone: AnyTone }) => (
   <span className="fc-spot" style={{ background: toneColor(tone) }} aria-hidden />
 );
 
