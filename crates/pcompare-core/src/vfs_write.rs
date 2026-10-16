@@ -35,6 +35,10 @@ pub struct WriteCaps {
     /// Folders are real and must exist before files are written into them
     /// (unlike object stores, where they are implied by key prefixes).
     pub folders: bool,
+    /// Everything lives in one file that each change rewrites (a zip
+    /// archive), so changes must run one at a time: copies into it (or a
+    /// move out of it) use a single worker.
+    pub serial_writes: bool,
 }
 
 /// A [`Vfs`] that can also be written to. Paths use the file system's own
@@ -126,6 +130,7 @@ impl VfsWrite for LocalFs {
             resume_write: true,
             range_read: true,
             folders: true,
+            serial_writes: false,
         }
     }
 

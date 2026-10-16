@@ -2400,6 +2400,29 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn copyto_a_zip_archive_takes_many_files_and_folders() {
+        // Enough files for the copy to want several workers, all landing in
+        // the one archive.
+        let d = tempfile::tempdir().unwrap();
+        for i in 0..24 {
+            let p = d.path().join(format!("l/batch/{}/f{i:02}.txt", i % 3));
+            std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+            std::fs::write(p, format!("file {i}\n")).unwrap();
+        }
+        std::fs::create_dir_all(d.path().join("r")).unwrap();
+        let r = run_in(
+            d.path(),
+            "load l r\nexpand all\nselect left.orphan.files\ncopyto left path:base out/all.zip\n",
+            false,
+        );
+        assert_eq!(r.outcome.errors, 0, "{}{}", r.out, r.err);
+        assert!(r.out.contains("24 done, 0 skipped, 0 failed"), "{}", r.out);
+        let r = run_in(d.path(), "load out/all.zip l\nexpand all\nselect all.diff.files\n", false);
+        assert_eq!(r.outcome.errors, 0, "{}{}", r.out, r.err);
+        assert!(r.out.contains("Selected 0 items"), "{}", r.out);
+    }
+
+    #[test]
     fn rename_dos_masks_and_regexes() {
         assert_eq!(dos_rename("a.txt", "*.bak"), "a.bak");
         // Windows semantics: a literal replaces the character at its position.

@@ -468,6 +468,7 @@ impl VfsWrite for GraphFs {
             resume_write: false,
             range_read: true,
             folders: true,
+            serial_writes: false,
         }
     }
 

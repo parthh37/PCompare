@@ -14,7 +14,7 @@ use std::fs::{self, File};
 use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use pcompare_core::folder::EntryMeta;
 use pcompare_core::vfs::{Vfs, VfsEntry};
@@ -126,8 +126,11 @@ impl ArchiveFs {
 
     /// The current index, rebuilt when the archive file changed.
     fn load(&self) -> Result<Arc<Loaded>> {
-        let stamp = Stamp::of(&self.file).map_err(|e| CoreError::io(&self.label, e))?;
+        // Look at the file only while holding the slot: a rewrite holds it
+        // while swapping the new archive in, which Windows refuses to do
+        // while anything has the old one open.
         let mut slot = self.loaded.lock().unwrap_or_else(|e| e.into_inner());
+        let stamp = Stamp::of(&self.file).map_err(|e| CoreError::io(&self.label, e))?;
         if let Some(l) = slot.as_ref().filter(|l| l.stamp == stamp) {
             return Ok(l.clone());
         }
@@ -316,10 +319,11 @@ impl ArchiveFs {
         if let Ok(m) = fs::metadata(&self.file) {
             let _ = fs::set_permissions(tmp.path(), m.permissions());
         }
-        // Let go of the old archive's handle before replacing it.
-        *self.loaded.lock().unwrap_or_else(|e| e.into_inner()) = None;
-        tmp.persist(&self.file).map_err(|e| e.error)?;
-        Ok(())
+        // Let go of the old archive's handle before replacing it, and keep
+        // other threads from opening it again until the new one is in place.
+        let mut slot = self.loaded.lock().unwrap_or_else(|e| e.into_inner());
+        *slot = None;
+        replace_file(tmp, &self.file)
     }
 
     fn stat_node(&self, path: &str) -> io::Result<Option<EntryMeta>> {
@@ -348,6 +352,29 @@ fn entry_path(path: &str) -> io::Result<String> {
             io::ErrorKind::InvalidInput,
             format!("invalid archive path `{path}`"),
         )),
+    }
+}
+
+/// Moves the finished `tmp` over `file`. Windows refuses while anything has
+/// `file` open — a virus scanner looking at the version just written, say —
+/// so there it retries for a moment before giving up.
+fn replace_file(mut tmp: tempfile::NamedTempFile, file: &Path) -> io::Result<()> {
+    let deadline = Instant::now() + Duration::from_secs(2);
+    let mut wait = Duration::from_millis(10);
+    loop {
+        match tmp.persist(file) {
+            Ok(_) => return Ok(()),
+            Err(e)
+                if cfg!(windows)
+                    && e.error.kind() == io::ErrorKind::PermissionDenied
+                    && Instant::now() < deadline =>
+            {
+                tmp = e.file;
+                std::thread::sleep(wait);
+                wait = (wait * 2).min(Duration::from_millis(200));
+            }
+            Err(e) => return Err(e.error),
+        }
     }
 }
 
@@ -386,6 +413,8 @@ impl VfsWrite for ArchiveFs {
             resume_write: false,
             range_read: true,
             folders: true,
+            // Every change rewrites the whole archive file.
+            serial_writes: true,
         }
     }
 

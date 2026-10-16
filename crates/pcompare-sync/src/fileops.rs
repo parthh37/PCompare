@@ -1341,6 +1341,22 @@ pub fn copy_threads(src_remote: bool, dst_remote: bool) -> usize {
     std::thread::available_parallelism().map_or(4, |n| n.get().clamp(2, 8))
 }
 
+/// How many workers a copy (or move) from `src` to `dst` uses: what
+/// `threads` asks for (0: [`copy_threads`]), but one alone when a side it
+/// changes takes one change at a time — the destination, or the source of
+/// a move, which removes each file once copied. That's a zip archive (see
+/// [`pcompare_core::vfs_write::WriteCaps::serial_writes`]).
+fn copy_workers(threads: usize, src: &Root, dst: Option<&Root>, moving: bool) -> usize {
+    let serial = |root: &Root| matches!(root, Root::Remote { fs, .. } if fs.caps().serial_writes);
+    if dst.is_some_and(serial) || (moving && serial(src)) {
+        return 1;
+    }
+    match threads {
+        0 => copy_threads(src.is_remote(), dst.is_some_and(Root::is_remote)),
+        n => n.min(MAX_COPY_THREADS),
+    }
+}
+
 /// The byte-moving half of a copy: everything a worker thread needs, and
 /// nothing the threads could race on.
 #[derive(Clone, Copy)]
@@ -1957,16 +1973,13 @@ pub fn run(
             r.state.phase = FilePhase::Running;
             r.emit();
             if matches!(req.action, FileAction::Copy | FileAction::Move) {
-                let threads = match req.options.threads {
-                    0 => copy_threads(src.is_remote(), dst.is_some_and(|d| d.is_remote())),
-                    n => n.min(MAX_COPY_THREADS),
-                };
+                let moving = req.action == FileAction::Move;
+                let threads = copy_workers(req.options.threads, &src, dst.as_ref(), moving);
                 let mover = Mover {
                     opts: &req.options,
                     ctl,
                     deleter,
                 };
-                let moving = req.action == FileAction::Move;
                 r.copy_all(mover, threads, &scanned, &scanned_dst, moving);
             } else {
                 let now = now_ms();
@@ -2771,6 +2784,7 @@ mod tests {
         resume_write: true,
         range_read: true,
         folders: true,
+        serial_writes: false,
     };
     const S3: WriteCaps = WriteCaps {
         rename: false,
@@ -2778,6 +2792,16 @@ mod tests {
         resume_write: false,
         range_read: true,
         folders: false,
+        serial_writes: false,
+    };
+    /// Like a zip archive: one file, rewritten whole by every change.
+    const ZIP: WriteCaps = WriteCaps {
+        rename: true,
+        set_modified: true,
+        resume_write: false,
+        range_read: true,
+        folders: true,
+        serial_writes: true,
     };
 
     /// A remote whose uploads take a while, counting how many run at once.
@@ -2889,6 +2913,67 @@ mod tests {
         assert_eq!(landed, want);
         assert!(done_when_landed.iter().any(|&n| n < 12), "rows arrive before the end");
         assert_eq!(files(&p.right).len(), 13);
+    }
+
+    #[test]
+    fn copies_into_an_archive_run_one_at_a_time() {
+        // Each change rewrites the whole archive; on Windows a rewrite fails
+        // ("Access is denied") while another thread has the archive open.
+        let p = pair();
+        for i in 0..6 {
+            write(&p.left, &format!("many/{i}.txt"), "data", OLD);
+        }
+        let archive = SlowRemote {
+            inner: FakeRemote(ZIP),
+            active: AtomicUsize::new(0),
+            peak: AtomicUsize::new(0),
+        };
+        let r_path = p.right.to_string_lossy().into_owned();
+        let right = Root::Remote {
+            fs: &archive,
+            path: &r_path,
+            label: "out/a.zip",
+        };
+        let options = FileOpOptions {
+            threads: 4,
+            ..opts(ConflictMode::Overwrite)
+        };
+        let r = run(
+            &req(FileAction::Copy, &["many"], options),
+            Root::Local(&p.left),
+            Some(right),
+            &PermanentDeleter,
+            &Control::default(),
+            &mut |_| {},
+            &mut |_| panic!("not expected to ask"),
+        );
+        assert_eq!((r.succeeded, r.failed), (6, 0), "{:?}", r.failures);
+        assert_eq!(archive.peak.load(Ordering::SeqCst), 1, "one write at a time");
+        assert_eq!(files(&p.right).len(), 7);
+    }
+
+    #[test]
+    fn archives_get_a_single_worker() {
+        let (zip, sftp) = (FakeRemote(ZIP), FakeRemote(SFTP));
+        let archive = Root::Remote {
+            fs: &zip,
+            path: "",
+            label: "a.zip",
+        };
+        let server = Root::Remote {
+            fs: &sftp,
+            path: "",
+            label: "remote://box",
+        };
+        let local = Root::Local(Path::new("."));
+        assert_eq!(copy_workers(4, &local, Some(&archive), false), 1);
+        assert_eq!(copy_workers(0, &server, Some(&archive), true), 1);
+        // Reading from an archive can overlap; a move also removes from it.
+        assert_eq!(copy_workers(4, &archive, Some(&local), false), 4);
+        assert_eq!(copy_workers(4, &archive, Some(&local), true), 1);
+        assert_eq!(copy_workers(4, &local, Some(&server), true), 4);
+        assert_eq!(copy_workers(0, &local, Some(&server), false), copy_threads(false, true));
+        assert_eq!(copy_workers(99, &local, Some(&local), false), MAX_COPY_THREADS);
     }
 
     #[test]
