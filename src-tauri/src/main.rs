@@ -160,7 +160,7 @@ fn read_left_selection() -> Option<String> {
 
 /// Turns the command line into what to open. Plain paths pass through;
 /// `--compare-to <path>` pairs `path` with the remembered left side (or opens
-/// it alone when nothing was selected) and consumes the selection.
+/// it alone when nothing was selected).
 /// parsed by cli.rs, so /switches (`/fv=`, `/title1=`,
 /// `/readonly`, `/mergeoutput=`…) come along and are never taken for paths.
 fn resolve_launch_args(args: &[String], left_selection: Option<String>) -> cli::LaunchOptions {
@@ -171,14 +171,26 @@ fn resolve_launch_args(args: &[String], left_selection: Option<String>) -> cli::
 /// window exists (so the webview never sees a half-consumed selection).
 static LAUNCH_OPTIONS: std::sync::OnceLock<cli::LaunchOptions> = std::sync::OnceLock::new();
 
+/// Whether `args` pairs with the remembered left side.
+fn uses_left_selection(args: &[String]) -> bool {
+    args.iter().any(|a| a == "--compare-to")
+}
+
+/// Reads the left side but leaves it in place: `main` runs this before it
+/// knows whether another PCompare is open, and when one is, this process only
+/// forwards its command line and the running window resolves it again.
 fn resolve_launch_paths(args: &[String]) -> cli::LaunchOptions {
-    if !args.iter().any(|a| a == "--compare-to") {
-        return resolve_launch_args(args, None);
+    let left = uses_left_selection(args).then(read_left_selection).flatten();
+    resolve_launch_args(args, left)
+}
+
+/// Forgets the left side once the window that opens the comparison has used
+/// it, and puts the Explorer menu's label back to "Compare to Left Side".
+fn consume_left_selection(args: &[String]) {
+    if uses_left_selection(args) {
+        let _ = std::fs::remove_file(left_selection_file());
+        pcompare_shell::menu::set_left(None);
     }
-    let launch = resolve_launch_args(args, read_left_selection());
-    let _ = std::fs::remove_file(left_selection_file());
-    pcompare_shell::menu::set_left(None);
-    launch
 }
 
 /// The command line, e.g. `pcompare.exe left right` plus any viewer, title,
@@ -480,7 +492,10 @@ fn main() {
         ))
         .on_window_event(automation::on_window_event)
         // automation:shell end
-        .setup(|app| {
+        .setup(move |app| {
+            // Only the instance that keeps its window gets here: a second
+            // launch has already handed its command line over and exited.
+            consume_left_selection(args.get(1..).unwrap_or_default());
             let config_dir = app.path().app_config_dir()?;
             let data_dir = app.path().app_data_dir()?;
             let cache_dir = app.path().app_cache_dir()?.join("remote");
@@ -723,7 +738,7 @@ fn main() {
 
 #[cfg(test)]
 mod launch_tests {
-    use super::resolve_launch_args;
+    use super::{left_selection_file, resolve_launch_args, resolve_launch_paths};
 
     fn args(a: &[&str]) -> Vec<String> {
         a.iter().map(|s| s.to_string()).collect()
@@ -745,5 +760,30 @@ mod launch_tests {
         assert_eq!(resolve_launch_args(&args(&["--compare-to", "b"]), None).paths, args(&["b"]));
         assert_eq!(resolve_launch_args(&args(&["--compare-to", "b"]), Some("b".into())).paths, args(&["b"]));
         assert!(resolve_launch_args(&args(&["--compare-to"]), None).paths.is_empty());
+    }
+
+    /// With PCompare already open, the new process resolves its command line
+    /// in `main`, then hands it to the running window, which resolves it again.
+    /// The first resolve used to delete the selection, so the window opened the
+    /// item on its own.
+    #[test]
+    fn a_forwarded_compare_to_still_finds_the_left_side() {
+        let file = left_selection_file();
+        let saved = std::fs::read(&file).ok();
+        std::fs::write(&file, "a").unwrap();
+        let argv = args(&["--compare-to", "b"]);
+        let in_new_process = resolve_launch_paths(&argv).paths;
+        let in_running_window = resolve_launch_paths(&argv).paths;
+        let still_there = file.exists();
+        // Put back whatever the in-app menu had selected before asserting.
+        match saved {
+            Some(s) => std::fs::write(&file, s).unwrap(),
+            None => {
+                let _ = std::fs::remove_file(&file);
+            }
+        }
+        assert_eq!(in_new_process, args(&["a", "b"]));
+        assert_eq!(in_running_window, args(&["a", "b"]));
+        assert!(still_there);
     }
 }
