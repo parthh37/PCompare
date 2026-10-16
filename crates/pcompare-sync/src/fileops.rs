@@ -28,7 +28,7 @@ use std::time::{Duration, Instant, UNIX_EPOCH};
 use filetime::FileTime;
 use globset::{GlobBuilder, GlobSet, GlobSetBuilder};
 use pcompare_core::folder::{attr, pair_passes, EntryMeta, FolderFilters};
-use pcompare_core::vfs_write::{pump, VfsWrite};
+use pcompare_core::vfs_write::{pump, same_store, VfsWrite};
 use serde::{Deserialize, Serialize};
 
 use crate::exec::hold;
@@ -634,7 +634,7 @@ impl<'a> Place<'a> {
                 canon(a).starts_with(canon(b))
             }
             (Place::Remote { fs: fa, .. }, Place::Remote { fs: fb, .. })
-                if std::ptr::addr_eq(*fa, *fb) =>
+                if same_store(*fa, *fb) =>
             {
                 let (a, b) = (path_key(&self.path()), path_key(&other.path()));
                 a == b || a.starts_with(&format!("{b}/"))
@@ -1248,9 +1248,12 @@ impl Runner<'_> {
             (Place::Local(a), Place::Local(b)) => {
                 fs::symlink_metadata(b).is_err() && fs::rename(a, b).is_ok()
             }
+            // Two views of one store may differ in what they allow (one
+            // opened read-only): both must take the rename.
             (Place::Remote { fs: fa, .. }, Place::Remote { fs: fb, .. }) => {
-                std::ptr::addr_eq(*fa, *fb)
+                same_store(*fa, *fb)
                     && fa.caps().rename
+                    && fb.caps().rename
                     && fa.rename(&src.path(), &dst.path()).is_ok()
             }
             _ => false,
@@ -2066,6 +2069,7 @@ fn count_nodes(n: &Node) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use pcompare_archive::{ArchiveFs, ArchiveKind, Archives};
     use pcompare_core::vfs::{LocalFs, Vfs, VfsEntry};
     use pcompare_core::vfs_write::WriteCaps;
     use std::sync::atomic::AtomicUsize;
@@ -3175,6 +3179,86 @@ mod tests {
         assert!(!read_out_first(&sftp, &zip));
         assert!(!read_out_first(&zip, &sftp));
         assert!(!read_out_first(&sftp, &sftp));
+    }
+
+    /// An empty zip: just the end-of-central-directory record.
+    const EMPTY_ZIP: [u8; 22] = [
+        0x50, 0x4b, 0x05, 0x06, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    ];
+
+    fn entry(fs: &ArchiveFs, path: &str) -> String {
+        let mut s = String::new();
+        fs.open(path).unwrap().read_to_string(&mut s).unwrap();
+        s
+    }
+
+    #[test]
+    fn one_zip_under_two_spellings_is_one_place() {
+        // `a.zip` on one side and `./a.zip` on the other: two views (each
+        // naming the zip as written) of one file.
+        let dir = tempfile::tempdir().unwrap();
+        let zip = dir.path().join("a.zip");
+        fs::write(&zip, EMPTY_ZIP).unwrap();
+        let archives = Archives::new(dir.path().join("cache"));
+        let open = |label: &str, read_only: Option<String>| {
+            archives
+                .open_archive(Path::new(label), label, ArchiveKind::Zip, read_only)
+                .unwrap()
+        };
+        let plain_label = zip.to_string_lossy().into_owned();
+        let dotted_label = format!("{}/./a.zip", dir.path().to_string_lossy());
+        let (plain, dotted) = (open(&plain_label, None), open(&dotted_label, None));
+        assert!(!Arc::ptr_eq(&plain, &dotted));
+        plain
+            .write("x/f.txt", 0, &mut &b"keep me"[..], &mut |_| Ok(()))
+            .unwrap();
+        fn side<'a>(fs: &'a dyn VfsWrite, label: &'a str) -> Root<'a> {
+            Root::Remote { fs, path: "", label }
+        }
+        let between = |action, src: &str, dst: &str, to: &ArchiveFs| {
+            run(
+                &FileOpRequest {
+                    action,
+                    items: vec![FileItem {
+                        src: src.into(),
+                        dst: dst.into(),
+                    }],
+                    options: opts(ConflictMode::Overwrite),
+                },
+                side(&*plain, &plain_label),
+                Some(side(to, &dotted_label)),
+                &PermanentDeleter,
+                &Control::default(),
+                &mut |_| {},
+                &mut |_| panic!("not expected to ask"),
+            )
+        };
+
+        // Moving a file onto itself must not lose it.
+        let r = between(FileAction::Move, "x/f.txt", "x/f.txt", &dotted);
+        assert_eq!((r.succeeded, r.failed), (0, 1), "{:?}", r.failures);
+        assert!(r.failures[0].message.contains("same"), "{:?}", r.failures);
+        assert_eq!(entry(&plain, "x/f.txt"), "keep me");
+
+        // Nor may a folder be copied into itself.
+        let r = between(FileAction::Copy, "x", "x/sub", &dotted);
+        assert_eq!((r.succeeded, r.failed), (0, 1), "{:?}", r.failures);
+        assert!(r.failures[0].message.contains("into itself"), "{:?}", r.failures);
+        assert!(plain.stat("x/sub").unwrap().is_none());
+
+        // A view that refuses writes still does, though renaming through
+        // the other view could reach the same file.
+        let locked = open(&dotted_label, Some("opened read-only".into()));
+        let r = between(FileAction::Move, "x", "y", &locked);
+        assert_eq!(r.succeeded, 0, "{:?}", r.failures);
+        assert_eq!(entry(&plain, "x/f.txt"), "keep me");
+        assert!(plain.stat("y").unwrap().is_none());
+
+        // A move elsewhere in it is one rename.
+        let r = between(FileAction::Move, "x", "y", &dotted);
+        assert_eq!((r.succeeded, r.failed), (1, 0), "{:?}", r.failures);
+        assert!(plain.stat("x").unwrap().is_none());
+        assert_eq!(entry(&dotted, "y/f.txt"), "keep me");
     }
 
     #[test]

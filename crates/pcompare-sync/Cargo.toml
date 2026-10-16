@@ -22,6 +22,10 @@ trash = "5"
 # copies out of an archive into an archive go through a temp file
 tempfile = "3"
 
+[dev-dependencies]
+# real zip archives in the file-operation tests
+pcompare-archive = { path = "../pcompare-archive" }
+
 [target.'cfg(windows)'.dependencies]
 # Security / FileSystem / Threading: copy NTFS ACLs, 8.3 short names, DOS attributes
 windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_RestartManager", "Win32_Security", "Win32_Storage_FileSystem", "Win32_System_Threading"] }

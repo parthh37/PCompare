@@ -367,6 +367,15 @@ fn one_zip_under_two_spellings_takes_one_write_at_a_time() {
         assert!(err.contains(&format!("{label}/missing.txt")), "{err}");
     }
 
+    // One store, so file operations treat them as one place; another zip
+    // is another store.
+    let store = views[0].store();
+    assert!(store.is_some() && views.iter().all(|v| v.store() == store));
+    let other = dir.path().join("b.zip");
+    write_zip(&other, FILES);
+    let other = archives.resolve(&s(&other), true).unwrap().unwrap().fs;
+    assert_ne!(other.store(), store);
+
     std::thread::scope(|scope| {
         for (t, view) in views.iter().enumerate() {
             scope.spawn(move || {

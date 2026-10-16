@@ -438,6 +438,11 @@ impl VfsWrite for ArchiveFs {
         }
     }
 
+    /// Every spelling of the archive's path shares one `ArchiveFile`.
+    fn store(&self) -> Option<usize> {
+        Some(Arc::as_ptr(&self.file).addr())
+    }
+
     fn stat(&self, path: &str) -> io::Result<Option<EntryMeta>> {
         self.stat_node(path)
     }
