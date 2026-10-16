@@ -158,14 +158,49 @@
   box-shadow: 0 0 0 2px var(--accent-border);
 }
 
-/* ---------- status detail, combination folders, legend ---------- */
-.folder-mix {
-  vertical-align: -2px;
+/* ---------- per-side colours (folderColors.ts), status detail, legend ---------- */
+/* A file side: name, size and date all in its tone. A folder side: a plain name,
+   dim details, and its tone in the icon. `.frow` lifts these over the shared
+   status colours in styles.css; its filtered teal still wins (equal, and later). */
+.frow .fcell.fct-same {
+  color: var(--fc-same);
+}
+.frow .fcell.fct-newer {
+  color: var(--fc-newer);
+}
+.frow .fcell.fct-different {
+  color: var(--fc-different);
+}
+.frow .fcell.fct-older {
+  color: var(--fc-older);
+}
+.frow .fcell.fct-orphan {
+  color: var(--fc-orphan);
+}
+.frow .fcell.fct-unknown {
+  color: var(--fc-unknown);
+}
+.frow .fcell.fct-error {
+  color: var(--warn);
+}
+.frow .fcell.fct-folder {
   color: var(--text);
 }
-/* Same contents, quick tests differ: a same row, marked by its clock glyph. */
-.d-sameDiff .fcell.status {
-  color: var(--unimportant);
+.frow .fcell.fct-info {
+  color: var(--fc-info);
+}
+.fc-folder {
+  display: block;
+  flex-shrink: 0;
+}
+/* The colour spot sits in a 16px slot, so file names line up with folder names. */
+.fc-spot {
+  display: inline-block;
+  vertical-align: middle;
+  width: 7px;
+  height: 7px;
+  margin: 0 4px 0 5px;
+  flex-shrink: 0;
 }
 .d-unknown .fcell.status {
   color: var(--faint, var(--muted));
@@ -199,12 +234,11 @@
   background: none;
 }
 .fc-legend .fcell.status {
+  display: flex;
+  justify-content: center;
   width: 28px;
   flex: none;
   padding: 0;
-}
-.fc-legend .d-rightNewer .fcell.name {
-  font-weight: 650;
 }
 .fc-legend p {
   margin: 8px 0 0;
