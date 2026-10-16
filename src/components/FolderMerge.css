@@ -27,6 +27,12 @@
   white-space: nowrap;
 }
 
+/* toolbar toggles (the Legend) while open */
+.folder-merge .toolbar > button.active {
+  border-color: var(--accent);
+  background: var(--sel-bg-strong);
+}
+
 /* tree */
 .fm-header,
 .fm-row {
@@ -54,17 +60,17 @@
   cursor: default;
   user-select: none;
 }
-/* A wash of the row's role behind a change (folderColors.ts), under hover and selection. */
-.fm-row.fmr-left {
+/* A wash of the row's role behind a change (folderColors.ts), under hover and selection; the legend shows it too. */
+.fmr-left {
   background: color-mix(in srgb, var(--fm-left) var(--fm-tint), transparent);
 }
-.fm-row.fmr-right {
+.fmr-right {
   background: color-mix(in srgb, var(--fm-right) var(--fm-tint), transparent);
 }
-.fm-row.fmr-mergeable {
+.fmr-mergeable {
   background: color-mix(in srgb, var(--fm-mergeable) var(--fm-tint), transparent);
 }
-.fm-row.fmr-conflict {
+.fmr-conflict {
   background: color-mix(in srgb, var(--fm-conflict) var(--fm-tint), transparent);
 }
 .fm-row:hover {
