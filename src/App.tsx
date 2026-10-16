@@ -741,7 +741,13 @@ export default function App() {
   return (
     <ShellContext.Provider value={{ openProfiles, leftSelection, selectLeft, compareToLeft }}>
       <div className="app">
-        <nav className="tabbar">
+        <nav
+          className="tabbar"
+          onWheel={(e) => {
+            // The strip has no scrollbar: a plain wheel scrolls it sideways.
+            if (!e.deltaX) e.currentTarget.scrollLeft += e.deltaY;
+          }}
+        >
           {tabs.map((t) => (
             <div
               key={t.id}
