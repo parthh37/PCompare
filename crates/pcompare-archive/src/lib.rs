@@ -198,6 +198,12 @@ fn split_kind(name: &str) -> Option<SplitKind> {
     ArchiveKind::from_name(name, true).map(SplitKind::Archive)
 }
 
+/// Whether a file name opens as a folder without being asked to: an archive
+/// or a snapshot (zip-based documents like `.docx` only when named as a folder).
+pub fn is_container_name(name: &str) -> bool {
+    ArchiveKind::from_name(name, false).is_some() || split_kind(name) == Some(SplitKind::Snapshot)
+}
+
 /// Finds the first component of `path` that names a container, where
 /// `is_file` confirms it is a file (not a folder that happens to be called
 /// `x.zip`). Without components after it, the container itself only counts
@@ -675,5 +681,16 @@ mod tests {
         assert!(split_path("/y/a.zip/f", false, is_file).is_none());
         assert!(!may_be_container_path("/home/me/notes.txt"));
         assert!(may_be_container_path("svn:https://h/r"));
+    }
+
+    #[test]
+    fn container_names() {
+        for n in ["a.zip", "B.TAR.GZ", "c.7z", "d.pcsnap"] {
+            assert!(is_container_name(n), "{n}");
+        }
+        // zip-based documents open as folders only when asked to
+        for n in ["report.docx", "notes.txt", ".zip", "zip"] {
+            assert!(!is_container_name(n), "{n}");
+        }
     }
 }

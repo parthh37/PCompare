@@ -1636,6 +1636,30 @@ button,
 .path-recent-forget:hover {
   color: var(--text);
 }
+/* typing a local path lists that folder instead: "In C:\Users\", then its entries */
+.path-recent-in {
+  font-family: var(--mono);
+  text-transform: none;
+  letter-spacing: 0;
+}
+.path-recent-icon {
+  align-self: center;
+  display: inline-flex;
+  color: var(--muted);
+}
+.path-recent-name.path-recent-disk {
+  flex: 1;
+  max-width: none;
+  font-weight: 400;
+}
+.path-recent-disk b {
+  font-weight: 600;
+}
+.path-recent-more {
+  padding: 4px 10px 2px;
+  font-size: 11px;
+  color: var(--muted);
+}
 
 /* ---------- Viewer toolbar buttons (StackButton) ---------- */
 /* Icon above its label, flat until hovered, sunken while pressed (classic toggle look). */
