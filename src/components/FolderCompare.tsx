@@ -5,6 +5,7 @@ import {
   Camera,
   ChevronDown,
   ChevronRight,
+  ChevronUp,
   CircleStop,
   Columns2,
   Equal,
@@ -68,8 +69,10 @@ import {
 import {
   allDirs,
   applyVerdicts,
+  COUNT_FILTERS,
   countsNewer,
   detailOf,
+  diffStops,
   DISPLAY_FILTERS,
   effectiveStatus,
   FOLDER_STRUCTURES,
@@ -79,6 +82,7 @@ import {
   withoutFiltered,
   pairedFiles,
   selectMatching,
+  stopsBefore,
   tally,
   visibleSet,
   type SelectCriteria,
@@ -209,6 +213,9 @@ const sideName = (e: FolderEntry, side: Side) =>
 
 /** At most this many content re-checks run at once (each may read whole files). */
 const RECHECK_CONCURRENCY = 4;
+
+/** The folder list's row height (px). */
+const ROW_HEIGHT = 24;
 
 type Verdicts = Map<string, ContentVerdict & { method: ContentMethod }>;
 
@@ -676,7 +683,7 @@ export function FolderCompare({
     visible,
     flat,
     root,
-    rowHeight: 24,
+    rowHeight: ROW_HEIGHT,
     expand: (rels) => setExpanded((prev) => new Set([...prev, ...rels])),
     showAll: () => update({ filter: "all" }),
     engineOptions,
@@ -716,6 +723,47 @@ export function FolderCompare({
   const splitHint = !focusEntry
     ? "Select a file to compare it here."
     : "Folders aren’t compared here — select a file inside.";
+
+  // Next / Previous difference: the rows they land on, and the focused row's place among them.
+  const stopOpts = useMemo(() => ({ flatten: cfg.flatten, ignoreMinor: cfg.ignoreMinor }), [cfg.flatten, cfg.ignoreMinor]);
+  const stops = useMemo(() => (oneSided ? [] : diffStops(entries, visible, stopOpts)), [entries, visible, oneSided, stopOpts]);
+  const stopIndex = useMemo(() => new Map(stops.map((rel, i) => [rel, i])), [stops]);
+  /** `at`: the focused row's stop, or -1. `before`: how many stops precede it (-1: nothing focused). */
+  const diffPos = useMemo(() => {
+    if (focusRel == null) return { at: -1, before: -1 };
+    const at = stopIndex.get(focusRel);
+    return at != null ? { at, before: at } : { at: -1, before: stopsBefore(entries, visible, focusRel, stopOpts) };
+  }, [focusRel, stopIndex, entries, visible, stopOpts]);
+  // From nothing focused, ▼ goes to the first difference and ▲ to the last.
+  const nextStop = diffPos.before < 0 ? 0 : diffPos.at >= 0 ? diffPos.at + 1 : diffPos.before;
+  const prevStop = diffPos.before < 0 ? stops.length - 1 : diffPos.before - 1;
+  /** A row a difference jump selected, scrolled to once its folders are open. */
+  const revealing = useRef<string | null>(null);
+  const goToDiff = (i: number) => {
+    const rel = stops[i];
+    if (rel == null) return;
+    if (!cfg.flatten) {
+      const parents: string[] = [];
+      for (let at = rel.indexOf("/"); at >= 0; at = rel.indexOf("/", at + 1)) parents.push(rel.slice(0, at));
+      if (parents.some((p) => !expanded.has(p))) setExpanded((prev) => new Set([...prev, ...parents]));
+    }
+    fops.selectRows([rel], "both", false);
+    revealing.current = rel;
+  };
+  const diffKeys = useRef<(next: boolean) => void>(() => {});
+  diffKeys.current = (next) => goToDiff(next ? nextStop : prevStop);
+  useEffect(() => {
+    if (revealing.current == null) return;
+    const i = flat.findIndex((r) => r.entry.relPath === revealing.current);
+    const list = root.current?.querySelector<HTMLElement>(".folder-list");
+    if (i < 0 || !list) return;
+    revealing.current = null;
+    const top = i * ROW_HEIGHT;
+    // Off screen: bring it a third of the way down, so what follows it shows too.
+    if (top < list.scrollTop || top + ROW_HEIGHT > list.scrollTop + list.clientHeight) {
+      list.scrollTop = Math.max(0, top - list.clientHeight / 3);
+    }
+  });
 
   /** Opens the split view's pair in its own tab; an orphan text file opens alone in Text Edit. */
   const openPairInTab = (l: string, r: string) => {
@@ -908,6 +956,12 @@ export function FolderCompare({
         if (matches(e, "folder.splitView")) {
           e.preventDefault();
           toggleSplitRef.current();
+          return;
+        }
+        const next = matches(e, "folder.nextDiff");
+        if ((next || matches(e, "folder.prevDiff")) && !(e.target as HTMLElement | null)?.closest("input, textarea, select")) {
+          e.preventDefault();
+          diffKeys.current(next);
           return;
         }
       }
@@ -1268,7 +1322,7 @@ export function FolderCompare({
             {error && <div className="banner error">{error}</div>}
             <ArchiveBanner left={left} right={right} content={engineOptions.content} onOpenHex={onOpenHex} />
             {result && flat.length === 0 && <div className="empty-state">Nothing to show for this filter.</div>}
-            {result && <VirtualList className="folder-list" count={flat.length} rowHeight={24} renderRow={renderRow} />}
+            {result && <VirtualList className="folder-list" count={flat.length} rowHeight={ROW_HEIGHT} renderRow={renderRow} />}
             {review.layer /* Bookmarks & comments panel */}
           </div>
           {/* Per side: what is selected there and the free space on its volume. */}
@@ -1338,15 +1392,61 @@ export function FolderCompare({
         )}
         {stats && !oneSided && (
           <>
-            <span className="s-same-fg">
-              {stats.same} same{stats.ignored ? ` (${stats.ignored} ignored)` : ""}
+            {/* where you are among the differing files, with the arrows to move on */}
+            <span className="fc-diffnav">
+              <button
+                className="icon-btn"
+                onClick={() => goToDiff(prevStop)}
+                disabled={stops[prevStop] == null}
+                title={`Previous difference (${shortcutLabel("folder.prevDiff")})`}
+                aria-label="Previous difference"
+              >
+                <ChevronUp size={13} />
+              </button>
+              <button
+                className="icon-btn"
+                onClick={() => goToDiff(nextStop)}
+                disabled={stops[nextStop] == null}
+                title={`Next difference (${shortcutLabel("folder.nextDiff")}): opens folders on the way; a folder on one side only is one stop`}
+                aria-label="Next difference"
+              >
+                <ChevronDown size={13} />
+              </button>
+              <span className="fc-diffpos" aria-live="polite">
+                {diffPos.at >= 0
+                  ? `Difference ${diffPos.at + 1} of ${stops.length}`
+                  : stops.length
+                    ? `${stops.length} difference${stops.length === 1 ? "" : "s"}`
+                    : stats.different + stats.leftOnly + stats.rightOnly + stats.errors + (cfg.ignoreMinor ? 0 : stats.similar)
+                      ? "No differences shown"
+                      : "No differences"}
+              </span>
             </span>
-            {stats.similar > 0 && <span className="s-similar-fg">{stats.similar} similar</span>}
-            <span className="s-different-fg">{stats.different} different</span>
-            <span className="s-leftOnly-fg">{stats.leftOnly} left only</span>
-            <span className="s-rightOnly-fg">{stats.rightOnly} right only</span>
-            {stats.errors > 0 && <span className="s-error-fg">{stats.errors} errors</span>}
-            {cfg.filter !== "all" && <span className="muted">Showing: {filterLabel}</span>}
+            {/* Each count shows only its rows; pressed while it does, and a second click shows everything. */}
+            <span className="fc-counts" role="group" aria-label="Show only">
+              {COUNT_FILTERS.map(({ stat, filter, status, label, what }) => {
+                const n = stats[stat];
+                const on = cfg.filter === filter;
+                // Similar and errors only appear when there are some.
+                if (!n && !on && (stat === "similar" || stat === "errors")) return null;
+                return (
+                  <button
+                    key={stat}
+                    className={`fc-count s-${status}-fg`}
+                    aria-pressed={on}
+                    disabled={!n && !on}
+                    onClick={() => update({ filter: on ? "all" : filter })}
+                    title={on ? `Showing only ${what}. Click to show everything` : `Show only ${what}`}
+                  >
+                    {n} {label}
+                    {stat === "same" && stats.ignored ? ` (${stats.ignored} ignored)` : ""}
+                  </button>
+                );
+              })}
+            </span>
+            {cfg.filter !== "all" && !COUNT_FILTERS.some((c) => c.filter === cfg.filter) && (
+              <span className="muted">Showing: {filterLabel}</span>
+            )}
             {filteredCount > 0 && (
               <span
                 className="s-filtered-fg"
