@@ -124,23 +124,23 @@
   color: var(--text);
   border-color: var(--border);
 }
-.c-leftChanged .fm-badge,
-.c-leftAdded .fm-badge,
-.c-leftDeleted .fm-badge {
+/* One side's changes take that side's colour, as in the status bar. `.fm-row` keeps
+   these as specific as the neutral rule above, so they win by coming later. */
+.fm-row.c-leftChanged .fm-badge,
+.fm-row.c-leftAdded .fm-badge,
+.fm-row.c-leftDeleted .fm-badge,
+.fm-row.c-leftOnly .fm-badge,
+.fm-row.c-leftNewer .fm-badge {
   color: var(--left-fg);
 }
-.c-rightChanged .fm-badge,
-.c-rightAdded .fm-badge,
-.c-rightDeleted .fm-badge,
-.c-rightOnly .fm-badge,
-.c-rightNewer .fm-badge {
+.fm-row.c-rightChanged .fm-badge,
+.fm-row.c-rightAdded .fm-badge,
+.fm-row.c-rightDeleted .fm-badge,
+.fm-row.c-rightOnly .fm-badge,
+.fm-row.c-rightNewer .fm-badge {
   color: var(--orphan);
 }
-.c-leftOnly .fm-badge,
-.c-leftNewer .fm-badge {
-  color: var(--left-fg);
-}
-.c-autoMerged .fm-badge {
+.fm-row.c-autoMerged .fm-badge {
   color: var(--ok);
   border-color: rgba(111, 207, 151, 0.4);
 }
