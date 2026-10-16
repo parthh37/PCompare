@@ -230,9 +230,6 @@
   height: 22px;
   cursor: default;
 }
-.fc-legend .fc-legend-row:hover {
-  background: none;
-}
 .fc-legend .fcell.status {
   display: flex;
   justify-content: center;

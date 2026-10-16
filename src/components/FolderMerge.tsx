@@ -12,6 +12,7 @@ import {
   Minus,
   Plus,
   RefreshCw,
+  SwatchBook,
   TriangleAlert,
   type LucideIcon,
 } from "lucide-react";
@@ -33,7 +34,7 @@ import {
   type MergeProgress,
   type MergeReport,
 } from "../lib/syncApi";
-import { FolderToneIcon, ToneSpot } from "./FolderStatusLegend";
+import { FolderToneIcon, MergeLegendPopover, ToneSpot } from "./FolderStatusLegend";
 import { Modal } from "./Modal";
 import { PathField } from "./PathField";
 import { VirtualList, type VirtualListHandle } from "./VirtualList";
@@ -244,6 +245,8 @@ export function FolderMerge({
   const [progress, setProgress] = useState<MergeProgress | null>(null);
   const runKey = useRef<string | null>(null);
   const [report, setReport] = useState<MergeReport | null>(null);
+  /** Where the Legend is open, if it is. */
+  const [legendAt, setLegendAt] = useState<{ x: number; y: number } | null>(null);
   const disposal: Disposal = cfg.disposal ?? { kind: "trash" };
   const list = useRef<VirtualListHandle>(null);
   const root = useRef<HTMLDivElement>(null);
@@ -655,6 +658,18 @@ export function FolderMerge({
         <button onClick={() => setExpanded(new Set())} title="Collapse all">
           <ChevronsDownUp size={14} /> Collapse
         </button>
+        <button
+          className={legendAt ? "active" : ""}
+          title="Legend: what each side's colours and folder icons mean"
+          // The legend closes on any mousedown outside it; this button toggles it instead.
+          onMouseDown={(ev) => ev.stopPropagation()}
+          onClick={(ev) => {
+            const r = ev.currentTarget.getBoundingClientRect();
+            setLegendAt((at) => (at ? null : { x: r.left, y: r.bottom + 2 }));
+          }}
+        >
+          <SwatchBook size={14} />
+        </button>
         <span className="sep" />
         <label>
           Compare
@@ -842,6 +857,8 @@ export function FolderMerge({
           </>
         )}
       </div>
+
+      {legendAt && <MergeLegendPopover {...legendAt} twoWay={twoWay} onClose={() => setLegendAt(null)} />}
 
       {confirming && result && (
         <Modal
