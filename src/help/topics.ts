@@ -90,7 +90,7 @@ In *Rules → Importance*, **Compare numbers by value** makes 1.0 match 1.00 and
       `
 ## Linked lines and sync points
 - **Vertical padding** (toolbar, rows icon) is on by default: blank rows keep both sides aligned. Turn it off to see only each file's real lines; the panes then scroll together so matching blocks meet, and curved bands in the middle link each difference's left lines to its right lines (click a band to select it). The setting is remembered.
-- **Sync points** force two lines to sit side by side: Ctrl+click (⌘+click on macOS) or right-click → *Set Sync Point Here* on a line on one side, then on its partner on the other side. The files are compared again around them. Sync points show as purple dots and dashed links; right-click → *Remove Sync Point*, or clear them all from the **…** menu. They also appear under *Rules → Alignment*.
+- **Sync points** force two lines to sit side by side: Ctrl+click (⌘+click on macOS) or right-click → *Set Sync Point Here* on a line on one side, then on its partner on the other side. The files are compared again around them. Sync points show as magenta dots beside the line numbers and dashed links between the sides; right-click → *Remove Sync Point*, or clear them all from the **…** menu. They also appear under *Rules → Alignment*.
 
 ## Editing extras
 - **Go to line** (Ctrl+G) jumps to a line of either side; the status bar shows the caret's side, line and column.
