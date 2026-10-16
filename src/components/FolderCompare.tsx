@@ -474,11 +474,14 @@ export function FolderCompare({
    * After a file operation: compares just the rows it changed (tree paths)
    * and swaps them into the tree (a partial refresh). Rescans
    * instead while a compare runs or when a row's folder isn't in the tree.
+   * `live` refreshes run while the operation is still going: they never
+   * rescan (its final refresh will) and aren't logged.
    */
-  const refreshRows = async (rels: string[]) => {
+  const refreshRows = async (rels: string[], liveRefresh = false) => {
     const scan = scanId.current;
     const tree = live.current;
-    if (runKey.current || !resultRef.current || !scan || !tree) return void run("quiet");
+    const rescan = () => (liveRefresh ? undefined : void run("quiet"));
+    if (runKey.current || !resultRef.current || !scan || !tree) return rescan();
     const seq = requestSeq.current;
     const busy = () => seq !== requestSeq.current || !!runKey.current;
     let rows: (FolderEntry | null)[];
@@ -487,7 +490,7 @@ export function FolderCompare({
       const ref = { id: scan, showFiltered: suppressFilters.current };
       rows = await api.compareFolderEntries(left, right, options, rels, ref, expandArchives);
     } catch {
-      if (!busy()) void run("quiet");
+      if (!busy()) rescan();
       return;
     }
     // A compare started meanwhile shows the change already.
@@ -496,11 +499,13 @@ export function FolderCompare({
     let entries = prev.entries;
     for (const [i, rel] of rels.entries()) {
       const next = replaceEntry(entries, rel, rows[i] ?? null);
-      if (!next) return void run("quiet");
+      if (!next) return rescan();
       entries = next;
     }
     for (const rel of rels) tree.patch(entries, rel);
-    addLog(`Refreshed ${rels.length === 1 ? rels[0] : `${rels.length} items`} after a file operation`);
+    if (!liveRefresh) {
+      addLog(`Refreshed ${rels.length === 1 ? rels[0] : `${rels.length} items`} after a file operation`);
+    }
     const next = { ...prev, entries, stats: { ...prev.stats, filtered: 0, ...tally(entries) } };
     resultRef.current = next;
     setResult(next);
@@ -689,7 +694,7 @@ export function FolderCompare({
     // Enter opens the selection: one folder toggles, file pairs open (a handful at most).
     onOpen: (list) => (list.length === 1 ? open(list[0]) : list.filter((e) => !e.isDir).slice(0, 10).forEach(open)),
     onRefresh: () => run("quiet"),
-    onRefreshRows: (rels) => void refreshRows(rels),
+    onRefreshRows: (rels, liveRefresh) => refreshRows(rels, liveRefresh),
     onError: setError,
     compareOptions: engineOptions,
   });

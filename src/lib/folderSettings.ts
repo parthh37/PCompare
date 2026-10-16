@@ -1,6 +1,7 @@
 // Folder session settings as the UI edits and saves them, and their mapping
 // onto the engine's FolderCompareOptions.
 import {
+  ATTR,
   DEFAULT_TEXT_OPTIONS,
   type AlignRule,
   type ContentMethod,
@@ -17,8 +18,12 @@ export interface CompareSettings {
   compareTimestamp: boolean;
   timeToleranceSecs: number;
   ignoreDstShift: boolean;
+  /** Timestamps a whole number of hours apart are the same (files stamped in another time zone). */
+  ignoreTimezone: boolean;
   content: ContentMethod;
   overrideQuickTests: boolean;
+  /** Content is only read for pairs the quick tests call different. */
+  skipContentIfQuickSame: boolean;
   /** Pairs with a file larger than this many MB use `largeFileMethod` instead of `content`; null = no limit. */
   largeFileThresholdMb: number | null;
   largeFileMethod: LargeFileMethod;
@@ -44,6 +49,10 @@ export interface CompareSettings {
   excludeExecutable: boolean;
   /** Attribute differences make files different. */
   compareAttributes: boolean;
+  /** Which `ATTR` bits {@link compareAttributes} looks at. */
+  comparedAttributes: number;
+  /** Paired files whose names differ only in capitalization are different. */
+  compareNameCase: boolean;
   /** `Readme.md` and `README.md` are different files (the norm off Windows). */
   caseSensitiveNames: boolean;
   /** Pair NFC and NFD spellings of the same name. */
@@ -86,8 +95,10 @@ export const DEFAULT_FOLDER_SETTINGS: FolderSettings = {
   compareTimestamp: true,
   timeToleranceSecs: 2,
   ignoreDstShift: false,
+  ignoreTimezone: false,
   content: "off",
   overrideQuickTests: true,
+  skipContentIfQuickSame: false,
   largeFileThresholdMb: null,
   largeFileMethod: "binary",
   rules: DEFAULT_TEXT_OPTIONS,
@@ -107,6 +118,8 @@ export const DEFAULT_FOLDER_SETTINGS: FolderSettings = {
   excludeAttributes: 0,
   excludeExecutable: false,
   compareAttributes: false,
+  comparedAttributes: ATTR.readonly | ATTR.hidden | ATTR.system,
+  compareNameCase: false,
   caseSensitiveNames: !IS_WINDOWS,
   alignUnicode: true,
   ignoreExtensions: false,
@@ -210,6 +223,7 @@ export function toEngineOptions(s: CompareSettings): FolderCompareOptions {
     compareTimestamp: s.compareTimestamp,
     content: s.content,
     overrideQuickTests: s.overrideQuickTests,
+    skipContentIfQuickSame: s.skipContentIfQuickSame,
     largeFileThreshold: s.largeFileThresholdMb == null ? null : Math.round(s.largeFileThresholdMb * 1024 * 1024),
     largeFileMethod: s.largeFileMethod,
     rules: { ...s.rules, ignorePatterns: s.rules.ignorePatterns.map((p) => p.trim()).filter(Boolean) },
@@ -239,9 +253,12 @@ export function toEngineOptions(s: CompareSettings): FolderCompareOptions {
       rules: parseAlignRules(s.alignRules).rules,
     },
     compareAttributes: s.compareAttributes,
+    comparedAttributes: s.comparedAttributes,
+    compareNameCase: s.compareNameCase,
     followLinks: s.followLinks,
     timeToleranceSecs: s.timeToleranceSecs,
     ignoreDstShift: s.ignoreDstShift,
+    ignoreTimezone: s.ignoreTimezone,
   };
 }
 

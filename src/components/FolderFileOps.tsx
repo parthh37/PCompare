@@ -6,11 +6,12 @@
 // ↑/↓ (with Shift) move through the list. Operations — copy / move to the
 // other side or a folder, delete, rename, new folder, attributes, touch —
 // work on the selected side's items, run in the background Operations queue
-// and, when they finish, compare the rows they changed again (or rescan).
+// and compare the rows they change again as items land (live), and once more
+// when they finish (or rescan).
 import { ListTodo, Trash } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type MouseEvent, type ReactNode, type RefObject } from "react";
 import type { FolderCompareOptions, FolderCompareResult, FolderEntry, Side } from "../lib/api";
-import { touchedRows } from "../lib/folderRefresh";
+import { rowsForPaths, touchedRows } from "../lib/folderRefresh";
 import {
   countSide,
   fileOps,
@@ -67,14 +68,19 @@ interface Args {
   onOpen: (entries: FolderEntry[]) => void;
   /** Rescans after an operation changed too much to refresh row by row. */
   onRefresh: () => void;
-  /** Compares these rows (tree paths) again after an operation changed them. */
-  onRefreshRows: (rels: string[]) => void;
+  /**
+   * Compares these rows (tree paths) again after an operation changed them;
+   * `live` while it is still running (no rescan if that can't be done).
+   */
+  onRefreshRows: (rels: string[], live?: boolean) => Promise<void> | void;
   onError: (message: string) => void;
   /** The comparison's options: copies and moves leave out what its filters hide. */
   compareOptions?: FolderCompareOptions;
 }
 
 const ROW_HEIGHT = 24;
+/** How often rows are refreshed while an operation is landing items. */
+const LIVE_REFRESH_MS = 300;
 const otherSide = (s: Side): Side => (s === "left" ? "right" : "left");
 const parentOf = (rel: string) => (rel.includes("/") ? rel.slice(0, rel.lastIndexOf("/")) : "");
 const lastName = (rel: string) => rel.slice(rel.lastIndexOf("/") + 1);
@@ -111,20 +117,62 @@ export function useFolderFileOps({
   // the rows it changed again; rescan when that can't be worked out.
   const refresh = useRef({ onRefresh, onRefreshRows, left, right, result });
   refresh.current = { onRefresh, onRefreshRows, left, right, result };
-  useEffect(
-    () =>
-      fileOps.onFinished((op) => {
-        const { left: l, right: r, result: res, onRefresh: rescan, onRefreshRows: compareRows } = refresh.current;
-        const rows = res ? touchedRows(op, { left: l, right: r, entries: res.entries }) : null;
-        if (rows) {
-          if (rows.length) compareRows(rows);
-          return;
-        }
-        const touched = [op.srcRoot, op.dstRoot ?? ""];
-        if (touched.some((t) => pathsOverlap(t, l) || pathsOverlap(t, r))) rescan();
-      }),
-    [],
-  );
+  //
+  // While it runs, the items it reports landed are compared too, batched
+  // every LIVE_REFRESH_MS with one refresh in flight at a time, so a copy
+  // fills the other side in file by file instead of all at the end.
+  useEffect(() => {
+    const pending = new Map<string, Set<string>>();
+    let inFlight: Promise<void> | null = null;
+    let timer: number | undefined;
+    const flush = () => {
+      timer = undefined;
+      if (inFlight) return schedule();
+      const { left: l, right: r, result: res, onRefreshRows: compareRows } = refresh.current;
+      const paths = [...pending.values()].flatMap((s) => [...s]);
+      pending.clear();
+      if (!res || !paths.length) return;
+      const rows = rowsForPaths(paths, { left: l, right: r, entries: res.entries });
+      // Too many to do row by row: the refresh at the end catches up.
+      if (!rows?.length) return;
+      inFlight = Promise.resolve(compareRows(rows, true))
+        .catch(() => {})
+        .finally(() => {
+          inFlight = null;
+        });
+    };
+    const schedule = () => {
+      if (timer === undefined) timer = window.setTimeout(flush, LIVE_REFRESH_MS);
+    };
+    const offChanged = fileOps.onChanged((op, paths) => {
+      const { left: l, right: r } = refresh.current;
+      const ours = paths.filter((p) => pathsOverlap(p, l) || pathsOverlap(p, r));
+      if (!ours.length) return;
+      const set = pending.get(op.id) ?? new Set<string>();
+      ours.forEach((p) => set.add(p));
+      pending.set(op.id, set);
+      schedule();
+    });
+    const offFinished = fileOps.onFinished(async (op) => {
+      // The full refresh below covers what was still waiting, and must not be
+      // overtaken by an older live one.
+      pending.delete(op.id);
+      await inFlight;
+      const { left: l, right: r, result: res, onRefresh: rescan, onRefreshRows: compareRows } = refresh.current;
+      const rows = res ? touchedRows(op, { left: l, right: r, entries: res.entries }) : null;
+      if (rows) {
+        if (rows.length) void compareRows(rows);
+        return;
+      }
+      const touched = [op.srcRoot, op.dstRoot ?? ""];
+      if (touched.some((t) => pathsOverlap(t, l) || pathsOverlap(t, r))) rescan();
+    });
+    return () => {
+      offChanged();
+      offFinished();
+      window.clearTimeout(timer);
+    };
+  }, []);
 
   // ----- selection -----
 

@@ -142,6 +142,10 @@ pub struct FolderCompareOptions {
     /// Let the content result replace the quick-test result (the
     /// default). When off, a pair is the same only if both agree.
     pub override_quick_tests: bool,
+    /// Only read files the quick tests call different: a pair whose size and
+    /// timestamp match is the same without opening it. Makes a thorough
+    /// comparison of a mostly unchanged tree about as fast as a quick one.
+    pub skip_content_if_quick_same: bool,
     /// Text rules used by [`ContentMethod::Rules`].
     pub rules: TextDiffOptions,
     pub recursive: bool,
@@ -153,9 +157,14 @@ pub struct FolderCompareOptions {
     pub ignore_name_case: bool,
     /// Further alignment overrides: Unicode forms, extensions, wildcard rules.
     pub align: AlignOptions,
-    /// Differing attributes (read-only, hidden, system; Unix permission
-    /// bits) make an otherwise identical file pair different.
+    /// Differing attributes (the [`Self::compared_attributes`] bits; Unix
+    /// permission bits) make an otherwise identical file pair different.
     pub compare_attributes: bool,
+    /// Which DOS [`attr`] bits "compare attributes" looks at.
+    pub compared_attributes: u32,
+    /// Quick test: files paired despite differently capitalized names
+    /// (`Readme.md` / `README.md`, under [`Self::ignore_name_case`]) are different.
+    pub compare_name_case: bool,
     /// Descend into linked folders and compare linked files by their target
     /// (link loops are detected and cut). When off, links are compared as
     /// links: by the path they point to.
@@ -164,6 +173,9 @@ pub struct FolderCompareOptions {
     pub time_tolerance_secs: u64,
     /// Treat timestamps exactly one hour apart as equal (DST shifts on FAT/exFAT).
     pub ignore_dst_shift: bool,
+    /// Treat timestamps a whole number of hours apart (up to a day) as equal:
+    /// the same files stamped in different time zones.
+    pub ignore_timezone: bool,
     /// Pairs where either file is larger than this many bytes skip
     /// [`Self::content`] and use [`Self::large_file_method`]. `None`: no limit.
     pub large_file_threshold: Option<u64>,
@@ -177,6 +189,7 @@ impl Default for FolderCompareOptions {
             compare_timestamp: true,
             content: ContentMethod::Off,
             override_quick_tests: true,
+            skip_content_if_quick_same: false,
             rules: TextDiffOptions::default(),
             recursive: true,
             exclude: Vec::new(),
@@ -185,9 +198,12 @@ impl Default for FolderCompareOptions {
             ignore_name_case: cfg!(windows),
             align: AlignOptions::default(),
             compare_attributes: false,
+            compared_attributes: attr::COMPARED,
+            compare_name_case: false,
             follow_links: true,
             time_tolerance_secs: 2,
             ignore_dst_shift: false,
+            ignore_timezone: false,
             large_file_threshold: None,
             large_file_method: LargeFileMethod::Binary,
         }
@@ -473,8 +489,12 @@ pub fn compare_needs(old: &FolderCompareOptions, new: &FolderCompareOptions) -> 
             || old.compare_timestamp != new.compare_timestamp
             || old.time_tolerance_secs != new.time_tolerance_secs
             || old.ignore_dst_shift != new.ignore_dst_shift
+            || old.ignore_timezone != new.ignore_timezone
             || old.override_quick_tests != new.override_quick_tests
+            || old.skip_content_if_quick_same != new.skip_content_if_quick_same
             || old.compare_attributes != new.compare_attributes
+            || old.compared_attributes != new.compared_attributes
+            || old.compare_name_case != new.compare_name_case
             || old.large_file_threshold != new.large_file_threshold
             || old.large_file_method != new.large_file_method
             || old.content != new.content,
@@ -1038,11 +1058,22 @@ pub fn timestamps_match(
     };
     let tolerance = opts.time_tolerance_secs.saturating_mul(1000);
     let diff = l.abs_diff(r);
-    diff <= tolerance || (opts.ignore_dst_shift && diff.abs_diff(HOUR_MS) <= tolerance)
+    if diff <= tolerance || (opts.ignore_dst_shift && diff.abs_diff(HOUR_MS) <= tolerance) {
+        return true;
+    }
+    if !opts.ignore_timezone {
+        return false;
+    }
+    // The nearest whole hour, within the widest gap two zones can have.
+    let hours = diff.saturating_add(HOUR_MS / 2) / HOUR_MS;
+    hours <= MAX_ZONE_HOURS && diff.abs_diff(hours * HOUR_MS) <= tolerance
 }
 
 /// FAT/exFAT store local time, so a DST change shifts every file by an hour.
 const HOUR_MS: u64 = 3_600_000;
+
+/// UTC-12 to UTC+14: the most two time zones can differ by.
+const MAX_ZONE_HOURS: u64 = 26;
 
 fn newer_side(l: &EntryMeta, r: &EntryMeta, opts: &FolderCompareOptions) -> Option<Side> {
     match (l.modified_ms, r.modified_ms) {
@@ -1175,6 +1206,11 @@ fn quick_tests_pass(l: &EntryMeta, r: &EntryMeta, opts: &FolderCompareOptions) -
         && (!opts.compare_timestamp || timestamps_match(l.modified_ms, r.modified_ms, opts))
 }
 
+/// Whether the names of a paired file differ only in capitalization.
+fn names_differ_in_case(l: &str, r: &str) -> bool {
+    l != r && l.to_lowercase() == r.to_lowercase()
+}
+
 /// The content method a pair is compared with: [`FolderCompareOptions::content`],
 /// or the large-file fallback when either file exceeds the threshold. `None`
 /// means the fallback is metadata-only (size, or size and timestamp).
@@ -1261,10 +1297,12 @@ fn compare_file_pair(
         },
         crc: None,
     };
-    // Without override, a failed quick test is final — no need to read anything.
+    // Without override, a failed quick test is final — no need to read
+    // anything; with "skip if same", so is a passed one.
     if quick_only
         || opts.content == ContentMethod::Off
         || (!quick_same && !opts.override_quick_tests)
+        || (quick_same && opts.skip_content_if_quick_same)
     {
         return Ok(quick);
     }
@@ -1424,8 +1462,12 @@ fn error_entry(name: String, rel_path: String, is_dir: bool, err: CoreError) -> 
 /// checks: the [`attr::COMPARED`] bits and Unix permission bits. Sides that
 /// don't report attributes (remote stores) never differ.
 pub fn attributes_differ(l: &EntryMeta, r: &EntryMeta) -> bool {
-    let dos =
-        matches!((l.attributes, r.attributes), (Some(a), Some(b)) if (a ^ b) & attr::COMPARED != 0);
+    attributes_differ_in(l, r, attr::COMPARED)
+}
+
+/// [`attributes_differ`], looking at the DOS bits in `mask`.
+pub fn attributes_differ_in(l: &EntryMeta, r: &EntryMeta, mask: u32) -> bool {
+    let dos = matches!((l.attributes, r.attributes), (Some(a), Some(b)) if (a ^ b) & mask != 0);
     let unix = matches!((l.mode, r.mode), (Some(a), Some(b)) if a != b);
     dos || unix
 }
@@ -1857,8 +1899,11 @@ fn compare_pair(
                     }
                     if ctx.opts.compare_attributes
                         && entry.status != EntryStatus::Different
-                        && attributes_differ(&l.meta, &r.meta)
+                        && attributes_differ_in(&l.meta, &r.meta, ctx.opts.compared_attributes)
                     {
+                        entry.status = EntryStatus::Different;
+                    }
+                    if ctx.opts.compare_name_case && names_differ_in_case(&l.name, &r.name) {
                         entry.status = EntryStatus::Different;
                     }
                     if entry.status != EntryStatus::Same {
@@ -2161,6 +2206,22 @@ mod timestamp_tests {
     }
 
     #[test]
+    fn timezone_shifts_are_whole_hours_within_a_day() {
+        let t = 1_700_000_000_000;
+        let mut opts = FolderCompareOptions::default();
+        assert!(!timestamps_match(Some(t), Some(t + 5 * HOUR_MS), &opts));
+        opts.ignore_timezone = true;
+        assert!(timestamps_match(Some(t), Some(t + 5 * HOUR_MS), &opts));
+        assert!(timestamps_match(Some(t + 26 * HOUR_MS + 1_000), Some(t), &opts));
+        // Not a whole hour, or more than any two zones differ by.
+        assert!(!timestamps_match(Some(t), Some(t + 5 * HOUR_MS + 30 * 60_000), &opts));
+        assert!(!timestamps_match(Some(t), Some(t + 27 * HOUR_MS), &opts));
+        // A timezone-equal pair has no newer side either.
+        let meta = |ms| EntryMeta { modified_ms: Some(ms), ..Default::default() };
+        assert_eq!(newer_side(&meta(t), &meta(t + 3 * HOUR_MS), &opts), None);
+    }
+
+    #[test]
     fn missing_timestamps_only_match_each_other() {
         let opts = FolderCompareOptions::default();
         assert!(timestamps_match(None, None, &opts));
@@ -2311,6 +2372,62 @@ mod feature_tests {
         find(&res.entries, rel)
             .unwrap_or_else(|| panic!("{rel} missing"))
             .status
+    }
+
+    #[test]
+    fn skip_if_quick_same_reads_only_suspect_pairs() {
+        let p = pair();
+        // Same size and timestamp, different bytes: only a read can tell.
+        write(&p.l, "a.txt", b"left");
+        write(&p.r, "a.txt", b"rght");
+        let stamp = |path: PathBuf| {
+            let t = std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_700_000_000);
+            fs::File::options().write(true).open(path).unwrap().set_modified(t).unwrap();
+        };
+        stamp(p.l.join("a.txt"));
+        stamp(p.r.join("a.txt"));
+        let thorough = FolderCompareOptions {
+            compare_timestamp: true,
+            content: ContentMethod::Binary,
+            ..opts()
+        };
+        assert_eq!(status(&run(&p, &thorough), "a.txt"), EntryStatus::Different);
+        let skipping = FolderCompareOptions {
+            skip_content_if_quick_same: true,
+            ..thorough.clone()
+        };
+        assert_eq!(status(&run(&p, &skipping), "a.txt"), EntryStatus::Same);
+        // A pair the quick tests flag is still read (and found the same).
+        write(&p.l, "b.txt", b"same");
+        write(&p.r, "b.txt", b"same");
+        stamp(p.l.join("b.txt"));
+        assert_eq!(status(&run(&p, &skipping), "b.txt"), EntryStatus::Same);
+    }
+
+    #[test]
+    fn compare_name_case_flags_paired_files() {
+        let p = pair();
+        write(&p.l, "Readme.md", b"x");
+        write(&p.r, "README.md", b"x");
+        write(&p.l, "same.md", b"x");
+        write(&p.r, "same.md", b"x");
+        let o = FolderCompareOptions {
+            ignore_name_case: true,
+            compare_name_case: true,
+            ..opts()
+        };
+        let res = run(&p, &o);
+        assert_eq!(status(&res, "README.md"), EntryStatus::Different);
+        assert_eq!(status(&res, "same.md"), EntryStatus::Same);
+    }
+
+    #[test]
+    fn compared_attributes_pick_the_bits() {
+        let l = EntryMeta { attributes: Some(attr::ARCHIVE), ..Default::default() };
+        let r = EntryMeta { attributes: Some(0), ..Default::default() };
+        assert!(!attributes_differ(&l, &r));
+        assert!(attributes_differ_in(&l, &r, attr::ARCHIVE));
+        assert!(!attributes_differ_in(&l, &r, attr::READONLY | attr::HIDDEN));
     }
 
     #[test]

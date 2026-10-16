@@ -53,6 +53,11 @@ export interface ComparedFolders {
  * such folder, since that folder's own row changes too.
  */
 export function touchedRows(op: FileOp, view: ComparedFolders): string[] | null {
+  return rowsForPaths(writtenPaths(op), view);
+}
+
+/** {@link touchedRows} for paths an operation reported while running (`fileOps.onChanged`). */
+export function rowsForPaths(paths: string[], view: ComparedFolders): string[] | null {
   const rows = new Map<string, FolderEntry>();
   /** Each tree row's path on the left; the inverse maps the left side's paths to rows. */
   const treeOfLeft = new Map<string, string>();
@@ -76,7 +81,7 @@ export function touchedRows(op: FileOp, view: ComparedFolders): string[] | null 
   };
 
   const found = new Set<string>();
-  for (const path of writtenPaths(op)) {
+  for (const path of paths) {
     for (const side of ["left", "right"] as const) {
       const root = view[side];
       const rel = root ? within(path, root) : null;

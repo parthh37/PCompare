@@ -67,6 +67,9 @@ const CONFLICTS: { value: ConflictMode; label: string }[] = [
 
 // ---------- copy / move ----------
 
+/** "Files at once" choices; 0 lets the engine pick for the two sides. */
+const PARALLEL_FILES = [0, 1, 2, 4, 8, 16];
+
 interface TransferProps {
   action: "copy" | "move";
   parts: OpPart[];
@@ -90,6 +93,7 @@ export function TransferDialog({ action, parts, toFolder, filter, onCancel, onCo
   const [copyShortNames, setCopyShortNames] = useState(false);
   // The default (include filtered off): filtered items stay behind.
   const [includeFiltered, setIncludeFiltered] = useState(false);
+  const [threads, setThreads] = useState(() => Number(localStorage.getItem("pcompare.fileOps.threads")) || 0);
 
   const verb = action === "copy" ? "Copy" : "Move";
   const files = parts.reduce((n, p) => n + p.files, 0);
@@ -114,6 +118,7 @@ export function TransferDialog({ action, parts, toFolder, filter, onCancel, onCo
   const confirm = () => {
     if (!ready) return;
     localStorage.setItem("pcompare.fileOps.conflicts", conflicts);
+    localStorage.setItem("pcompare.fileOps.threads", String(threads));
     if (toFolder) localStorage.setItem("pcompare.fileOps.lastFolder", folder.trim());
     const out: ReadyPart[] = parts.map((p) => ({
       title: `${verb} ${describeCount(p.files, p.folders)} ${
@@ -131,6 +136,7 @@ export function TransferDialog({ action, parts, toFolder, filter, onCancel, onCo
       copyAcls: IS_WINDOWS && allLocal && copyAcls,
       copyShortNames: IS_WINDOWS && allLocal && copyShortNames,
       filter: includeFiltered ? null : (filter ?? null),
+      threads,
     });
   };
 
@@ -183,6 +189,16 @@ export function TransferDialog({ action, parts, toFolder, filter, onCancel, onCo
             {CONFLICTS.map((c) => (
               <option key={c.value} value={c.value}>
                 {c.label}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="field" title="Several files copy in parallel, which speeds up many small files a lot">
+          Files at once
+          <select value={threads} onChange={(e) => setThreads(Number(e.target.value))}>
+            {PARALLEL_FILES.map((n) => (
+              <option key={n} value={n}>
+                {n === 0 ? "Automatic" : n === 1 ? "1 (one after another)" : n}
               </option>
             ))}
           </select>
