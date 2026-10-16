@@ -19,8 +19,7 @@ filetime = "0.2"
 globset = "0.4"
 rayon = "1"
 trash = "5"
-
-[dev-dependencies]
+# copies out of an archive into an archive go through a temp file
 tempfile = "3"
 
 [target.'cfg(windows)'.dependencies]

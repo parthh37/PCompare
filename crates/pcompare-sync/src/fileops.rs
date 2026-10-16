@@ -18,7 +18,7 @@
 //! no Recycle Bin, so deletions and overwrites there are permanent.
 
 use std::fs::{self, File};
-use std::io::{self, Read};
+use std::io::{self, Read, Seek};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{self, RecvTimeoutError};
@@ -1170,11 +1170,15 @@ impl Runner<'_> {
         all
     }
 
-    /// Copies (or moves) the scanned items with `threads` workers.
+    /// Copies (or moves) the scanned items with `threads` workers. With
+    /// `after_walk`, they start only once the walk has made every folder at
+    /// the destination.
+    #[allow(clippy::too_many_arguments)]
     fn copy_all<'a>(
         &mut self,
         mover: Mover,
         threads: usize,
+        after_walk: bool,
         items: &[(String, Place<'a>, Option<Place<'a>>, Node)],
         dst_rels: &[String],
         moving: bool,
@@ -1191,6 +1195,7 @@ impl Runner<'_> {
             drop(done_tx);
             let mut pool = Pool {
                 jobs: Some(job_tx),
+                held: after_walk.then(Vec::new),
                 done: done_rx,
                 info: Vec::new(),
                 results: Vec::new(),
@@ -1213,6 +1218,7 @@ impl Runner<'_> {
                 }
                 planned.push(self.plan_node(&mut pool, at, node, to, shown, dst_shown, moving));
             }
+            pool.release();
             // No more jobs: the workers stop once the queue runs dry.
             pool.jobs = None;
             self.collect(&mut pool, true);
@@ -1283,6 +1289,9 @@ type JobOutcome = (usize, Result<Vec<String>, OpError>);
 struct Pool<'a> {
     /// `None` once everything is submitted, which lets the workers finish.
     jobs: Option<mpsc::Sender<Job<'a>>>,
+    /// Jobs kept from the workers until the walk is done, when it must not
+    /// overlap them (see [`read_out_first`]).
+    held: Option<Vec<Job<'a>>>,
     done: mpsc::Receiver<JobOutcome>,
     info: Vec<JobInfo>,
     /// Per job: `None` while it runs, then whether it succeeded.
@@ -1296,12 +1305,28 @@ impl<'a> Pool<'a> {
         job.id = id;
         self.info.push(info);
         self.results.push(None);
-        if self.jobs.as_ref().is_some_and(|tx| tx.send(job).is_ok()) {
-            self.outstanding += 1;
-        } else {
-            self.results[id] = Some(false);
+        self.outstanding += 1;
+        match &mut self.held {
+            Some(held) => held.push(job),
+            None => self.send(job),
         }
         id
+    }
+
+    /// Hands `job` to the workers; it fails at once if they are gone.
+    fn send(&mut self, job: Job<'a>) {
+        let id = job.id;
+        if !self.jobs.as_ref().is_some_and(|tx| tx.send(job).is_ok()) {
+            self.results[id] = Some(false);
+            self.outstanding -= 1;
+        }
+    }
+
+    /// Lets the workers start on the jobs held during the walk.
+    fn release(&mut self) {
+        for job in self.held.take().unwrap_or_default() {
+            self.send(job);
+        }
     }
 }
 
@@ -1355,6 +1380,17 @@ fn copy_workers(threads: usize, src: &Root, dst: Option<&Root>, moving: bool) ->
         0 => copy_threads(src.is_remote(), dst.is_some_and(Root::is_remote)),
         n => n.min(MAX_COPY_THREADS),
     }
+}
+
+/// Whether a copy from `src` into `dst` must never read the source while
+/// the destination changes. Every change to an archive replaces its file,
+/// which Windows refuses while a reader has it open, and a source in an
+/// archive may be that very file: the same instance, or the same file
+/// opened under another spelling of its path, which no pointer comparison
+/// would catch. So each file is read out to a local temp file before it is
+/// written, and the copying starts only once the walk has made the folders.
+fn read_out_first(src: &dyn VfsWrite, dst: &dyn VfsWrite) -> bool {
+    dst.caps().serial_writes && src.caps().serial_writes
 }
 
 /// The byte-moving half of a copy: everything a worker thread needs, and
@@ -1471,6 +1507,18 @@ impl Mover<'_> {
             (_, Place::Remote { fs, dir, name }) => {
                 let mut input: Box<dyn Read> = match src {
                     Place::Local(s) => Box::new(File::open(s).map_err(|e| OpError::io(s, e))?),
+                    Place::Remote { fs: sfs, .. } if read_out_first(*sfs, *fs) => {
+                        // Nothing may hold the source archive open while the
+                        // write swaps the rewritten one in: it may be the
+                        // same file (two folders of one zip), and Windows
+                        // refuses to replace an open file.
+                        let mut copy = tempfile::tempfile()?;
+                        let mut entry = sfs.open_at(&src.path(), 0)?;
+                        pump(&mut entry, &mut copy, &mut |_| on_bytes(0))?;
+                        drop(entry);
+                        copy.rewind()?;
+                        Box::new(copy)
+                    }
                     Place::Remote { fs: sfs, .. } => sfs.open_at(&src.path(), 0)?,
                 };
                 self.upload(*fs, dir, name, &mut input, meta, replace, on_bytes)
@@ -1975,12 +2023,17 @@ pub fn run(
             if matches!(req.action, FileAction::Copy | FileAction::Move) {
                 let moving = req.action == FileAction::Move;
                 let threads = copy_workers(req.options.threads, &src, dst.as_ref(), moving);
+                let after_walk = matches!(
+                    (&src, &dst),
+                    (Root::Remote { fs: s, .. }, Some(Root::Remote { fs: d, .. }))
+                        if read_out_first(*s, *d)
+                );
                 let mover = Mover {
                     opts: &req.options,
                     ctl,
                     deleter,
                 };
-                r.copy_all(mover, threads, &scanned, &scanned_dst, moving);
+                r.copy_all(mover, threads, after_walk, &scanned, &scanned_dst, moving);
             } else {
                 let now = now_ms();
                 for (shown, at, to, node) in &scanned {
@@ -2974,6 +3027,154 @@ mod tests {
         assert_eq!(copy_workers(4, &local, Some(&server), true), 4);
         assert_eq!(copy_workers(0, &local, Some(&server), false), copy_threads(false, true));
         assert_eq!(copy_workers(99, &local, Some(&local), false), MAX_COPY_THREADS);
+    }
+
+    /// A zip archive as Windows sees it: every change swaps a rewritten
+    /// file in, which fails while one of its own readers still has the
+    /// old one open. Lookups and reads take a while, so a walk that runs
+    /// alongside the copying meets the readers.
+    struct OneFileArchive {
+        inner: FakeRemote,
+        readers: Arc<AtomicUsize>,
+    }
+
+    /// A reader of [`OneFileArchive`], counted as open until dropped.
+    struct OpenReader {
+        inner: Box<dyn Read + Send>,
+        readers: Arc<AtomicUsize>,
+    }
+
+    impl Read for OpenReader {
+        fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+            std::thread::sleep(Duration::from_millis(50));
+            self.inner.read(buf)
+        }
+    }
+
+    impl Drop for OpenReader {
+        fn drop(&mut self) {
+            self.readers.fetch_sub(1, Ordering::SeqCst);
+        }
+    }
+
+    impl OneFileArchive {
+        fn swap_in(&self) -> io::Result<()> {
+            match self.readers.load(Ordering::SeqCst) {
+                0 => Ok(()),
+                _ => Err(io::Error::new(io::ErrorKind::PermissionDenied, "Access is denied")),
+            }
+        }
+    }
+
+    impl Vfs for OneFileArchive {
+        fn read_dir(&self, dir: &str) -> pcompare_core::Result<Vec<VfsEntry>> {
+            self.inner.read_dir(dir)
+        }
+        fn open(&self, path: &str) -> pcompare_core::Result<Box<dyn Read + Send>> {
+            self.inner.open(path)
+        }
+        fn join(&self, dir: &str, name: &str) -> String {
+            self.inner.join(dir, name)
+        }
+    }
+
+    impl VfsWrite for OneFileArchive {
+        fn caps(&self) -> WriteCaps {
+            self.inner.caps()
+        }
+        fn stat(&self, path: &str) -> io::Result<Option<EntryMeta>> {
+            std::thread::sleep(Duration::from_millis(10));
+            self.inner.stat(path)
+        }
+        fn open_at(&self, path: &str, offset: u64) -> io::Result<Box<dyn Read + Send>> {
+            let inner = self.inner.open_at(path, offset)?;
+            self.readers.fetch_add(1, Ordering::SeqCst);
+            Ok(Box::new(OpenReader {
+                inner,
+                readers: self.readers.clone(),
+            }))
+        }
+        fn write(
+            &self,
+            path: &str,
+            offset: u64,
+            src: &mut dyn Read,
+            on_bytes: &mut dyn FnMut(u64) -> io::Result<()>,
+        ) -> io::Result<u64> {
+            self.swap_in()?;
+            self.inner.write(path, offset, src, on_bytes)
+        }
+        fn create_dir_all(&self, path: &str) -> io::Result<()> {
+            self.swap_in()?;
+            self.inner.create_dir_all(path)
+        }
+        fn remove_file(&self, path: &str) -> io::Result<()> {
+            self.swap_in()?;
+            self.inner.remove_file(path)
+        }
+        fn remove_dir_all(&self, path: &str) -> io::Result<()> {
+            self.swap_in()?;
+            self.inner.remove_dir_all(path)
+        }
+        fn rename(&self, from: &str, to: &str) -> io::Result<()> {
+            self.swap_in()?;
+            self.inner.rename(from, to)
+        }
+        fn set_modified(&self, path: &str, ms: i64) -> io::Result<()> {
+            self.swap_in()?;
+            self.inner.set_modified(path, ms)
+        }
+    }
+
+    #[test]
+    fn copies_between_folders_of_one_archive_read_each_file_out_first() {
+        // Folder Compare of a.zip/v1 against a.zip/v2: both sides are the
+        // one archive, so no source entry may be open while it changes —
+        // neither when a file is written nor when the walk makes docs.
+        let p = pair();
+        let archive = OneFileArchive {
+            inner: FakeRemote(ZIP),
+            readers: Arc::default(),
+        };
+        let l_path = p.left.to_string_lossy().into_owned();
+        let r_path = p.right.to_string_lossy().into_owned();
+        let left = Root::Remote {
+            fs: &archive,
+            path: &l_path,
+            label: "a.zip/v1",
+        };
+        let right = Root::Remote {
+            fs: &archive,
+            path: &r_path,
+            label: "a.zip/v2",
+        };
+        let r = run(
+            &req(FileAction::Copy, &["a.txt", "docs"], opts(ConflictMode::Overwrite)),
+            left,
+            Some(right),
+            &PermanentDeleter,
+            &Control::default(),
+            &mut |_| {},
+            &mut |_| panic!("not expected to ask"),
+        );
+        assert_eq!((r.succeeded, r.failed), (3, 0), "{:?}", r.failures);
+        assert_eq!(r.bytes, 6 + 2 + 3);
+        assert_eq!(read(&p.right, "a.txt"), "left a");
+        assert_eq!(read(&p.right, "docs/sub/c.txt"), "ccc");
+        assert_eq!(mtime(&p.right, "docs/b.txt"), OLD);
+        assert_eq!(files(&p.right), ["a.txt", "docs/b.txt", "docs/sub/c.txt"]);
+        assert_eq!(archive.readers.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn only_copies_from_an_archive_into_one_read_out_first() {
+        let (zip, other_zip, sftp) = (FakeRemote(ZIP), FakeRemote(ZIP), FakeRemote(SFTP));
+        assert!(read_out_first(&zip, &zip));
+        // Maybe the same file under another spelling of its path.
+        assert!(read_out_first(&other_zip, &zip));
+        assert!(!read_out_first(&sftp, &zip));
+        assert!(!read_out_first(&zip, &sftp));
+        assert!(!read_out_first(&sftp, &sftp));
     }
 
     #[test]

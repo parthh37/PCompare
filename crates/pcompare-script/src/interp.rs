@@ -2423,6 +2423,44 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn copyto_between_two_folders_of_one_zip_archive() {
+        // Both sides are one archive: every file copied is read from it and
+        // then written back into it, and so is the new folder.
+        let d = fixture();
+        std::fs::create_dir_all(d.path().join("pkg")).unwrap();
+        std::fs::rename(d.path().join("l"), d.path().join("pkg/v1")).unwrap();
+        std::fs::rename(d.path().join("r"), d.path().join("pkg/v2")).unwrap();
+        std::fs::create_dir_all(d.path().join("empty")).unwrap();
+        let r = run_in(
+            d.path(),
+            "load pkg empty\nexpand all\nselect left.orphan.files\ncopyto left path:base a.zip\n",
+            false,
+        );
+        assert_eq!(r.outcome.errors, 0, "{}{}", r.out, r.err);
+        let r = run_in(
+            d.path(),
+            "option confirm:yes-to-all\ncriteria binary\nload a.zip/v1 a.zip/v2\nexpand all\nselect left.diff.files left.orphan.files\ncopyto left path:base a.zip/v2\n",
+            false,
+        );
+        assert_eq!(r.outcome.errors, 0, "{}{}", r.out, r.err);
+        assert!(r.out.contains("3 done, 0 skipped, 0 failed"), "{}", r.out);
+        let r = run_in(
+            d.path(),
+            "criteria binary\nload a.zip/v1 a.zip/v2\nexpand all\nselect left.diff.files left.orphan.files\n",
+            false,
+        );
+        assert_eq!(r.outcome.errors, 0, "{}{}", r.out, r.err);
+        assert!(r.out.contains("Selected 0 items"), "{}", r.out);
+        // Nothing but the archive was left behind.
+        let left: Vec<_> = std::fs::read_dir(d.path())
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .filter(|n| n.contains(".zip"))
+            .collect();
+        assert_eq!(left, ["a.zip"]);
+    }
+
+    #[test]
     fn rename_dos_masks_and_regexes() {
         assert_eq!(dos_rename("a.txt", "*.bak"), "a.bak");
         // Windows semantics: a literal replaces the character at its position.
