@@ -54,6 +54,19 @@
   cursor: default;
   user-select: none;
 }
+/* A wash of the row's role behind a change (folderColors.ts), under hover and selection. */
+.fm-row.fmr-left {
+  background: color-mix(in srgb, var(--fm-left) var(--fm-tint), transparent);
+}
+.fm-row.fmr-right {
+  background: color-mix(in srgb, var(--fm-right) var(--fm-tint), transparent);
+}
+.fm-row.fmr-mergeable {
+  background: color-mix(in srgb, var(--fm-mergeable) var(--fm-tint), transparent);
+}
+.fm-row.fmr-conflict {
+  background: color-mix(in srgb, var(--fm-conflict) var(--fm-tint), transparent);
+}
 .fm-row:hover {
   background: var(--row-hover);
 }
@@ -61,7 +74,7 @@
   background: var(--sel-bg);
 }
 .fm-row.conflict {
-  box-shadow: inset 3px 0 0 var(--different);
+  box-shadow: inset 3px 0 0 var(--fm-conflict);
 }
 .fm-cell {
   padding: 0 6px;
@@ -74,7 +87,7 @@
   align-items: center;
 }
 
-/* left / base / right presence */
+/* left / base / right: each in its own tone, set inline (folderColors.ts); folders dim */
 .fm-cell.side {
   display: flex;
   align-items: center;
@@ -83,22 +96,13 @@
   height: 100%;
   font-size: 12px;
   font-variant-numeric: tabular-nums;
-  color: var(--muted);
+  color: var(--fc-info);
 }
 .fm-cell.side.absent {
   background: var(--hatch);
 }
-.fm-cell.side.st-changed {
-  color: var(--warn);
-}
-.fm-cell.side.st-added {
-  color: var(--ok);
-}
-.fm-cell.side.st-deleted {
-  color: var(--different);
-}
-.fm-row.conflict .fm-cell.side.st-changed {
-  color: var(--different);
+.fm-cell.side .fc-spot {
+  margin: 0;
 }
 
 /* classification */
@@ -120,49 +124,29 @@
   overflow: hidden;
   text-overflow: ellipsis;
 }
+/* The badge's text takes the row's role (set inline); conflicts and clean merges get a border too. */
 .fm-row:not(.c-unchanged) .fm-badge {
   color: var(--text);
   border-color: var(--border);
 }
-.c-leftChanged .fm-badge,
-.c-leftAdded .fm-badge,
-.c-leftDeleted .fm-badge {
-  color: var(--left-fg);
-}
-.c-rightChanged .fm-badge,
-.c-rightAdded .fm-badge,
-.c-rightDeleted .fm-badge,
-.c-rightOnly .fm-badge,
-.c-rightNewer .fm-badge {
-  color: var(--orphan);
-}
-.c-leftOnly .fm-badge,
-.c-leftNewer .fm-badge {
-  color: var(--left-fg);
-}
 .c-autoMerged .fm-badge {
-  color: var(--ok);
-  border-color: rgba(111, 207, 151, 0.4);
+  border-color: color-mix(in srgb, var(--fm-mergeable) 45%, transparent);
 }
 .fm-textconf {
   opacity: 0.85;
 }
 .fm-row.conflict .fm-badge {
-  color: var(--different);
-  border-color: rgba(242, 119, 122, 0.45);
-  background: rgba(242, 119, 122, 0.1);
+  color: var(--fm-conflict);
+  border-color: color-mix(in srgb, var(--fm-conflict) 45%, transparent);
 }
 .fm-row.c-error .fm-badge {
   color: var(--warn);
-  border-color: rgba(245, 163, 92, 0.45);
-  background: rgba(245, 163, 92, 0.1);
-}
-.fm-row.conflict .fm-cell.name {
-  color: var(--different);
+  border-color: color-mix(in srgb, var(--warn) 45%, transparent);
+  background: color-mix(in srgb, var(--warn) 10%, transparent);
 }
 .fm-count {
   font-size: 11px;
-  color: var(--different);
+  color: var(--fm-conflict);
   font-variant-numeric: tabular-nums;
 }
 .fm-resolve {
@@ -181,18 +165,24 @@
   border-color: var(--accent);
 }
 .fm-cell.action select.unresolved {
-  border-color: rgba(242, 119, 122, 0.6);
-  color: var(--different);
+  border-color: color-mix(in srgb, var(--fm-conflict) 60%, transparent);
+  color: var(--fm-conflict);
 }
 
 .fm-left-fg {
-  color: var(--left-fg);
+  color: var(--fm-left);
 }
 .fm-right-fg {
-  color: var(--orphan);
+  color: var(--fm-right);
 }
 .fm-auto-fg {
-  color: var(--ok);
+  color: var(--fm-mergeable);
+}
+.fm-conflict-fg {
+  color: var(--fm-conflict);
+}
+.fm-orphan-fg {
+  color: var(--fc-orphan);
 }
 
 /* dialogs */

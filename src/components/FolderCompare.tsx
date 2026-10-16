@@ -86,7 +86,7 @@ import {
   visibleSet,
   type SelectCriteria,
 } from "../lib/folderTree";
-import { folderLook, pairTone, sideTone } from "../lib/folderColors";
+import { folderLook, pairTone, sideLook } from "../lib/folderColors";
 import { basename, formatSize, formatTime, hex, joinPath } from "../lib/format";
 import { writeClipboardText } from "../lib/clipboard";
 import { useShell } from "../lib/shell";
@@ -687,7 +687,7 @@ export function FolderCompare({
     expand: (rels) => setExpanded((prev) => new Set([...prev, ...rels])),
     showAll: () => update({ filter: "all" }),
     engineOptions,
-    settings: { filter: cfg.filter, flatten: cfg.flatten, showAttributes: cfg.showAttributes },
+    settings: { filter: cfg.filter, flatten: cfg.flatten, showAttributes: cfg.showAttributes, ignoreMinor: cfg.ignoreMinor },
   });
 
   // multi-selection, file operations and the Operations panel.
@@ -982,14 +982,8 @@ export function FolderCompare({
     const meta = e[side];
     // Each side in its own colour: a file by what it is there (the newer copy
     // red, the older grey, an orphan purple), a folder by its icon, which shows
-    // what lies below it on this side; its name stays plain and its details dim.
-    // Ignored rows keep their own muted look, and a lone folder is a plain listing.
-    // File or folder is per side, not per row: a file can face a folder.
-    const dirHere = meta ? meta.isDir : e.isDir;
-    const toned = !!meta && !e.ignored && !oneSided;
-    const tone = toned && !dirHere ? sideTone(detailOf(e), side, e.newer, cfg.ignoreMinor) : null;
-    const toneClass = !toned ? "" : dirHere ? " fct-folder" : ` fct-${tone}`;
-    const infoClass = !toned ? "" : dirHere ? " fct-info" : ` fct-${tone}`;
+    // what lies below it on this side.
+    const { dir: dirHere, toned, tone, nameClass: toneClass, infoClass } = sideLook(e, side, cfg.ignoreMinor, oneSided);
     // What the filters leave out is drawn in teal; a half-filtered pair only on that side.
     const filtered = e.filtered === "both" || e.filtered === side ? " filtered" : "";
     const showChevron = e.isDir && meta && !cfg.flatten;

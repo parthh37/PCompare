@@ -137,6 +137,13 @@
   align-items: center;
   gap: 5px;
 }
+/* Folder Merge colours: left, base and right side by side. */
+.merge-preview .dp-row {
+  grid-template-columns: 1fr 1fr 1fr;
+}
+.merge-preview .dp-row > span:not(:last-child) {
+  border-right: 1px solid var(--border);
+}
 .dp-glyph {
   display: inline-block;
   width: 1ch;

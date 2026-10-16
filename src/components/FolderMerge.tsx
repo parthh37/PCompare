@@ -18,6 +18,7 @@ import {
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { errorMessage, isRemote, type EntryMeta } from "../lib/api";
 import { COMPARE_PRESETS, DEFAULT_FOLDER_SETTINGS, toEngineOptions, type ComparePreset } from "../lib/folderSettings";
+import { isMergeTone, mergeFolderLooks, mergeRowTone, mergeSideTone, toneColor, type MergeSide } from "../lib/folderColors";
 import { formatSize, formatTime, joinPath } from "../lib/format";
 import type { MergePaths, MergeProps } from "../lib/sessionProps";
 import {
@@ -32,6 +33,7 @@ import {
   type MergeProgress,
   type MergeReport,
 } from "../lib/syncApi";
+import { FolderToneIcon, ToneSpot } from "./FolderStatusLegend";
 import { Modal } from "./Modal";
 import { PathField } from "./PathField";
 import { VirtualList, type VirtualListHandle } from "./VirtualList";
@@ -422,19 +424,35 @@ export function FolderMerge({
     else if (onOpenFiles && e.left && e.right) onOpenFiles(p.left, p.right);
   };
 
-  const renderSide = (e: FolderMergeEntry, side: "left" | "base" | "right") => {
+  // Each folder's icon on each side, from what lies below it there.
+  const folderLooks = useMemo(() => mergeFolderLooks(result?.entries ?? []), [result]);
+
+  const renderSide = (e: FolderMergeEntry, side: MergeSide) => {
     const meta: EntryMeta | null = e[side];
     const state: SideState = side === "base" ? (meta ? "same" : "absent") : sideState(e, side, twoWay);
     const Icon = side === "base" ? null : STATE_ICON[state];
+    // Each side in its own colour: a file by what this copy is in the merge
+    // (see mergeSideTone), a deletion mark by who deleted it, and a folder by
+    // its icon, which shows what lies below it on this side.
+    const tone = mergeSideTone(e.class, side);
+    const toned = !e.isDir && (!!meta || state === "deleted");
     const tip = meta
       ? `${meta.isDir ? "Folder" : formatSize(meta.size)}${meta.modifiedMs ? ` · ${formatTime(meta.modifiedMs)}` : ""}`
       : state === "deleted"
         ? "Deleted"
         : "Not present";
     return (
-      <div className={`fm-cell side st-${state}${meta ? "" : " absent"}`} title={tip}>
+      <div className={`fm-cell side${meta ? "" : " absent"}`} title={tip} style={toned ? { color: toneColor(tone) } : undefined}>
         {Icon && <Icon size={12} />}
-        {meta && (meta.isDir ? <FileIcon name="" isDir size={14} /> : <span>{formatSize(meta.size)}</span>)}
+        {meta &&
+          (meta.isDir ? (
+            <FolderToneIcon look={folderLooks.get(e.relPath)?.[side] ?? { tones: ["same"] }} />
+          ) : (
+            <>
+              <ToneSpot tone={tone} />
+              <span>{formatSize(meta.size)}</span>
+            </>
+          ))}
       </div>
     );
   };
@@ -454,9 +472,13 @@ export function FolderMerge({
     const overridden = overrides.has(e.relPath);
     const conflict = isConflict(e) || (e.isDir && e.conflicts > 0);
     const unresolved = !e.isDir && isConflict(e) && action === "skip";
+    // The row as a whole: a file's name in its role, and a wash of the role behind
+    // a changed file. A folder keeps a plain row; its icons show what it holds.
+    const tone = mergeRowTone(e.class);
+    const tint = !e.isDir && isMergeTone(tone) ? ` fmr-${tone}` : "";
     return (
       <div
-        className={`fm-row c-${e.class}${conflict ? " conflict" : ""}${selected === e.relPath ? " selected" : ""}`}
+        className={`fm-row c-${e.class}${tint}${conflict ? " conflict" : ""}${selected === e.relPath ? " selected" : ""}`}
         onClick={() => setSelected(e.relPath)}
         onDoubleClick={() => open(e)}
         title={e.error ?? undefined}
@@ -478,13 +500,13 @@ export function FolderMerge({
           <span className="ficon">
             <FileIcon name={e.name} isDir={e.isDir} open={expanded.has(e.relPath)} />
           </span>
-          {e.name}
+          <span style={e.isDir ? undefined : { color: toneColor(tone) }}>{e.name}</span>
         </div>
         {renderSide(e, "left")}
         {!twoWay && renderSide(e, "base")}
         {renderSide(e, "right")}
         <div className="fm-cell status">
-          <span className="fm-badge" title={textMergeTip(e)}>
+          <span className="fm-badge" title={textMergeTip(e)} style={tone === "same" ? undefined : { color: toneColor(tone) }}>
             {conflict && <TriangleAlert size={11} />}
             {e.class === "autoMerged" && <GitMerge size={11} />}
             {classLabel(e.class)}
@@ -793,13 +815,13 @@ export function FolderMerge({
       <div className="statusbar">
         {result && (
           <>
-            <span className={result.conflicts ? "s-different-fg" : "muted"}>
+            <span className={result.conflicts ? "fm-conflict-fg" : "muted"}>
               {result.conflicts} conflict{result.conflicts === 1 ? "" : "s"}
             </span>
             {twoWay ? (
               <>
-                <span className="fm-left-fg">{n("leftOnly")} left only</span>
-                <span className="fm-right-fg">{n("rightOnly")} right only</span>
+                <span className="fm-orphan-fg">{n("leftOnly")} left only</span>
+                <span className="fm-orphan-fg">{n("rightOnly")} right only</span>
                 <span className="muted">
                   {n("leftNewer")} left newer · {n("rightNewer")} right newer
                 </span>
