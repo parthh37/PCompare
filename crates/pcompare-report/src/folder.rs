@@ -243,6 +243,9 @@ pub enum DisplayFilter {
     RightOrphans,
     LeftNewer,
     RightNewer,
+    /// Only unimportant differences, whether or not the view counts them as same.
+    Similar,
+    Errors,
 }
 
 impl DisplayFilter {
@@ -257,6 +260,8 @@ impl DisplayFilter {
             DisplayFilter::RightOrphans => "Right orphans",
             DisplayFilter::LeftNewer => "Left newer",
             DisplayFilter::RightNewer => "Right newer",
+            DisplayFilter::Similar => "Similar (unimportant differences)",
+            DisplayFilter::Errors => "Errors",
         }
     }
 
@@ -277,6 +282,8 @@ impl DisplayFilter {
             DisplayFilter::RightOrphans => status == Status::RightOnly,
             DisplayFilter::LeftNewer => newer == Some(Newer::Left),
             DisplayFilter::RightNewer => newer == Some(Newer::Right),
+            DisplayFilter::Similar => status == Status::Similar,
+            DisplayFilter::Errors => status == Status::Error,
         }
     }
 }
@@ -1130,6 +1137,8 @@ fn filter_name(f: DisplayFilter) -> &'static str {
         DisplayFilter::RightOrphans => "rightOrphans",
         DisplayFilter::LeftNewer => "leftNewer",
         DisplayFilter::RightNewer => "rightNewer",
+        DisplayFilter::Similar => "similar",
+        DisplayFilter::Errors => "errors",
     }
 }
 

@@ -184,6 +184,8 @@ Compares two folder trees. Red names differ (the older file is grey), purple ite
 ## Log and status
 The log under the folders says when a comparison was loaded, how long it took, and what was cancelled, refreshed or failed (**View → Log** shows or hides it). Under each side, the footer shows what is selected there and how much space is free on that disk.
 
+The counts in the status bar are filters too: click **4 different** (or same, left only, right only…) to show only those rows. The count stays pressed and the toolbar's **All · Diffs · Same** follow along. Click it again to show everything. **▲ / ▼** beside **Difference N of M** (Alt+↑ / Alt+↓) step through the differing files shown, opening folders on the way. A folder on one side only is one stop.
+
 ## Comparing contents
 The session settings choose quick tests (size, timestamp with tolerance) and an optional content compare: binary, CRC-32 or rules-based (text rules, so cosmetic changes count as similar). Right-click a file or folder to compare contents on demand.
 
