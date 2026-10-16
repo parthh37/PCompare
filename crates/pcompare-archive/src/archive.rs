@@ -66,16 +66,40 @@ enum Data {
     SevenZ(Mutex<Option<std::result::Result<PathBuf, String>>>),
 }
 
-pub struct ArchiveFs {
-    file: PathBuf,
-    label: String,
+/// One archive file, shared by every [`ArchiveFs`] opened on it however its
+/// path was written (`a.zip`, `./a.zip`, `A.ZIP` on a case-insensitive
+/// disk, a symlink): one index, and one lock that queues rewrites. Two of
+/// these over one file would let two writes rewrite it at once, the later
+/// swap dropping the other's change.
+pub(crate) struct ArchiveFile {
+    /// The file's canonical path, so a rewrite replaces the archive itself,
+    /// never a symlink to it.
+    path: PathBuf,
     kind: ArchiveKind,
     /// Scratch space for this archive (decompressed tar, 7z entries).
     scratch: PathBuf,
-    read_only: Option<String>,
     loaded: Mutex<Option<Arc<Loaded>>>,
     /// Serializes rewrites of the archive.
     writing: Mutex<()>,
+}
+
+impl ArchiveFile {
+    pub(crate) fn new(path: PathBuf, kind: ArchiveKind, scratch: PathBuf) -> Self {
+        Self {
+            path,
+            kind,
+            scratch,
+            loaded: Mutex::new(None),
+            writing: Mutex::new(()),
+        }
+    }
+}
+
+/// An archive as a file system, under the path the user wrote for it.
+pub struct ArchiveFs {
+    file: Arc<ArchiveFile>,
+    label: String,
+    read_only: Option<String>,
 }
 
 /// Turns an archive failure into an I/O error naming the entry.
@@ -84,26 +108,16 @@ fn io_err(label: &str, path: &str, e: io::Error) -> CoreError {
 }
 
 impl ArchiveFs {
-    pub(crate) fn new(
-        file: PathBuf,
-        label: String,
-        kind: ArchiveKind,
-        scratch: PathBuf,
-        read_only: Option<String>,
-    ) -> Self {
+    pub(crate) fn new(file: Arc<ArchiveFile>, label: String, read_only: Option<String>) -> Self {
         Self {
             file,
             label,
-            kind,
-            scratch,
             read_only,
-            loaded: Mutex::new(None),
-            writing: Mutex::new(()),
         }
     }
 
     pub fn kind(&self) -> ArchiveKind {
-        self.kind
+        self.file.kind
     }
 
     /// The archive's path as the user wrote it.
@@ -116,10 +130,10 @@ impl ArchiveFs {
         if let Some(why) = &self.read_only {
             return Some(why.clone());
         }
-        (!self.kind.writable()).then(|| {
+        (!self.file.kind.writable()).then(|| {
             format!(
                 "{} archives are read-only — only zip archives can be modified",
-                self.kind.label()
+                self.file.kind.label()
             )
         })
     }
@@ -129,8 +143,8 @@ impl ArchiveFs {
         // Look at the file only while holding the slot: a rewrite holds it
         // while swapping the new archive in, which Windows refuses to do
         // while anything has the old one open.
-        let mut slot = self.loaded.lock().unwrap_or_else(|e| e.into_inner());
-        let stamp = Stamp::of(&self.file).map_err(|e| CoreError::io(&self.label, e))?;
+        let mut slot = self.file.loaded.lock().unwrap_or_else(|e| e.into_inner());
+        let stamp = Stamp::of(&self.file.path).map_err(|e| CoreError::io(&self.label, e))?;
         if let Some(l) = slot.as_ref().filter(|l| l.stamp == stamp) {
             return Ok(l.clone());
         }
@@ -140,7 +154,7 @@ impl ArchiveFs {
             CoreError::Other(format!(
                 "{}: can't read the {} archive: {e}",
                 self.label,
-                self.kind.label()
+                self.file.kind.label()
             ))
         })?);
         *slot = Some(loaded.clone());
@@ -149,36 +163,42 @@ impl ArchiveFs {
 
     fn index(&self, stamp: Stamp) -> io::Result<Loaded> {
         // Cache files of an older version of the archive are stale.
-        let _ = fs::remove_dir_all(&self.scratch);
-        let (tree, data) = match self.kind {
+        let _ = fs::remove_dir_all(&self.file.scratch);
+        let (tree, data) = match self.file.kind {
             ArchiveKind::Zip => {
-                let (tree, zip) = formats::zip_index(&self.file)?;
+                let (tree, zip) = formats::zip_index(&self.file.path)?;
                 (tree, Data::Zip(Mutex::new(zip)))
             }
             ArchiveKind::Tar => (
-                formats::tar_index(&self.file)?,
-                Data::Tar(self.file.clone()),
+                formats::tar_index(&self.file.path)?,
+                Data::Tar(self.file.path.clone()),
             ),
             ArchiveKind::TarGz | ArchiveKind::TarBz2 | ArchiveKind::TarXz => {
-                let plain = self.scratch.join("archive.tar");
-                let mut src = formats::decoder(self.kind, File::open(&self.file)?);
+                let plain = self.file.scratch.join("archive.tar");
+                let mut src = formats::decoder(self.file.kind, File::open(&self.file.path)?);
                 crate::write_atomic(&plain, &mut src)?;
                 (formats::tar_index(&plain)?, Data::Tar(plain))
             }
             ArchiveKind::Gz | ArchiveKind::Bz2 | ArchiveKind::Xz => {
                 let name = self
                     .file
+                    .path
                     .file_name()
                     .map(|n| n.to_string_lossy().into_owned())
                     .unwrap_or_default();
                 let inner = formats::single_name(&name);
                 (
-                    formats::single_index(&self.file, self.kind, &inner, stamp.modified_ms())?,
+                    formats::single_index(
+                        &self.file.path,
+                        self.file.kind,
+                        &inner,
+                        stamp.modified_ms(),
+                    )?,
                     Data::Single,
                 )
             }
             ArchiveKind::SevenZ => (
-                formats::sevenz_index(&self.file)?,
+                formats::sevenz_index(&self.file.path)?,
                 Data::SevenZ(Mutex::new(None)),
             ),
         };
@@ -211,17 +231,17 @@ impl ArchiveFs {
                     .map_err(err)?;
                 let raw: Box<dyn Read + Send> = match plan {
                     ZipPlan::Stored { start, len } => {
-                        Box::new(formats::slice(&self.file, start, len).map_err(err)?)
+                        Box::new(formats::slice(&self.file.path, start, len).map_err(err)?)
                     }
                     ZipPlan::Deflated { start, len } => {
                         Box::new(flate2::read::DeflateDecoder::new(
-                            formats::slice(&self.file, start, len).map_err(err)?,
+                            formats::slice(&self.file.path, start, len).map_err(err)?,
                         ))
                     }
                     ZipPlan::Other => {
                         // Rare methods (bzip2, LZMA, deflate64...): decoded by the
                         // zip crate into the cache, as its reader borrows the archive.
-                        let dest = self.scratch.join(format!("zip-{i}"));
+                        let dest = self.file.scratch.join(format!("zip-{i}"));
                         if !dest.is_file() {
                             let mut zip = zip.lock().unwrap_or_else(|e| e.into_inner());
                             let mut entry = zip.by_index(i).map_err(|e| err(other(e)))?;
@@ -239,13 +259,13 @@ impl ArchiveFs {
                 Box::new(formats::slice(plain, offset, node.meta.size).map_err(err)?)
             }
             (Loc::Single, Data::Single) => {
-                formats::decoder(self.kind, File::open(&self.file).map_err(err)?)
+                formats::decoder(self.file.kind, File::open(&self.file.path).map_err(err)?)
             }
             (Loc::SevenZ(i), Data::SevenZ(done)) => {
                 let mut done = done.lock().unwrap_or_else(|e| e.into_inner());
                 let extracted = done.get_or_insert_with(|| {
-                    let dir = self.scratch.join("7z");
-                    formats::sevenz_extract_all(&self.file, &dir)
+                    let dir = self.file.scratch.join("7z");
+                    formats::sevenz_extract_all(&self.file.path, &dir)
                         .map(|()| dir)
                         .map_err(|e| e.to_string())
                 });
@@ -287,14 +307,14 @@ impl ArchiveFs {
         append: impl FnOnce(&mut zip::ZipWriter<&File>) -> io::Result<()>,
     ) -> io::Result<()> {
         self.check_writable()?;
-        let _one_at_a_time = self.writing.lock().unwrap_or_else(|e| e.into_inner());
-        let dir = self.file.parent().unwrap_or(Path::new("."));
+        let _one_at_a_time = self.file.writing.lock().unwrap_or_else(|e| e.into_inner());
+        let dir = self.file.path.parent().unwrap_or(Path::new("."));
         let tmp = tempfile::Builder::new()
             .prefix(".pcompare-")
             .suffix(".zip.tmp")
             .tempfile_in(dir)?;
         {
-            let mut src = zip::ZipArchive::new(File::open(&self.file)?).map_err(other)?;
+            let mut src = zip::ZipArchive::new(File::open(&self.file.path)?).map_err(other)?;
             let mut out = zip::ZipWriter::new(tmp.as_file()).set_auto_large_file();
             for i in 0..src.len() {
                 let entry = src.by_index_raw(i).map_err(other)?;
@@ -316,14 +336,14 @@ impl ArchiveFs {
         }
         tmp.as_file().sync_all()?;
         // Keep the archive's permissions (temp files are private).
-        if let Ok(m) = fs::metadata(&self.file) {
+        if let Ok(m) = fs::metadata(&self.file.path) {
             let _ = fs::set_permissions(tmp.path(), m.permissions());
         }
         // Let go of the old archive's handle before replacing it, and keep
         // other threads from opening it again until the new one is in place.
-        let mut slot = self.loaded.lock().unwrap_or_else(|e| e.into_inner());
+        let mut slot = self.file.loaded.lock().unwrap_or_else(|e| e.into_inner());
         *slot = None;
-        replace_file(tmp, &self.file)
+        replace_file(tmp, &self.file.path)
     }
 
     fn stat_node(&self, path: &str) -> io::Result<Option<EntryMeta>> {
