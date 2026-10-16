@@ -471,6 +471,7 @@ function AppearancePage({ prefs, set }: { prefs: Prefs; set: SetPrefs }) {
         <small className="muted settings-hint">
           Left, base and right are each coloured on their own: a change in the colour of the side it came from, the
           copies it replaces in Folder Compare&apos;s Older colour. Rows with a change get a light wash of its colour.
+          A merge without a base uses Folder Compare&apos;s colours, so its conflicts take Different.
         </small>
         <MergePreview />
       </fieldset>

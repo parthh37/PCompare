@@ -169,20 +169,20 @@ const MERGE_FOLDER_ROWS: FolderRows = [
   [{ tones: ["same"] }, "Nothing inside changed"],
 ];
 
-// Folder Merge, two-way: no base, so it reads like Folder Compare, with conflicts for
-// differences it can't settle by date. Conflicts and newer files share a colour by
-// default, so their folder icons share a row.
+// Folder Merge, two-way: no base, so it reads like Folder Compare. A difference it
+// can't settle by date is a conflict, but it is coloured as Folder Compare's
+// different; the row marks the conflict (see the note below the rows).
 const MERGE_TWO_WAY_FILE_ROWS: FileRows = [
   ["same", "Same"],
   ["newer", "Newer than the other side"],
+  ["different", "Different, neither side newer: a conflict"],
   ["older", "Older than the other side"],
   ["orphan", "Orphan: only on this side"],
-  ["conflict", "Conflict: different, neither side newer"],
   ["error", "Error"],
 ];
 
 const MERGE_TWO_WAY_FOLDER_ROWS: FolderRows = [
-  [{ tones: ["conflict"] }, "Holds conflicts or newer files"],
+  [{ tones: ["newer"] }, "Holds newer or different files"],
   [{ tones: ["orphan"] }, "Holds orphans, or is one"],
   [{ tones: ["newer", "orphan"] }, "Newer files and orphans"],
   [{ tones: ["newer", "older"] }, "Newer and older files"],
@@ -275,10 +275,11 @@ export const MergeLegendPopover = ({ twoWay, ...props }: PopoverProps & { twoWay
     <Legend {...props} files={MERGE_TWO_WAY_FILE_ROWS} folders={MERGE_TWO_WAY_FOLDER_ROWS}>
       <p className="muted">
         Without a base, the merge reads like Folder Compare. Each side's folder
-        icon shows the two most important colours below it on that side:
-        conflicts first, then newer files, orphans and older files. Conflicts
-        carry a light wash of their colour; with Take newer off, every
-        difference is one.
+        icon shows the two most important colours below it on that side: newer
+        or different files first, then orphans and older files. A conflict's
+        row is marked with <TriangleAlert size={11} /> and a red edge, and a
+        folder's row counts the conflicts below it. With Take newer off, every
+        difference is a conflict.
       </p>
     </Legend>
   ) : (
