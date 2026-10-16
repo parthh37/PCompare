@@ -237,12 +237,15 @@ pub enum DisplayFilter {
     All,
     Diffs,
     DiffsNoOrphans,
+    NoOrphans,
     Same,
     Orphans,
     LeftOrphans,
     RightOrphans,
     LeftNewer,
     RightNewer,
+    LeftNewerOrphans,
+    RightNewerOrphans,
 }
 
 impl DisplayFilter {
@@ -251,12 +254,15 @@ impl DisplayFilter {
             DisplayFilter::All => "All",
             DisplayFilter::Diffs => "Differences",
             DisplayFilter::DiffsNoOrphans => "Differences (no orphans)",
+            DisplayFilter::NoOrphans => "No orphans",
             DisplayFilter::Same => "Same",
             DisplayFilter::Orphans => "Orphans",
             DisplayFilter::LeftOrphans => "Left orphans",
             DisplayFilter::RightOrphans => "Right orphans",
             DisplayFilter::LeftNewer => "Left newer",
             DisplayFilter::RightNewer => "Right newer",
+            DisplayFilter::LeftNewerOrphans => "Left newer and left orphans",
+            DisplayFilter::RightNewerOrphans => "Right newer and right orphans",
         }
     }
 
@@ -271,12 +277,19 @@ impl DisplayFilter {
             DisplayFilter::All => true,
             DisplayFilter::Diffs => !same,
             DisplayFilter::DiffsNoOrphans => !same && !orphan,
+            DisplayFilter::NoOrphans => !orphan,
             DisplayFilter::Same => same,
             DisplayFilter::Orphans => orphan,
             DisplayFilter::LeftOrphans => status == Status::LeftOnly,
             DisplayFilter::RightOrphans => status == Status::RightOnly,
             DisplayFilter::LeftNewer => newer == Some(Newer::Left),
             DisplayFilter::RightNewer => newer == Some(Newer::Right),
+            DisplayFilter::LeftNewerOrphans => {
+                status == Status::LeftOnly || newer == Some(Newer::Left)
+            }
+            DisplayFilter::RightNewerOrphans => {
+                status == Status::RightOnly || newer == Some(Newer::Right)
+            }
         }
     }
 }
@@ -1124,12 +1137,15 @@ fn filter_name(f: DisplayFilter) -> &'static str {
         DisplayFilter::All => "all",
         DisplayFilter::Diffs => "diffs",
         DisplayFilter::DiffsNoOrphans => "diffsNoOrphans",
+        DisplayFilter::NoOrphans => "noOrphans",
         DisplayFilter::Same => "same",
         DisplayFilter::Orphans => "orphans",
         DisplayFilter::LeftOrphans => "leftOrphans",
         DisplayFilter::RightOrphans => "rightOrphans",
         DisplayFilter::LeftNewer => "leftNewer",
         DisplayFilter::RightNewer => "rightNewer",
+        DisplayFilter::LeftNewerOrphans => "leftNewerOrphans",
+        DisplayFilter::RightNewerOrphans => "rightNewerOrphans",
     }
 }
 
@@ -1480,6 +1496,76 @@ mod tests {
             &HashMap::new(),
         );
         assert_eq!(csv, "Status,Path\r\nSame,src/a.rs\r\nIgnored,readme.md\r\n");
+    }
+
+    #[test]
+    fn options_accept_every_view_filter() {
+        // `DISPLAY_FILTERS` in src/lib/folderTree.ts: a "Current view" report
+        // sends whichever one the view has.
+        for name in [
+            "all",
+            "diffs",
+            "diffsNoOrphans",
+            "noOrphans",
+            "same",
+            "orphans",
+            "leftOrphans",
+            "rightOrphans",
+            "leftNewer",
+            "rightNewer",
+            "leftNewerOrphans",
+            "rightNewerOrphans",
+        ] {
+            let json = format!(r#"{{"filter":"{name}"}}"#);
+            let o: FolderReportOptions =
+                serde_json::from_str(&json).unwrap_or_else(|e| panic!("{name}: {e}"));
+            assert_eq!(filter_name(o.filter), name);
+        }
+    }
+
+    #[test]
+    fn orphan_filters_mirror_the_view() {
+        let summary = |input: &FolderReportInput, f: DisplayFilter| {
+            render(
+                input,
+                &opts(|o| {
+                    o.layout = FolderLayout::Summary;
+                    o.format = FolderReportFormat::Csv;
+                    o.filter = f;
+                }),
+                "",
+                &HashMap::new(),
+            )
+        };
+        let mut input = sample();
+        assert_eq!(
+            summary(&input, DisplayFilter::NoOrphans),
+            "Status,Path\r\nSame,src/a.rs\r\nLeft newer,src/b.rs\r\n"
+        );
+        assert_eq!(
+            summary(&input, DisplayFilter::LeftNewerOrphans),
+            "Status,Path\r\nLeft newer,src/b.rs\r\nLeft orphan,src/c.rs\r\n"
+        );
+        assert_eq!(
+            summary(&input, DisplayFilter::RightNewerOrphans),
+            "Status,Path\r\nRight orphan,readme.md\r\n"
+        );
+        input.entries[0].children[1].newer = Some(Newer::Right);
+        assert_eq!(
+            summary(&input, DisplayFilter::RightNewerOrphans),
+            "Status,Path\r\nRight newer,src/b.rs\r\nRight orphan,readme.md\r\n"
+        );
+        // An ignored file is the same, so neither newer nor an orphan.
+        input.entries[0].children[1].ignored = true;
+        input.entries[1].ignored = true;
+        assert_eq!(
+            summary(&input, DisplayFilter::RightNewerOrphans),
+            "Status,Path\r\n"
+        );
+        assert_eq!(
+            summary(&input, DisplayFilter::NoOrphans),
+            "Status,Path\r\nSame,src/a.rs\r\nIgnored,src/b.rs\r\nIgnored,readme.md\r\n"
+        );
     }
 
     #[test]
