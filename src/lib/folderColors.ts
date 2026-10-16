@@ -188,8 +188,10 @@ export type MergeSide = "left" | "base" | "right";
  * the side it came from (a change made the same way on both sides counts as
  * the left's), and the copies it replaces are older; a conflict or a clean
  * line-by-line merge colours every side. Two-way merges have no base, so they
- * read like Folder Compare. A side without the item still gets a tone, for its
- * deletion mark and for the folder icons above it.
+ * read like Folder Compare throughout: a difference that neither side's date
+ * settles is Folder Compare's different, not a conflict colour, since it is on
+ * both sides and its row already marks it. A side without the item still gets a
+ * tone, for its deletion mark and for the folder icons above it.
  */
 export function mergeSideTone(cls: MergeClass, side: MergeSide): AnyTone {
   switch (cls) {
@@ -212,12 +214,14 @@ export function mergeSideTone(cls: MergeClass, side: MergeSide): AnyTone {
     case "bothAddedConflict":
     case "deleteModifyConflict":
     case "typeConflict":
-    case "different":
       return "conflict";
     case "autoMerged":
       return "mergeable";
     case "error":
       return "error";
+    // Two-way only, as Folder Compare colours them.
+    case "different":
+      return "different";
     case "leftOnly":
     case "rightOnly":
       return "orphan";

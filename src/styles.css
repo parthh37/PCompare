@@ -34,8 +34,8 @@
   --fc-info: #606060;
   /* Folder Merge's own roles (folderColors.ts), also overridable in Settings → Colors: a change
      made on the left, one made on the right, changes on both sides that merge cleanly, and a
-     conflict. Older and same copies use the --fc-* colours. Rows carry a --fm-tint wash of
-     their role. */
+     conflict. Older and same copies use the --fc-* colours, as does all of a two-way merge (no
+     base), whose conflicts are --fc-different. Rows carry a --fm-tint wash of their role. */
   --fm-left: #63dadc;
   --fm-right: #dc5be2;
   --fm-mergeable: #ee702c;
