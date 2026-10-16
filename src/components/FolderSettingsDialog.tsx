@@ -21,6 +21,14 @@ const ATTR_FILTERS: { bit: number; label: string }[] = [
   { bit: ATTR.archive, label: "Archive" },
 ];
 
+/** The attributes "Compare attributes" can look at. */
+const ATTR_COMPARED: { bit: number; label: string; title?: string }[] = [
+  { bit: ATTR.archive, label: "Archive", title: "Copying a file usually changes it, so this is normally off" },
+  { bit: ATTR.system, label: "System" },
+  { bit: ATTR.hidden, label: "Hidden" },
+  { bit: ATTR.readonly, label: "Read-only" },
+];
+
 const CONTENT_METHODS: { value: ContentMethod; label: string; help: string }[] = [
   { value: "off", label: "Off", help: "Only the quick tests decide." },
   {
@@ -56,6 +64,8 @@ export function FolderSettingsDialog({ value, onApply, onClose, initialPage = "c
   const num = (v: string) => (v.trim() === "" ? null : Math.max(0, Number(v)));
   const toggleAttr = (bit: number, on: boolean) =>
     setS((p) => ({ ...p, excludeAttributes: on ? p.excludeAttributes | bit : p.excludeAttributes & ~bit }));
+  const toggleCompared = (bit: number, on: boolean) =>
+    setS((p) => ({ ...p, comparedAttributes: on ? p.comparedAttributes | bit : p.comparedAttributes & ~bit }));
   const badRules = parseAlignRules(s.alignRules).invalid;
   const preset = presetOf(s);
 
@@ -152,6 +162,27 @@ export function FolderSettingsDialog({ value, onApply, onClose, initialPage = "c
               />
               Ignore 1-hour differences (DST / FAT)
             </label>
+            <label className="field check indent">
+              <input
+                type="checkbox"
+                checked={s.ignoreTimezone}
+                disabled={!s.compareTimestamp}
+                onChange={(e) => set("ignoreTimezone", e.target.checked)}
+              />
+              Ignore time zone differences (whole hours)
+            </label>
+            <label className="field check">
+              <input
+                type="checkbox"
+                checked={s.compareNameCase}
+                disabled={s.caseSensitiveNames}
+                onChange={(e) => set("compareNameCase", e.target.checked)}
+              />
+              Compare filename case
+            </label>
+            <small className="muted">
+              Readme.md and README.md line up (case-insensitive names) but count as different.
+            </small>
             <label className="field check">
               <input
                 type="checkbox"
@@ -160,9 +191,20 @@ export function FolderSettingsDialog({ value, onApply, onClose, initialPage = "c
               />
               Compare attributes
             </label>
-            <small className="muted">
-              Read-only, hidden and system attributes (Unix: permission bits) must match too. Archive is ignored.
-            </small>
+            <div className="field-row indent">
+              {ATTR_COMPARED.map((a) => (
+                <label key={a.bit} className="field check" title={a.title}>
+                  <input
+                    type="checkbox"
+                    checked={(s.comparedAttributes & a.bit) !== 0}
+                    disabled={!s.compareAttributes}
+                    onChange={(e) => toggleCompared(a.bit, e.target.checked)}
+                  />
+                  {a.label}
+                </label>
+              ))}
+            </div>
+            <small className="muted">Unix permission bits must match too.</small>
           </fieldset>
 
           <fieldset>
@@ -193,6 +235,19 @@ export function FolderSettingsDialog({ value, onApply, onClose, initialPage = "c
             <small className="muted">
               When on, contents decide (identical files with different timestamps are “same”). When off, files must
               pass both.
+            </small>
+            <label className="field check">
+              <input
+                type="checkbox"
+                checked={s.skipContentIfQuickSame}
+                disabled={s.content === "off"}
+                onChange={(e) => set("skipContentIfQuickSame", e.target.checked)}
+              />
+              Skip if quick tests indicate files are the same
+            </label>
+            <small className="muted">
+              Only reads pairs whose size or timestamp differ — a thorough compare of a mostly unchanged tree at
+              nearly the speed of a quick one.
             </small>
             <div className="field-row fs-large">
               <label className="field check">

@@ -43,6 +43,8 @@ export interface FileOpOptions {
   touch: TouchTime;
   /** Copy/move leave out what these filters hide inside selected folders; `null` copies everything. */
   filter: ItemFilter | null;
+  /** Copy/move: files transferred at once; 0 = automatic (more for local disks, 4 for remotes). */
+  threads: number;
 }
 
 /** The folder compare's filters as file operations apply them (`ItemFilter` in fileops.rs). */
@@ -114,6 +116,10 @@ export interface FileOpProgress {
   failed: number;
   skipped: number;
   question: ConflictQuestion | null;
+  /** Items that arrived since the last message, relative to the destination root. */
+  landed?: string[];
+  /** Items gone from the source root since the last message (moved away or deleted). */
+  removed?: string[];
 }
 
 export interface FileOpFailure {
@@ -162,6 +168,13 @@ export interface FileOp {
 let ops: FileOp[] = [];
 const listeners = new Set<() => void>();
 const finished = new Set<(op: FileOp) => void>();
+const changed = new Set<(op: FileOp, paths: string[]) => void>();
+
+const joinRoot = (root: string, rel: string) => {
+  const r = rel.replace(/^\/+|\/+$/g, "");
+  const base = root.replace(/[\\/]+$/, "");
+  return r ? `${base}/${r}` : base;
+};
 
 const notify = () => listeners.forEach((l) => l());
 
@@ -199,7 +212,17 @@ export const fileOps = {
     ];
     notify();
     const channel = new Channel<FileOpProgress>();
-    channel.onmessage = (progress) => patch(id, { progress });
+    channel.onmessage = (progress) => {
+      patch(id, { progress });
+      const paths = [
+        ...(dstRoot ? (progress.landed ?? []).map((rel) => joinRoot(dstRoot, rel)) : []),
+        ...(progress.removed ?? []).map((rel) => joinRoot(srcRoot, rel)),
+      ];
+      if (paths.length) {
+        const op = ops.find((o) => o.id === id);
+        if (op) changed.forEach((f) => f(op, paths));
+      }
+    };
     try {
       const report = await invoke<FileOpReport>("fileop_start", { opId: id, srcRoot, dstRoot, request, onProgress: channel });
       const status: OpStatus = report.cancelled ? "cancelled" : report.failed ? "errors" : "done";
@@ -224,6 +247,14 @@ export const fileOps = {
   clearFinished() {
     ops = ops.filter((o) => o.status === "running");
     notify();
+  },
+  /**
+   * Called while an operation runs with the paths (under its roots) it just
+   * wrote or removed, so views can show each item as it lands.
+   */
+  onChanged(cb: (op: FileOp, paths: string[]) => void): () => void {
+    changed.add(cb);
+    return () => changed.delete(cb);
   },
   /** Called whenever an operation finishes (any outcome). */
   onFinished(cb: (op: FileOp) => void): () => void {

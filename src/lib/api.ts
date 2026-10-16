@@ -220,6 +220,8 @@ export interface FolderCompareOptions {
   compareTimestamp: boolean;
   content: ContentMethod;
   overrideQuickTests: boolean;
+  /** Only read files the quick tests call different. */
+  skipContentIfQuickSame?: boolean;
   rules: TextDiffOptions;
   recursive: boolean;
   exclude: string[];
@@ -228,9 +230,15 @@ export interface FolderCompareOptions {
   ignoreNameCase: boolean;
   align: AlignOptions;
   compareAttributes: boolean;
+  /** The `ATTR` bits "compare attributes" looks at (default: read-only, hidden, system). */
+  comparedAttributes?: number;
+  /** Paired files whose names differ only in capitalization are different. */
+  compareNameCase?: boolean;
   followLinks: boolean;
   timeToleranceSecs: number;
   ignoreDstShift: boolean;
+  /** Timestamps a whole number of hours apart (up to 26) match. */
+  ignoreTimezone?: boolean;
   // files above the threshold (bytes) use `largeFileMethod` instead of `content`.
   largeFileThreshold?: number | null;
   largeFileMethod?: LargeFileMethod;

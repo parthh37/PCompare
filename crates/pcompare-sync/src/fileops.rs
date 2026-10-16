@@ -20,8 +20,9 @@
 use std::fs::{self, File};
 use std::io::{self, Read};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Condvar, Mutex};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::mpsc::{self, RecvTimeoutError};
+use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant, UNIX_EPOCH};
 
 use filetime::FileTime;
@@ -130,6 +131,9 @@ pub struct FileOpOptions {
     /// filters hide in the comparison (the default, with
     /// "Include filtered items" off). `None`: everything is copied.
     pub filter: Option<ItemFilter>,
+    /// Copy and move: files transferred at once. 0 picks a number for the
+    /// two sides ([`copy_threads`]).
+    pub threads: usize,
 }
 
 /// The folder compare's name, attribute, size and date filters, as far as
@@ -238,6 +242,7 @@ impl Default for FileOpOptions {
             recursive: false,
             touch: TouchTime::Now,
             filter: None,
+            threads: 0,
         }
     }
 }
@@ -292,6 +297,15 @@ pub struct FileOpProgress {
     pub failed: usize,
     pub skipped: usize,
     pub question: Option<ConflictQuestion>,
+    /// Copy and move: items that arrived at the destination since the last
+    /// message, relative to the destination root, so a view can show them
+    /// while the rest is still on its way.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub landed: Vec<String>,
+    /// Items gone from the source root since the last message (moved away
+    /// or deleted), relative to the source root.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub removed: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -746,12 +760,19 @@ struct Runner<'r> {
     last_tick: Option<Instant>,
     /// Leaves filtered items out of scanned folders (copy and move).
     filter: Option<CompiledFilter>,
+    /// Bytes of the files the copy workers are moving right now.
+    inflight: Arc<AtomicU64>,
 }
 
 impl Runner<'_> {
     fn emit(&mut self) {
         self.last_tick = Some(Instant::now());
+        let flowing = self.inflight.load(Ordering::Relaxed);
+        self.state.bytes_done += flowing;
         (self.progress)(&self.state);
+        self.state.bytes_done -= flowing;
+        self.state.landed.clear();
+        self.state.removed.clear();
     }
 
     fn emit_throttled(&mut self) {
@@ -820,43 +841,6 @@ impl Runner<'_> {
         self.report.skipped += files;
         self.state.skipped += files;
         self.state.files_done += files;
-    }
-
-    /// Calls `f` with a byte counter that drives progress, pause and cancel.
-    fn with_bytes<T>(&mut self, f: impl FnOnce(&mut dyn FnMut(u64) -> io::Result<()>) -> T) -> T {
-        let ctl = self.ctl;
-        let base = self.state.bytes_done;
-        let mut sent = 0u64;
-        let result = {
-            let state = &mut self.state;
-            let progress = &mut *self.progress;
-            let last_tick = &mut self.last_tick;
-            let mut on_bytes = |n: u64| {
-                let mut before = state.phase;
-                let go = hold(&ctl.pause, &ctl.cancel, |paused| {
-                    if paused {
-                        before = state.phase;
-                        state.phase = FilePhase::Paused;
-                    } else {
-                        state.phase = before;
-                    }
-                    progress(state);
-                });
-                if !go {
-                    return Err(io::Error::new(io::ErrorKind::Interrupted, "cancelled"));
-                }
-                sent += n;
-                if last_tick.is_none_or(|t| t.elapsed() >= TICK) {
-                    *last_tick = Some(Instant::now());
-                    state.bytes_done = base + sent;
-                    progress(state);
-                }
-                Ok(())
-            };
-            f(&mut on_bytes)
-        };
-        self.state.bytes_done = base;
-        result
     }
 
     /// Settles a clash between `source` and the existing `target`.
@@ -932,30 +916,41 @@ impl Runner<'_> {
     }
 
     // ----- copy and move -----
+    //
+    // The walk runs here, on the calling thread: it creates folders, settles
+    // name clashes (asking the user one at a time) and renames what a move
+    // can rename. Every file whose bytes must be copied becomes a [`Job`]
+    // for the [`Pool`]'s workers, which run several at once. Folders are
+    // finished (times, security, a moved folder's removal) by
+    // [`Self::finish`] once all of their files are done.
 
-    /// Copies (or moves) `node` from `src` to `dst`. Returns true when all
-    /// of it arrived — for a move, that the source may be removed.
-    fn copy_node(
+    /// Plans copying (or moving) `node` from `src` to `dst`; `dst_shown` is
+    /// its path under the destination root.
+    #[allow(clippy::too_many_arguments)]
+    fn plan_node<'a>(
         &mut self,
-        src: &Place,
+        pool: &mut Pool<'a>,
+        src: &Place<'a>,
         node: &Node,
-        dst: &Place,
+        dst: &Place<'a>,
         shown: &str,
+        dst_shown: &str,
         moving: bool,
-    ) -> bool {
+    ) -> Pending<'a> {
         if !self.start(shown) {
-            return false;
+            return Pending::Settled(false);
         }
+        self.collect(pool, false);
         let existing = match dst.stat() {
             Ok(m) => m,
             Err(e) => {
                 self.fail(shown, OpError::from(e));
                 self.skip_rest(node);
-                return false;
+                return Pending::Settled(false);
             }
         };
         if node.is_dir() {
-            return self.copy_dir(src, node, dst, shown, moving, existing);
+            return self.plan_dir(pool, src, node, dst, shown, dst_shown, moving, existing);
         }
         if let Some(target) = &existing {
             if target.is_dir {
@@ -966,55 +961,52 @@ impl Runner<'_> {
                         "a folder with this name exists at the destination",
                     ),
                 );
-                return false;
+                return Pending::Settled(false);
             }
             match self.decide(shown, &node.meta, target) {
                 Decision::Overwrite => {}
                 Decision::Skip => {
                     self.skip(1);
-                    return false;
+                    return Pending::Settled(false);
                 }
-                Decision::Cancel => return false,
+                Decision::Cancel => return Pending::Settled(false),
             }
         }
         if moving && existing.is_none() && self.rename_within(src, dst) {
             self.succeed(1, node.meta.size);
-            return true;
+            self.landed(shown, dst_shown, moving);
+            return Pending::Settled(true);
         }
-        match self.transfer(src, node, dst, existing.is_some()) {
-            Ok(notes) => {
-                self.note(shown, notes);
-                if moving {
-                    if let Err(e) = src.remove_file() {
-                        self.fail(
-                            shown,
-                            OpError::new(
-                                classify(&e),
-                                format!("copied, but the original couldn't be removed: {e}"),
-                            ),
-                        );
-                        return false;
-                    }
-                }
-                self.succeed(1, node.meta.size);
-                true
-            }
-            Err(e) => {
-                self.fail(shown, e);
-                false
-            }
-        }
+        Pending::File(pool.submit(
+            Job {
+                id: 0,
+                src: src.clone(),
+                dst: dst.clone(),
+                meta: node.meta.clone(),
+                replace: existing.is_some(),
+                moving,
+            },
+            JobInfo {
+                shown: shown.to_owned(),
+                dst_shown: dst_shown.to_owned(),
+                size: node.meta.size,
+                moving,
+            },
+        ))
     }
 
-    fn copy_dir(
+    #[allow(clippy::too_many_arguments)]
+    fn plan_dir<'a>(
         &mut self,
-        src: &Place,
+        pool: &mut Pool<'a>,
+        src: &Place<'a>,
         node: &Node,
-        dst: &Place,
+        dst: &Place<'a>,
         shown: &str,
+        dst_shown: &str,
         moving: bool,
         existing: Option<EntryMeta>,
-    ) -> bool {
+    ) -> Pending<'a> {
         if existing.as_ref().is_some_and(|m| !m.is_dir) {
             self.fail(
                 shown,
@@ -1024,53 +1016,148 @@ impl Runner<'_> {
                 ),
             );
             self.skip_rest(node);
-            return false;
+            return Pending::Settled(false);
         }
         // A move into a free spot is a single rename when the volume allows
         // (not when filtered items must stay behind).
         if moving && !node.holds_filtered && existing.is_none() && self.rename_within(src, dst) {
             let (files, bytes) = node.totals();
             self.succeed(files, bytes);
-            return true;
+            self.landed(shown, dst_shown, moving);
+            return Pending::Settled(true);
         }
         if let Err(e) = dst.create_dir_all() {
             self.fail(shown, OpError::from(e));
             self.skip_rest(node);
-            return false;
+            return Pending::Settled(false);
         }
-        let mut all = true;
+        if existing.is_none() {
+            // An empty folder shows up at once; files inside follow.
+            self.state.landed.push(dst_shown.to_owned());
+        }
+        let mut children = Vec::with_capacity(node.children.len());
         for child in &node.children {
             if self.cancelled() {
-                return false;
+                break;
             }
-            let ok = self.copy_node(
+            children.push(self.plan_node(
+                pool,
                 &src.child(&child.name),
                 child,
                 &dst.child(&child.name),
                 &format!("{shown}/{}", child.name),
+                &format!("{dst_shown}/{}", child.name),
                 moving,
-            );
-            all &= ok;
+            ));
+        }
+        Pending::Dir(Box::new(PendingDir {
+            src: src.clone(),
+            dst: dst.clone(),
+            shown: shown.to_owned(),
+            modified_ms: node.meta.modified_ms,
+            moving,
+            holds_filtered: node.holds_filtered,
+            children,
+        }))
+    }
+
+    /// Settles what the workers finished: counts, failures, and the items
+    /// that landed. With `wait`, blocks (showing progress) until every
+    /// submitted job is done.
+    fn collect(&mut self, pool: &mut Pool, wait: bool) {
+        loop {
+            let next = if wait {
+                if pool.outstanding == 0 {
+                    break;
+                }
+                // Show a pause while only the workers are busy.
+                let paused = self.ctl.pause.load(Ordering::Relaxed) && !self.cancelled();
+                let phase = if paused {
+                    FilePhase::Paused
+                } else {
+                    FilePhase::Running
+                };
+                if self.state.phase != phase {
+                    self.state.phase = phase;
+                    self.emit();
+                }
+                pool.done.recv_timeout(TICK)
+            } else {
+                pool.done.try_recv().map_err(|e| match e {
+                    mpsc::TryRecvError::Empty => RecvTimeoutError::Timeout,
+                    mpsc::TryRecvError::Disconnected => RecvTimeoutError::Disconnected,
+                })
+            };
+            match next {
+                Ok((id, outcome)) => {
+                    pool.outstanding -= 1;
+                    let info = std::mem::take(&mut pool.info[id]);
+                    match outcome {
+                        Ok(notes) => {
+                            self.note(&info.shown, notes);
+                            self.succeed(1, info.size);
+                            self.landed(&info.shown, &info.dst_shown, info.moving);
+                            self.state.current = Some(info.shown);
+                            pool.results[id] = Some(true);
+                        }
+                        Err(e) => {
+                            self.fail(&info.shown, e);
+                            pool.results[id] = Some(false);
+                        }
+                    }
+                }
+                Err(RecvTimeoutError::Timeout) if wait => {}
+                Err(RecvTimeoutError::Timeout) => break,
+                // Every worker is gone: nothing more will arrive.
+                Err(RecvTimeoutError::Disconnected) => {
+                    pool.outstanding = 0;
+                    break;
+                }
+            }
+            self.emit_throttled();
+        }
+        self.emit_throttled();
+    }
+
+    /// An item arrived at `dst_shown` (and, moving, left `shown`).
+    fn landed(&mut self, shown: &str, dst_shown: &str, moving: bool) {
+        self.state.landed.push(dst_shown.to_owned());
+        if moving {
+            self.state.removed.push(shown.to_owned());
+        }
+    }
+
+    /// Finishes a planned item once its jobs are done. Returns true when all
+    /// of it arrived — for a move, that the source may be removed.
+    fn finish(&mut self, pending: Pending, results: &[Option<bool>]) -> bool {
+        let d = match pending {
+            Pending::Settled(ok) => return ok,
+            Pending::File(id) => return results[id] == Some(true),
+            Pending::Dir(d) => *d,
+        };
+        let mut all = true;
+        for child in d.children {
+            all &= self.finish(child, results);
         }
         if self.cancelled() {
             return false;
         }
         // Folders keep their own times and (Windows) security, like files.
-        if let (Place::Local(s), Place::Local(d)) = (src, dst) {
-            let notes = fsops::copy_extras(s, d, self.opts.copy_acls, self.opts.copy_short_names);
-            self.note(shown, notes);
+        if let (Place::Local(s), Place::Local(t)) = (&d.src, &d.dst) {
+            let notes = fsops::copy_extras(s, t, self.opts.copy_acls, self.opts.copy_short_names);
+            self.note(&d.shown, notes);
         }
-        if let Some(ms) = node.meta.modified_ms {
-            let _ = dst.set_modified(ms);
+        if let Some(ms) = d.modified_ms {
+            let _ = d.dst.set_modified(ms);
         }
-        if moving && node.holds_filtered {
+        if d.moving && d.holds_filtered {
             // The filtered items stay, and so does their folder.
             return false;
         }
-        if moving && all {
-            if let Err(e) = src.remove_empty_dir() {
+        if d.moving && all {
+            if let Err(e) = d.src.remove_empty_dir() {
                 self.fail(
-                    shown,
+                    &d.shown,
                     OpError::new(
                         classify(&e),
                         format!("moved its contents, but the folder couldn't be removed: {e}"),
@@ -1078,8 +1165,62 @@ impl Runner<'_> {
                 );
                 return false;
             }
+            self.state.removed.push(d.shown);
         }
         all
+    }
+
+    /// Copies (or moves) the scanned items with `threads` workers.
+    fn copy_all<'a>(
+        &mut self,
+        mover: Mover,
+        threads: usize,
+        items: &[(String, Place<'a>, Option<Place<'a>>, Node)],
+        dst_rels: &[String],
+        moving: bool,
+    ) {
+        let (job_tx, job_rx) = mpsc::channel::<Job<'a>>();
+        let (done_tx, done_rx) = mpsc::channel::<JobOutcome>();
+        let job_rx = Mutex::new(job_rx);
+        let inflight = self.inflight.clone();
+        std::thread::scope(|scope| {
+            for _ in 0..threads.max(1) {
+                let (jobs, done, inflight) = (&job_rx, done_tx.clone(), &*inflight);
+                scope.spawn(move || mover.serve(jobs, &done, inflight));
+            }
+            drop(done_tx);
+            let mut pool = Pool {
+                jobs: Some(job_tx),
+                done: done_rx,
+                info: Vec::new(),
+                results: Vec::new(),
+                outstanding: 0,
+            };
+            let mut planned = Vec::new();
+            for ((shown, at, to, node), dst_shown) in items.iter().zip(dst_rels) {
+                if self.cancelled() {
+                    break;
+                }
+                let to = to.as_ref().expect("copies have a destination");
+                if to.within(at) {
+                    let why = if at.within(to) {
+                        "the source and the destination are the same"
+                    } else {
+                        "can't copy a folder into itself"
+                    };
+                    self.fail(shown, invalid(why));
+                    continue;
+                }
+                planned.push(self.plan_node(&mut pool, at, node, to, shown, dst_shown, moving));
+            }
+            // No more jobs: the workers stop once the queue runs dry.
+            pool.jobs = None;
+            self.collect(&mut pool, true);
+            let results = std::mem::take(&mut pool.results);
+            for p in planned {
+                self.finish(p, &results);
+            }
+        });
     }
 
     /// Counts everything in `node` as skipped (its folder couldn't be handled).
@@ -1110,23 +1251,176 @@ impl Runner<'_> {
         }
     }
 
+}
+
+/// Byte counter a transfer calls as data flows; an error stops it.
+type OnBytes<'b> = &'b mut dyn FnMut(u64) -> io::Result<()>;
+
+/// A file whose bytes a copy worker moves.
+struct Job<'a> {
+    id: usize,
+    src: Place<'a>,
+    dst: Place<'a>,
+    meta: EntryMeta,
+    /// Something is at `dst` already (the clash was settled: overwrite).
+    replace: bool,
+    /// Remove `src` once the copy is in place.
+    moving: bool,
+}
+
+/// What the coordinator keeps about a submitted [`Job`].
+#[derive(Default)]
+struct JobInfo {
+    shown: String,
+    dst_shown: String,
+    size: u64,
+    moving: bool,
+}
+
+type JobOutcome = (usize, Result<Vec<String>, OpError>);
+
+/// The copy workers' queue, as the coordinating thread sees it.
+struct Pool<'a> {
+    /// `None` once everything is submitted, which lets the workers finish.
+    jobs: Option<mpsc::Sender<Job<'a>>>,
+    done: mpsc::Receiver<JobOutcome>,
+    info: Vec<JobInfo>,
+    /// Per job: `None` while it runs, then whether it succeeded.
+    results: Vec<Option<bool>>,
+    outstanding: usize,
+}
+
+impl<'a> Pool<'a> {
+    fn submit(&mut self, mut job: Job<'a>, info: JobInfo) -> usize {
+        let id = self.info.len();
+        job.id = id;
+        self.info.push(info);
+        self.results.push(None);
+        if self.jobs.as_ref().is_some_and(|tx| tx.send(job).is_ok()) {
+            self.outstanding += 1;
+        } else {
+            self.results[id] = Some(false);
+        }
+        id
+    }
+}
+
+/// A copy or move as the walk planned it, finished once its jobs are done.
+enum Pending<'a> {
+    /// Decided during the walk (skipped, failed, or renamed in one go).
+    Settled(bool),
+    /// A [`Job`]'s id.
+    File(usize),
+    Dir(Box<PendingDir<'a>>),
+}
+
+struct PendingDir<'a> {
+    src: Place<'a>,
+    dst: Place<'a>,
+    shown: String,
+    modified_ms: Option<i64>,
+    moving: bool,
+    holds_filtered: bool,
+    children: Vec<Pending<'a>>,
+}
+
+/// The most files a copy transfers at once.
+pub const MAX_COPY_THREADS: usize = 32;
+
+/// How many files a copy between these sides transfers at once when
+/// [`FileOpOptions::threads`] is 0 (automatic).
+pub fn copy_threads(src_remote: bool, dst_remote: bool) -> usize {
+    if src_remote || dst_remote {
+        // Latency-bound: a few requests in flight hide the round trips, and
+        // FTP / SFTP servers often cap connections per user.
+        return 4;
+    }
+    // Local disks: enough to overlap the per-file overhead (open, create,
+    // flush, rename, metadata) that dominates small files, without
+    // thrashing a spinning disk on big ones.
+    std::thread::available_parallelism().map_or(4, |n| n.get().clamp(2, 8))
+}
+
+/// The byte-moving half of a copy: everything a worker thread needs, and
+/// nothing the threads could race on.
+#[derive(Clone, Copy)]
+struct Mover<'r> {
+    opts: &'r FileOpOptions,
+    ctl: &'r Control,
+    deleter: &'r dyn Deleter,
+}
+
+impl Mover<'_> {
+    /// A worker: takes jobs until the queue closes.
+    fn serve(&self, jobs: &Mutex<mpsc::Receiver<Job>>, done: &mpsc::Sender<JobOutcome>, inflight: &AtomicU64) {
+        loop {
+            let job = {
+                let rx = jobs.lock().unwrap_or_else(|e| e.into_inner());
+                rx.recv()
+            };
+            let Ok(job) = job else { return };
+            let outcome = if self.ctl.is_cancelled() {
+                Err(OpError::new(FailureKind::Cancelled, "cancelled"))
+            } else {
+                // A panic must not leave the coordinator waiting for this job.
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| self.work(&job, inflight)))
+                    .unwrap_or_else(|_| Err(OpError::new(FailureKind::Other, "the copy crashed")))
+            };
+            if done.send((job.id, outcome)).is_err() {
+                return;
+            }
+        }
+    }
+
+    /// Copies one file (removing the original for a move), counting the
+    /// bytes in flight in `inflight` while it runs.
+    fn work(&self, job: &Job, inflight: &AtomicU64) -> Result<Vec<String>, OpError> {
+        let ctl = self.ctl;
+        if !hold(&ctl.pause, &ctl.cancel, |_| {}) {
+            return Err(OpError::new(FailureKind::Cancelled, "cancelled"));
+        }
+        let mut sent = 0u64;
+        let result = {
+            let mut on_bytes = |n: u64| {
+                if !hold(&ctl.pause, &ctl.cancel, |_| {}) {
+                    return Err(io::Error::new(io::ErrorKind::Interrupted, "cancelled"));
+                }
+                sent += n;
+                inflight.fetch_add(n, Ordering::Relaxed);
+                Ok(())
+            };
+            self.transfer(&job.src, &job.meta, &job.dst, job.replace, &mut on_bytes)
+        };
+        inflight.fetch_sub(sent, Ordering::Relaxed);
+        let notes = result?;
+        if job.moving {
+            job.src.remove_file().map_err(|e| {
+                OpError::new(
+                    classify(&e),
+                    format!("copied, but the original couldn't be removed: {e}"),
+                )
+            })?;
+        }
+        Ok(notes)
+    }
+
     /// Copies one file's data (and times) from `src` to `dst`, replacing
     /// what is there if `replace`. Returns caveats worth showing.
     fn transfer(
-        &mut self,
+        &self,
         src: &Place,
-        node: &Node,
+        meta: &EntryMeta,
         dst: &Place,
         replace: bool,
+        on_bytes: OnBytes,
     ) -> Result<Vec<String>, OpError> {
         dst.create_parent().map_err(OpError::from)?;
         match (src, dst) {
             (Place::Local(s), Place::Local(d)) => {
-                if let Some(target) = &node.meta.link_target {
+                if let Some(target) = &meta.link_target {
                     return self.copy_link(s, d, target, replace);
                 }
-                let temp =
-                    self.with_bytes(|on_bytes| fsops::copy_to_temp(s, d, false, on_bytes))?;
+                let temp = fsops::copy_to_temp(s, d, false, on_bytes)?;
                 self.install_local(d, temp.tmp, replace)?;
                 Ok(fsops::copy_extras(
                     s,
@@ -1140,11 +1434,11 @@ impl Runner<'_> {
                 let fetched = (|| {
                     let mut input = fs.open_at(&src.path(), 0)?;
                     let mut out = File::create_new(&tmp).map_err(|e| OpError::io(&tmp, e))?;
-                    let n = self.with_bytes(|on_bytes| pump(&mut input, &mut out, on_bytes))?;
+                    let n = pump(&mut input, &mut out, on_bytes)?;
                     out.sync_all().map_err(|e| OpError::io(&tmp, e))?;
                     drop(out);
-                    check_size(n, node.meta.size)?;
-                    if let Some(ms) = node.meta.modified_ms {
+                    check_size(n, meta.size)?;
+                    if let Some(ms) = meta.modified_ms {
                         Place::Local(tmp.clone())
                             .set_modified(ms)
                             .map_err(|e| OpError::io(&tmp, e))?;
@@ -1163,14 +1457,14 @@ impl Runner<'_> {
                     Place::Local(s) => Box::new(File::open(s).map_err(|e| OpError::io(s, e))?),
                     Place::Remote { fs: sfs, .. } => sfs.open_at(&src.path(), 0)?,
                 };
-                self.upload(*fs, dir, name, &mut input, node, replace)
+                self.upload(*fs, dir, name, &mut input, meta, replace, on_bytes)
             }
         }
     }
 
     /// Recreates a symbolic link (local to local).
     fn copy_link(
-        &mut self,
+        &self,
         src: &Path,
         dst: &Path,
         target: &str,
@@ -1206,7 +1500,7 @@ impl Runner<'_> {
     }
 
     /// Puts the finished temp copy `tmp` in place of `dst`.
-    fn install_local(&mut self, dst: &Path, tmp: PathBuf, replace: bool) -> Result<(), OpError> {
+    fn install_local(&self, dst: &Path, tmp: PathBuf, replace: bool) -> Result<(), OpError> {
         if !replace {
             return fs::rename(&tmp, dst).map_err(|e| {
                 let _ = fs::remove_file(&tmp);
@@ -1247,28 +1541,30 @@ impl Runner<'_> {
 
     /// Writes `input` to `name` in `dir` on a remote: through a temp name
     /// swapped into place where the server can rename, directly otherwise.
+    #[allow(clippy::too_many_arguments)]
     fn upload(
-        &mut self,
+        &self,
         fs: &dyn VfsWrite,
         dir: &str,
         name: &str,
         input: &mut dyn Read,
-        node: &Node,
+        meta: &EntryMeta,
         replace: bool,
+        on_bytes: OnBytes,
     ) -> Result<Vec<String>, OpError> {
         let caps = fs.caps();
         let dst = fs.join(dir, name);
         let mut notes = Vec::new();
         let stamp = |path: &str, notes: &mut Vec<String>| {
-            if let Some(ms) = node.meta.modified_ms.filter(|_| caps.set_modified) {
+            if let Some(ms) = meta.modified_ms.filter(|_| caps.set_modified) {
                 if fs.set_modified(path, ms).is_err() {
                     notes.push("the server didn't accept the file's modification time".to_owned());
                 }
             }
         };
         if !caps.rename {
-            let n = self.with_bytes(|on_bytes| fs.write(&dst, 0, input, on_bytes))?;
-            check_size(n, node.meta.size)?;
+            let n = fs.write(&dst, 0, input, on_bytes)?;
+            check_size(n, meta.size)?;
             stamp(&dst, &mut notes);
             return Ok(notes);
         }
@@ -1280,10 +1576,10 @@ impl Runner<'_> {
             )
         };
         let tmp = temp("tmp");
-        let sent = self
-            .with_bytes(|on_bytes| fs.write(&tmp, 0, input, on_bytes))
+        let sent = fs
+            .write(&tmp, 0, input, on_bytes)
             .map_err(OpError::from)
-            .and_then(|n| check_size(n, node.meta.size));
+            .and_then(|n| check_size(n, meta.size));
         if let Err(e) = sent {
             let _ = fs.remove_file(&tmp);
             return Err(e);
@@ -1317,6 +1613,9 @@ impl Runner<'_> {
         Ok(notes)
     }
 
+}
+
+impl Runner<'_> {
     // ----- the other actions -----
 
     fn delete(&mut self, at: &Place, shown: &str) {
@@ -1338,7 +1637,10 @@ impl Runner<'_> {
             },
         };
         match result {
-            Ok(()) => self.succeed(1, 0),
+            Ok(()) => {
+                self.succeed(1, 0);
+                self.state.removed.push(shown.to_owned());
+            }
             Err(e) => self.fail(shown, OpError::from(e)),
         }
     }
@@ -1533,6 +1835,7 @@ pub fn run(
         report: FileOpReport::default(),
         last_tick: None,
         filter: None,
+        inflight: Arc::new(AtomicU64::new(0)),
     };
     if matches!(req.action, FileAction::Copy | FileAction::Move) {
         if let Some(f) = &req.options.filter {
@@ -1555,6 +1858,7 @@ pub fn run(
 
     // Resolve every item first, so a bad path fails alone and up front.
     let mut work: Vec<(String, Place, Option<Place>)> = Vec::new();
+    let mut dst_rels: Vec<String> = Vec::new();
     for item in &items {
         let shown = item.src.trim_matches('/').to_owned();
         let at = match place(src, &item.src) {
@@ -1582,6 +1886,7 @@ pub fn run(
                 continue;
             }
         };
+        dst_rels.push(item.dst.trim_matches('/').to_owned());
         work.push((shown, at, to));
     }
 
@@ -1611,7 +1916,8 @@ pub fn run(
             let deep =
                 matches!(req.action, FileAction::Copy | FileAction::Move) || req.options.recursive;
             let mut scanned = Vec::new();
-            for (shown, at, to) in work {
+            let mut scanned_dst = Vec::new();
+            for ((shown, at, to), dst_rel) in work.into_iter().zip(dst_rels) {
                 if r.cancelled() {
                     break;
                 }
@@ -1630,7 +1936,10 @@ pub fn run(
                     Err(e) => Err(e),
                 };
                 match node {
-                    Ok(node) => scanned.push((shown, at, to, node)),
+                    Ok(node) => {
+                        scanned.push((shown, at, to, node));
+                        scanned_dst.push(dst_rel);
+                    }
                     Err(e) => r.fail(&shown, OpError::from(e)),
                 }
             }
@@ -1647,27 +1956,28 @@ pub fn run(
             r.state.bytes_total = bytes;
             r.state.phase = FilePhase::Running;
             r.emit();
-            let now = now_ms();
-            for (shown, at, to, node) in &scanned {
-                if r.cancelled() {
-                    break;
-                }
-                match req.action {
-                    FileAction::Copy | FileAction::Move => {
-                        let to = to.as_ref().expect("copies have a destination");
-                        if to.within(at) {
-                            let why = if at.within(to) {
-                                "the source and the destination are the same"
-                            } else {
-                                "can't copy a folder into itself"
-                            };
-                            r.fail(shown, invalid(why));
-                            continue;
-                        }
-                        r.copy_node(at, node, to, shown, req.action == FileAction::Move);
+            if matches!(req.action, FileAction::Copy | FileAction::Move) {
+                let threads = match req.options.threads {
+                    0 => copy_threads(src.is_remote(), dst.is_some_and(|d| d.is_remote())),
+                    n => n.min(MAX_COPY_THREADS),
+                };
+                let mover = Mover {
+                    opts: &req.options,
+                    ctl,
+                    deleter,
+                };
+                let moving = req.action == FileAction::Move;
+                r.copy_all(mover, threads, &scanned, &scanned_dst, moving);
+            } else {
+                let now = now_ms();
+                for (shown, at, to, node) in &scanned {
+                    if r.cancelled() {
+                        break;
                     }
-                    FileAction::Attributes => r.attributes(at, node, shown),
-                    _ => r.touch(at, node, to.as_ref(), now, shown),
+                    match req.action {
+                        FileAction::Attributes => r.attributes(at, node, shown),
+                        _ => r.touch(at, node, to.as_ref(), now, shown),
+                    }
                 }
             }
         }
@@ -2469,6 +2779,148 @@ mod tests {
         range_read: true,
         folders: false,
     };
+
+    /// A remote whose uploads take a while, counting how many run at once.
+    struct SlowRemote {
+        inner: FakeRemote,
+        active: AtomicUsize,
+        peak: AtomicUsize,
+    }
+
+    impl Vfs for SlowRemote {
+        fn read_dir(&self, dir: &str) -> pcompare_core::Result<Vec<VfsEntry>> {
+            self.inner.read_dir(dir)
+        }
+        fn open(&self, path: &str) -> pcompare_core::Result<Box<dyn Read + Send>> {
+            self.inner.open(path)
+        }
+        fn join(&self, dir: &str, name: &str) -> String {
+            self.inner.join(dir, name)
+        }
+    }
+
+    impl VfsWrite for SlowRemote {
+        fn caps(&self) -> WriteCaps {
+            self.inner.caps()
+        }
+        fn stat(&self, path: &str) -> io::Result<Option<EntryMeta>> {
+            self.inner.stat(path)
+        }
+        fn open_at(&self, path: &str, offset: u64) -> io::Result<Box<dyn Read + Send>> {
+            self.inner.open_at(path, offset)
+        }
+        fn write(
+            &self,
+            path: &str,
+            offset: u64,
+            src: &mut dyn Read,
+            on_bytes: &mut dyn FnMut(u64) -> io::Result<()>,
+        ) -> io::Result<u64> {
+            let now = self.active.fetch_add(1, Ordering::SeqCst) + 1;
+            self.peak.fetch_max(now, Ordering::SeqCst);
+            std::thread::sleep(Duration::from_millis(40));
+            let r = self.inner.write(path, offset, src, on_bytes);
+            self.active.fetch_sub(1, Ordering::SeqCst);
+            r
+        }
+        fn create_dir_all(&self, path: &str) -> io::Result<()> {
+            self.inner.create_dir_all(path)
+        }
+        fn remove_file(&self, path: &str) -> io::Result<()> {
+            self.inner.remove_file(path)
+        }
+        fn remove_dir_all(&self, path: &str) -> io::Result<()> {
+            self.inner.remove_dir_all(path)
+        }
+        fn rename(&self, from: &str, to: &str) -> io::Result<()> {
+            self.inner.rename(from, to)
+        }
+        fn set_modified(&self, path: &str, ms: i64) -> io::Result<()> {
+            self.inner.set_modified(path, ms)
+        }
+    }
+
+    #[test]
+    fn copies_run_in_parallel_and_report_each_file_as_it_lands() {
+        let p = pair();
+        for i in 0..12 {
+            write(&p.left, &format!("many/{i:02}.txt"), "data", OLD);
+        }
+        let remote = SlowRemote {
+            inner: FakeRemote(SFTP),
+            active: AtomicUsize::new(0),
+            peak: AtomicUsize::new(0),
+        };
+        let r_path = p.right.to_string_lossy().into_owned();
+        let right = Root::Remote {
+            fs: &remote,
+            path: &r_path,
+            label: "remote://box/R",
+        };
+        let mut landed = Vec::new();
+        let mut done_when_landed = Vec::new();
+        let options = FileOpOptions {
+            threads: 4,
+            ..opts(ConflictMode::Overwrite)
+        };
+        let r = run(
+            &req(FileAction::Copy, &["many"], options),
+            Root::Local(&p.left),
+            Some(right),
+            &PermanentDeleter,
+            &Control::default(),
+            &mut |s| {
+                if !s.landed.is_empty() && s.phase != FilePhase::Finished {
+                    done_when_landed.push(s.files_done);
+                }
+                landed.extend(s.landed.iter().cloned());
+            },
+            &mut |_| panic!("not expected to ask"),
+        );
+        assert_eq!((r.succeeded, r.failed), (12, 0));
+        let peak = remote.peak.load(Ordering::SeqCst);
+        assert!(peak >= 2, "uploads overlapped (peak {peak})");
+        assert!(peak <= 4, "never more than the threads asked for (peak {peak})");
+        // The new folder, then every file exactly once, while the copy ran.
+        let mut want: Vec<String> = (0..12).map(|i| format!("many/{i:02}.txt")).collect();
+        want.push("many".into());
+        want.sort();
+        landed.sort();
+        assert_eq!(landed, want);
+        assert!(done_when_landed.iter().any(|&n| n < 12), "rows arrive before the end");
+        assert_eq!(files(&p.right).len(), 13);
+    }
+
+    #[test]
+    fn a_parallel_move_still_removes_the_emptied_folders() {
+        let p = pair();
+        let remote = FakeRemote(S3); // no rename: every file is copied, then removed
+        let l_path = p.left.to_string_lossy().into_owned();
+        let left = Root::Remote {
+            fs: &remote,
+            path: &l_path,
+            label: "remote://box/L",
+        };
+        let mut removed = Vec::new();
+        let options = FileOpOptions {
+            threads: 3,
+            ..opts(ConflictMode::Overwrite)
+        };
+        let r = run(
+            &req(FileAction::Move, &["docs"], options),
+            left,
+            Some(Root::Local(&p.right)),
+            &PermanentDeleter,
+            &Control::default(),
+            &mut |s| removed.extend(s.removed.iter().cloned()),
+            &mut |_| panic!("not expected to ask"),
+        );
+        assert_eq!((r.succeeded, r.failed), (2, 0));
+        assert!(!p.left.join("docs").exists(), "the moved folder is gone");
+        assert_eq!(read(&p.right, "docs/sub/c.txt"), "ccc");
+        removed.sort();
+        assert_eq!(removed, ["docs", "docs/b.txt", "docs/sub", "docs/sub/c.txt"]);
+    }
 
     #[test]
     fn remote_sides_upload_download_delete_and_move() {

@@ -81,15 +81,23 @@ fn root<'a>(path: &'a str, fs: &'a SideFs) -> Root<'a> {
 }
 
 /// Forwards progress to the webview: phase changes and questions at once,
-/// byte counts throttled.
+/// byte counts throttled. Items that landed (or went away) in a message
+/// that was held back ride along with the next one sent, so the view sees
+/// every one of them.
 fn progress_sender(channel: Channel<FileOpProgress>) -> impl FnMut(&FileOpProgress) {
     let mut last: Option<(Instant, FilePhase)> = None;
+    let (mut landed, mut removed) = (Vec::new(), Vec::new());
     move |p: &FileOpProgress| {
+        landed.extend(p.landed.iter().cloned());
+        removed.extend(p.removed.iter().cloned());
         let important = p.question.is_some() || last.is_none_or(|(_, phase)| phase != p.phase);
         if important || last.is_none_or(|(t, _)| t.elapsed() >= PROGRESS_INTERVAL) {
             last = Some((Instant::now(), p.phase));
+            let mut out = p.clone();
+            out.landed = std::mem::take(&mut landed);
+            out.removed = std::mem::take(&mut removed);
             // The window may have closed; that must not abort the operation.
-            let _ = channel.send(p.clone());
+            let _ = channel.send(out);
         }
     }
 }
