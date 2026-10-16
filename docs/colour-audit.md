@@ -89,7 +89,7 @@ Light `--left-fg` was a mid blue with nearly the same lightness as the right sid
 
 ![Folder Merge status bar, light, before and after, with simulated deuteranopia](screenshots/folder/merge-left-right-before-after.png)
 
-Today the left/right colours show in the status-bar counts ("4 left changes", "4 right changes"). The per-class badge colours in `FolderMerge.css` (`.c-leftChanged .fm-badge` and friends) never apply, because the earlier `.fm-row:not(.c-unchanged) .fm-badge { color: var(--text) }` is more specific. Only the conflict and error badges are coloured. This was left as it is: colouring the badges would be a visible design change, not a palette fix.
+At this point the left/right colours showed only in the status-bar counts ("4 left changes", "4 right changes"). The per-class badge colours in `FolderMerge.css` never applied, and only the conflict and error badges were coloured. Colouring the badges was a visible design change, not a palette fix, so it got its own follow-up ([Folder Merge badges](#follow-up-folder-merge-badges)).
 
 ### Line numbers
 
@@ -97,8 +97,48 @@ Text Compare's line numbers now use their own token, `--tc-ln-fg`, at 4.5:1 in b
 
 ![Line numbers before and after, dark and light](screenshots/text/line-numbers-before-after.png)
 
-### Still open
+## Follow-up: Folder Merge badges
 
-- Dark `--left-fg` vs `--ok` (Folder Merge: left change vs auto-merged) is 3.7, and only under tritanopia. The badges carry the words ("Text merged", "Changed on left").
+The status badges now use the side colours the status bar already used. Left changes ("Changed on left", "Added on left", "Deleted on left", "Left only", "Left newer") are `--left-fg`, the right side's are `--orphan`, and "Text merged" is `--ok` with its green border. Conflict (red fill) and error (amber fill) badges are unchanged. Badges that belong to neither side ("Same change on both", "Added on both", "Deleted on both", "Changes on both") stay in plain text with the neutral border, and "Unchanged" stays grey with no border. No tokens changed.
+
+The colours were already written in `FolderMerge.css` but never applied. `.fm-row:not(.c-unchanged) .fm-badge` has specificity (0,3,0) (`:not()` counts its argument), while `.c-leftChanged .fm-badge` had only (0,2,0). The class rules now start with `.fm-row` too, so they tie and win by coming later. The conflict and error rules already worked that way.
+
+![Folder Merge badges before and after, three-way, dark and light](screenshots/folder/merge-badges-before-after.png)
+
+![Folder Merge badges before and after, two-way, dark and light](screenshots/folder/merge-badges-two-way.png)
+
+The list sits on `--bg`, so contrast here is against `--bg` (and against a selected row, `--sel-bg` over `--bg`):
+
+| Badge text | Dark | Dark, selected | Light | Light, selected |
+| --- | --- | --- | --- | --- |
+| left (`--left-fg`) | 8.9 | 7.0 | 8.2 | 6.9 |
+| right (`--orphan`) | 5.6 | 4.4 | 5.0 | 4.2 |
+| auto-merged (`--ok`) | 9.4 | 7.4 | 4.6 | 3.8 |
+| unchanged (`--muted`, as before) | 5.7 | 4.5 | 5.1 | 4.3 |
+
+Distances between badge colours, worst case over the four vision types:
+
+| Pair | Dark | Light | Other cues |
+| --- | --- | --- | --- |
+| left vs right | 11.2 | 12.2 | |
+| left vs auto-merged | **3.7** (tritan) | 11.5 | words, merge icon, green border vs grey |
+| right vs auto-merged | 18.1 | 13.5 | |
+| left / right / auto-merged vs plain text | ≥ 11.9 | ≥ 18.4 | |
+| right vs unchanged grey | **5.7** (tritan) | **7.3** (tritan) | unchanged has no border |
+| auto-merged vs unchanged grey | 14.4 | **7.3** (tritan) | unchanged has no border |
+| auto-merged vs conflict red | **6.2** (deutan) | **2.3** (deutan) | conflict badges are filled and have ⚠; the row gets a red bar and name |
+| auto-merged vs error amber | **7.9** (deutan) | **5.7** (protan) | the same as conflicts |
+
+![Folder Merge badges before and after with simulated tritanopia (dark) and deuteranopia (light)](screenshots/folder/merge-badges-colour-blind.png)
+
+**Dark left vs auto-merged stays at 3.7.** Under tritanopia both turn cyan. A different dark `--left-fg` could only fix that by stopping being blue. Searching OKLCH for a colour that keeps ≥ 10 from right, plain text, grey, conflict and error, the best blue (hue 235–272) reaches 8.7 from the green, and it is a grey slate (`#a7b0cf`). Only lavenders (hue 290) reach 10, and those read as a paler version of the right side's purple. The two badges always differ in words, and "Text merged" also has the merge icon and a green border, so the blue stays.
+
+**Auto-merged green vs conflict red** is the red-green pair (2.3 in light under deuteranopia). The same pair already meets in the side columns (added green, deleted red). Conflict and error badges are filled, carry ⚠ and sit on rows with a red bar and a red name, so shape and fill carry the difference.
+
+## Still open
+
+- Dark `--left-fg` vs `--ok` (Folder Merge: left change vs auto-merged) is 3.7, and only under tritanopia. Since the [badge follow-up](#follow-up-folder-merge-badges) it shows on badges as well as in the status bar. The words, merge icon and border tell them apart.
+- On a selected Folder Merge row, `--orphan` (4.4:1 dark, 4.2:1 light) and light `--ok` (3.8:1) are under 4.5:1 for 11px badge text. The side columns already draw the same colours on selected rows, and `--muted` is 4.3–4.5:1 there, so this belongs to the selection tint (`--sel-bg`) rather than the badges.
+- The two-way status bar's "left newer · right newer" count is still plain text, while the badges are coloured.
 - Dark `--tc-sync` vs `--orphan` is 6.1, but they are never drawn in the same view.
 - Rows 4, 5, 7 and 8 above are unchanged.
