@@ -1,5 +1,5 @@
 import { open, save, type DialogFilter } from "@tauri-apps/plugin-dialog";
-import { FileArchive, FolderOpen, Globe, X } from "lucide-react";
+import { File as FileIcon, FileArchive, FolderOpen, Globe, X } from "lucide-react";
 import { CONTAINER_FILTERS } from "../lib/archiveApi";
 import { useEffect, useRef, useState, type KeyboardEvent } from "react";
 import { PATH_DROP_EVENT } from "../lib/pathDrop";
@@ -28,6 +28,8 @@ interface Props {
   localOnly?: boolean;
   /** Recent-path history to offer while focused; defaults by `directory`, off for save dialogs. */
   history?: PathKind | false;
+  /** Takes a file or a folder (Home's Quick Compare): a second browse button picks folders. */
+  anyKind?: boolean;
 }
 
 /** Last path segment, for the bold part of a suggestion. */
@@ -46,6 +48,7 @@ export function PathField({
   saveDialog,
   localOnly,
   history = saveDialog ? false : directory ? "folder" : "file",
+  anyKind,
 }: Props) {
   const shell = useShell();
   const [remote, setRemote] = useState(false);
@@ -95,10 +98,10 @@ export function PathField({
   };
   useEffect(() => setActive(-1), [value, suggesting]);
 
-  const browse = async () => {
-    const picked = saveDialog && !directory
+  const browse = async (folder = directory) => {
+    const picked = saveDialog && !folder
       ? await save({ title: "Save as", defaultPath: value || undefined, filters })
-      : await open({ directory, multiple: false, filters, title: directory ? "Choose folder" : "Choose file" });
+      : await open({ directory: folder, multiple: false, filters, title: folder ? "Choose folder" : "Choose file" });
     if (typeof picked === "string") pick.current(picked);
   };
 
@@ -150,9 +153,20 @@ export function PathField({
           ))}
         </div>
       )}
-      <button className="icon-btn" title="Browse…" onClick={browse}>
-        <FolderOpen size={15} />
-      </button>
+      {anyKind ? (
+        <>
+          <button className="icon-btn" title="Choose a file…" aria-label="Choose a file" onClick={() => browse(false)}>
+            <FileIcon size={15} />
+          </button>
+          <button className="icon-btn" title="Choose a folder…" aria-label="Choose a folder" onClick={() => browse(true)}>
+            <FolderOpen size={15} />
+          </button>
+        </>
+      ) : (
+        <button className="icon-btn" title="Browse…" onClick={() => browse()}>
+          <FolderOpen size={15} />
+        </button>
+      )}
       {/* folder sides can also be an archive or a snapshot file */}
       {directory && !saveDialog && (
         <button
@@ -166,8 +180,8 @@ export function PathField({
           <FileArchive size={15} />
         </button>
       )}
-      {/* a git/hg revision of a working-tree file or folder */}
-      {!saveDialog && (
+      {/* a git/hg revision of a working-tree file or folder (typed git: paths still work in Quick Compare) */}
+      {!saveDialog && !anyKind && (
         <button className="icon-btn" title="Compare a Git or Mercurial revision (git:/hg: path)" onClick={() => setRevision(true)}>
           <GitBranch size={15} />
         </button>

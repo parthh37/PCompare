@@ -22,7 +22,7 @@ export const HELP_TOPICS: HelpTopic[] = [
     kinds: ["home"],
     globalKeys: true,
     body: `
-Pick a session type on Home, or drop two files or folders anywhere on the window to compare them. Dropping one item fills the empty side of the compare in front, or opens it on its own.
+Type or browse to two files or folders in **Quick Compare** at the top of Home and press **Compare** (or Enter): PCompare picks the viewer from what they are, as it does for two items dropped anywhere on the window. A path that doesn't exist is reported under the fields before anything opens. To start a particular kind of session, pick it under **New session** on the right. Dropping one item fills the empty side of the compare in front, or opens it on its own.
 
 ## Opening comparisons
 - **Command line**: \`pcompare <left> <right>\` picks the viewer from the paths; \`pcompare <left> <right> <base> [<output>]\` opens a 3-way merge (the usual mergetool order, usable as a git mergetool).
@@ -30,6 +30,7 @@ Pick a session type on Home, or drop two files or folders anywhere on the window
 - **Select Left Side** in a file list (or Explorer) remembers one path; **Compare to…** on another item compares the two.
 
 ## Home lists
+Your own work is on the left; once there are more than six entries, a filter box narrows all three lists.
 - **Workspaces**: named sets of open tabs. Open, rename or delete them here; save one with the **Workspace** button in the tab bar.
 - **Saved sessions**: comparisons saved with a name (Save session). Double-click or click the name to reopen.
 - **Recent sessions**: comparisons you closed without saving, kept automatically (newest 20) while *Auto-save sessions on close* is on.
@@ -344,7 +345,7 @@ Use \`remote://<profile>/path\` (or the globe button next to a path) on either s
     title: "Sync Automation",
     kinds: ["automation"],
     body: `
-Saved folder syncs that run by themselves: on a schedule, when files change, or when PCompare starts — with safety checks, retries, a run history and alerts when something goes wrong. Open it from **Automation** in the tab bar, the Home card, or the tray icon's menu. In a Folder Sync tab, **Automate…** turns the folders and settings you're using into a new task.
+Saved folder syncs that run by themselves: on a schedule, when files change, or when PCompare starts — with safety checks, retries, a run history and alerts when something goes wrong. Open it from **Automation** in the tab bar, **New session** on Home, or the tray icon's menu. In a Folder Sync tab, **Automate…** turns the folders and settings you're using into a new task.
 
 ## Tasks
 - Each task is a folder pair, a sync mode and its options — the same engine as Folder Sync, without the preview step. **Mirror** and **Two-way** delete files; the editor says so before you save.
@@ -387,7 +388,7 @@ The bottom panel lists runs for all tasks or the selected one: what started it, 
     title: "Text Edit",
     kinds: ["edit"],
     body: `
-Edits a single text file. Open it from the **Text Edit** card on Home, **Edit file** in a Folder Compare's right-click menu, or **Open in Text Edit** when a Text Compare has only one file. Leave the path empty to start a new file and use **Save As** to name it.
+Edits a single text file. Open it from **Text Edit** under **New session** on Home, **Edit file** in a Folder Compare's right-click menu, or **Open in Text Edit** when a Text Compare has only one file. Leave the path empty to start a new file and use **Save As** to name it.
 
 ## Editing
 - Click anywhere to type. Enter keeps the line's indentation; Backspace/Delete at the ends of a line join lines.

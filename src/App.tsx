@@ -581,6 +581,7 @@ export default function App() {
                   ? openAutomation()
                   : updateTab(t.id, { kind })
             }
+            onCompare={(left, right) => openAuto(left, right).catch((e) => setToast(errorMessage(e)))}
             saved={saved}
             onOpenSaved={openSaved}
             onImported={(count) => {

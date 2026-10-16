@@ -1,5 +1,5 @@
 // One registry describing every session type: its label, icon and accent
-// colour, and how many paths it takes. The tab bar, Home cards, saved-session
+// colour, and how many paths it takes. The tab bar, Home lists, saved-session
 // list and file routing all read from here, so adding a viewer is one entry.
 import {
   Binary,
@@ -175,22 +175,16 @@ export const SESSIONS: Record<SessionKind, SessionInfo> = {
   },
 };
 
-/** Order of the "new session" cards on Home. */
-export const COMPARE_KINDS: CompareKind[] = [
-  "text",
-  "merge",
-  "table",
-  "picture",
-  "folder",
-  "sync",
-  "folderMerge",
-  "hex",
-  "registry",
-  "version",
-  "mp3",
-  "database",
-  "edit",
-  "patch",
+/**
+ * Home's "New session" list: every session type, grouped by what it opens, in
+ * the order people reach for them. Quick Compare above the list already picks
+ * the viewer for two paths, so these are for starting one deliberately.
+ */
+export const HOME_GROUPS: { title: string; kinds: Exclude<SessionKind, "home" | "review">[] }[] = [
+  { title: "Files", kinds: ["text", "merge", "table", "picture", "hex"] },
+  { title: "Folders", kinds: ["folder", "sync", "folderMerge"] },
+  { title: "Data and system", kinds: ["database", "registry", "version", "mp3"] },
+  { title: "Edit and connect", kinds: ["edit", "patch", "profiles", "automation"] },
 ];
 
 export const isCompareKind = (k: SessionKind): k is CompareKind =>

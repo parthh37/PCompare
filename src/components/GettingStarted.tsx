@@ -38,8 +38,8 @@ export function GettingStarted({ onClose }: Props) {
       <p className="getting-started-intro">Five things worth knowing. Reopen this any time from Home or Help.</p>
       <div className="getting-started-cards">
         <Card icon={<GitCompare size={16} />} title="Compare files and folders">
-          Pick a session type on Home, or drop two files or folders anywhere on the window — PCompare chooses Text,
-          Folder, Table, Picture or Hex Compare from what you dropped. Archives (zip, tar, 7z) open as folders.
+          Choose two files or folders in Quick Compare on Home, or drop them anywhere on the window — PCompare chooses
+          Text, Folder, Table, Picture or Hex Compare from what they are. Archives (zip, tar, 7z) open as folders.
         </Card>
         <Card icon={<GitMerge size={16} />} title="Merge, 2-way and 3-way">
           Text Merge combines two files into an output you edit; add a base (common ancestor) for a 3-way merge that
