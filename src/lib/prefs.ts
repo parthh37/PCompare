@@ -46,6 +46,8 @@ export interface Prefs {
   textPadding: boolean;
   /** Text Compare draws the left pane's gutter (copy arrow + line number) at its right edge, by the right pane's. */
   textLeftGutterRight: boolean;
+  /** Text Compare marks each differing line with +, − or ~ beside its number, so a difference never relies on colour alone. */
+  textChangeGlyphs: boolean;
   // Folder Compare's split view (file comparison below the folder list).
   folderSplitView: boolean;
   /** Share of the height the folder list keeps (0.15–0.85). */
@@ -74,6 +76,7 @@ export const DEFAULT_PREFS: Prefs = {
   gettingStartedDismissed: false,
   textPadding: true,
   textLeftGutterRight: false,
+  textChangeGlyphs: true,
   folderSplitView: false,
   folderSplitRatio: 0.5,
   printHeader: "{title}|{date}",
@@ -128,6 +131,7 @@ export function sanitizePrefs(raw: unknown): Prefs {
     gettingStartedDismissed: bool(r.gettingStartedDismissed, d.gettingStartedDismissed),
     textPadding: bool(r.textPadding, d.textPadding),
     textLeftGutterRight: bool(r.textLeftGutterRight, d.textLeftGutterRight),
+    textChangeGlyphs: bool(r.textChangeGlyphs, d.textChangeGlyphs),
     folderSplitView: bool(r.folderSplitView, d.folderSplitView),
     folderSplitRatio:
       typeof r.folderSplitRatio === "number" && Number.isFinite(r.folderSplitRatio)

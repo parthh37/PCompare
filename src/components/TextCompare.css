@@ -1,7 +1,23 @@
 /* Editing additions to the Text Compare view (base styles live in styles.css). */
+.tc-editable {
+  /*
+   * Each side's gutter (copy arrow + line number) is 68px, plus the change
+   * glyph slot and the blame column when they are on. TextCompare.tsx mirrors
+   * these widths (LN_WIDTH, GLYPH_WIDTH, BLAME_WIDTH) for word wrap.
+   */
+  --tc-glyph-w: 0px;
+  --tc-blame-w: 0px;
+  --tc-ln: calc(68px + var(--tc-glyph-w) + var(--tc-blame-w));
+}
+.tc-editable.tc-glyphs-on {
+  --tc-glyph-w: 10px;
+}
+.tc-editable.tc-blame-on {
+  --tc-blame-w: 176px;
+}
 .tc-editable .trow {
-  /* Each side: [copy arrow + line number] [text]; a thin divider between the sides. */
-  grid-template-columns: 68px 1fr 14px 68px 1fr;
+  /* Each side: [gutter] [text]; a thin divider between the sides. */
+  grid-template-columns: var(--tc-ln) 1fr 14px var(--tc-ln) 1fr;
 }
 .tc-editable .trow .mid {
   background: var(--panel);
@@ -291,7 +307,7 @@
   --tc-band-chg: rgba(245, 158, 11, 0.22);
   --tc-band-del: rgba(239, 68, 68, 0.22);
   --tc-band-add: rgba(34, 197, 94, 0.22);
-  --tc-band-unimp: rgba(127, 166, 217, 0.18);
+  --tc-band-unimp: rgba(154, 173, 196, 0.18);
   /* Copy arrows: yellow block arrows with a dark outline, as in classic compare tools. */
   --tc-arrow-fill: #e8c547;
   --tc-arrow-hot: #ffd84d;
@@ -326,7 +342,7 @@
   min-width: 0;
 }
 .tc-editable .trow.tc-prow {
-  grid-template-columns: 68px 1fr;
+  grid-template-columns: var(--tc-ln) 1fr;
 }
 /* Right pane rows: the text cell is the 2nd child there too, so restate the right-side colours. */
 .tc-pane-right .k-changed > .tcell:nth-child(2) .seg-changed {
@@ -604,13 +620,7 @@
   color: var(--tc-moved-fg);
 }
 
-/* ---------- blame gutter: 170px of commit info before each line number ---------- */
-.tc-editable.tc-blame-on .trow {
-  grid-template-columns: 244px 1fr 14px 244px 1fr;
-}
-.tc-editable.tc-blame-on .trow.tc-prow {
-  grid-template-columns: 244px 1fr;
-}
+/* ---------- blame gutter: 170px of commit info before each line number (--tc-blame-w) ---------- */
 .tc-editable.tc-blame-on .trow .ln {
   display: flex;
   justify-content: space-between;
@@ -689,22 +699,13 @@
  * changing the DOM, so the nth-child colour rules still apply.
  */
 .tc-editable.tc-lgutter-right .trow {
-  grid-template-columns: 1fr 68px 14px 68px 1fr;
-}
-.tc-editable.tc-lgutter-right.tc-blame-on .trow {
-  grid-template-columns: 1fr 244px 14px 244px 1fr;
+  grid-template-columns: 1fr var(--tc-ln) 14px var(--tc-ln) 1fr;
 }
 .tc-editable.tc-lgutter-right .tc-pane-left .trow.tc-prow {
-  grid-template-columns: 1fr 68px;
-}
-.tc-editable.tc-lgutter-right.tc-blame-on .tc-pane-left .trow.tc-prow {
-  grid-template-columns: 1fr 244px;
+  grid-template-columns: 1fr var(--tc-ln);
 }
 .tc-editable.tc-lgutter-right .tc-pane-right .trow.tc-prow {
-  grid-template-columns: 68px 1fr;
-}
-.tc-editable.tc-lgutter-right.tc-blame-on .tc-pane-right .trow.tc-prow {
-  grid-template-columns: 244px 1fr;
+  grid-template-columns: var(--tc-ln) 1fr;
 }
 .tc-editable.tc-lgutter-right .trow > .tcell:nth-child(2) {
   order: -1;
@@ -738,6 +739,57 @@
 }
 .tc-editable.tc-lgutter-right .trow .ln[data-tc-side="left"].tc-edited {
   box-shadow: inset 3px 0 0 var(--tc-edited);
+}
+.tc-editable.tc-lgutter-right.tc-glyphs-on .trow .ln[data-tc-side="left"] {
+  padding-left: calc(8px + var(--tc-glyph-w));
+}
+.tc-editable.tc-lgutter-right .ln[data-tc-side="left"] .tc-glyph {
+  left: 3px;
+  right: auto;
+}
+.tc-editable.tc-lgutter-right.tc-glyphs-on .trow .ln[data-tc-side="left"].tc-syncln::after,
+.tc-editable.tc-lgutter-right.tc-glyphs-on .trow .ln[data-tc-side="left"].tc-syncpick::after {
+  right: auto;
+  left: calc(2px + var(--tc-glyph-w));
+}
+
+/*
+ * Change glyphs (pref textChangeGlyphs): + added, − removed, ~ changed and
+ * ≈ unimportant in a slot at the inner edge of the line-number gutter, so a
+ * difference never depends on colour alone. Moved lines keep their + or −
+ * in the moved-block colour. Sync dots step aside to make room.
+ */
+.tc-editable.tc-glyphs-on .trow .ln {
+  padding-right: calc(8px + var(--tc-glyph-w));
+}
+.tc-glyph {
+  position: absolute;
+  top: 0;
+  right: 3px;
+  width: calc(var(--tc-glyph-w) - 1px);
+  text-align: center;
+  font-size: min(var(--editor-font-size), 13px);
+  font-weight: 700;
+}
+.tc-glyph.g-changed {
+  color: var(--chg-glyph);
+}
+.tc-glyph.g-leftOnly {
+  color: var(--del-glyph);
+}
+.tc-glyph.g-rightOnly {
+  color: var(--add-glyph);
+}
+.tc-glyph.g-unimportant {
+  color: var(--unimportant);
+  font-weight: 400;
+}
+.tc-glyph.g-moved {
+  color: var(--tc-moved-fg);
+}
+.tc-editable.tc-glyphs-on .trow .ln.tc-syncln::after,
+.tc-editable.tc-glyphs-on .trow .ln.tc-syncpick::after {
+  right: calc(2px + var(--tc-glyph-w));
 }
 
 /* Isolated lines (right-click ▸ Isolate): their numbers are struck through. */
