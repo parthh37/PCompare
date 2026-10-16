@@ -510,6 +510,7 @@ impl VfsWrite for SftpFs {
             resume_write: true,
             range_read: true,
             folders: true,
+            serial_writes: false,
         }
     }
 

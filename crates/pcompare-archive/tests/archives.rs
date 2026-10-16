@@ -3,6 +3,7 @@
 use std::fs::{self, File};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use pcompare_archive::compare::StoredChecksums;
@@ -278,6 +279,59 @@ fn zip_write_delete_rename_round_trip() {
         .unwrap();
     assert_eq!(s, "brand new");
     assert!(z.by_name("new/empty/").is_ok());
+}
+
+#[test]
+fn zip_takes_writes_from_several_threads() {
+    // A copy into an archive has its walk looking at the archive while a
+    // worker writes; nothing may keep the old archive open while a write
+    // swaps the new one in (Windows: "Access is denied").
+    let (dir, archives) = setup();
+    let zip = dir.path().join("many.zip");
+    write_zip(&zip, FILES);
+    let r = archives.resolve(&s(&zip), true).unwrap().unwrap();
+    let fs_ = &*r.fs;
+    let done = AtomicBool::new(false);
+    std::thread::scope(|scope| {
+        scope.spawn(|| {
+            while !done.load(Ordering::Relaxed) {
+                assert!(fs_.stat("readme.txt").unwrap().is_some());
+            }
+        });
+        let writers: Vec<_> = (0..4)
+            .map(|t| {
+                scope.spawn(move || {
+                    for i in 0..5 {
+                        fs_.create_dir_all(&format!("t{t}")).unwrap();
+                        let body = format!("{t}.{i}");
+                        fs_.write(
+                            &format!("t{t}/{i}.txt"),
+                            0,
+                            &mut body.as_bytes(),
+                            &mut |_| Ok(()),
+                        )
+                        .unwrap();
+                    }
+                })
+            })
+            .collect();
+        for w in writers {
+            w.join().unwrap();
+        }
+        done.store(true, Ordering::Relaxed);
+    });
+    assert_eq!(
+        names(fs_, ""),
+        ["readme.txt", "src", "t0", "t1", "t2", "t3"]
+    );
+    for t in 0..4 {
+        for i in 0..5 {
+            assert_eq!(
+                read_all(fs_, &format!("t{t}/{i}.txt")),
+                format!("{t}.{i}").as_bytes()
+            );
+        }
+    }
 }
 
 fn find<'a>(entries: &'a [FolderEntry], rel: &str) -> &'a FolderEntry {

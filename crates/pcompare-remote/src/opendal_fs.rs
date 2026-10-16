@@ -270,6 +270,7 @@ impl VfsWrite for OpendalFs {
                     | ProviderKind::Dropbox
                     | ProviderKind::Gdrive
             ),
+            serial_writes: false,
         }
     }
 

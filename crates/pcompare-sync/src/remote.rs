@@ -837,6 +837,7 @@ mod tests {
         resume_write: true,
         range_read: true,
         folders: true,
+        serial_writes: false,
     };
     /// Like S3: no rename, no timestamps, folders implied.
     const OBJECT_STORE: WriteCaps = WriteCaps {
@@ -845,6 +846,7 @@ mod tests {
         resume_write: false,
         range_read: true,
         folders: false,
+        serial_writes: false,
     };
 
     /// A local folder posing as a remote: chosen capabilities, timestamps to
