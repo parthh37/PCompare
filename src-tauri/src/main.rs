@@ -484,7 +484,7 @@ fn main() {
             let config_dir = app.path().app_config_dir()?;
             let data_dir = app.path().app_data_dir()?;
             let cache_dir = app.path().app_cache_dir()?.join("remote");
-            let remote = RemoteManager::new(&config_dir, cache_dir, Box::new(KeyringSecrets));
+            let remote = RemoteManager::new(&config_dir, cache_dir, Box::new(KeyringSecrets::new(&config_dir)));
             remote.clear_cache();
             app.manage(AppState {
                 sessions: SessionStore::new(config_dir.join("sessions.json")),
@@ -492,7 +492,7 @@ fn main() {
                 watchers: watch::Watchers::default(),
                 db: pcompare_db::connection::ConnectionStore::new(
                     config_dir.join("db-connections.json"),
-                    Box::new(KeyringSecrets),
+                    Box::new(KeyringSecrets::new(&config_dir)),
                 ),
                 db_cancel: AtomicBool::new(false),
                 index: open_index(&data_dir),

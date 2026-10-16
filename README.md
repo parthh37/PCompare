@@ -78,7 +78,7 @@ Installed copies update themselves: PCompare checks for signed updates at startu
 
 ### Everywhere else
 
-- **Sources**: archives as folders (zip, tar, tar.gz / bz2 / xz, 7z; zip is writable), folder snapshots (`.pcsnap`), `git:` / `hg:` / `svn:` revisions, and remote profiles for Amazon S3 and compatibles, Azure Blob, Google Cloud Storage, Backblaze B2, FTP / FTPS, SFTP, WebDAV, OneDrive, SharePoint, Dropbox, Google Drive and GitHub (read-only). Secrets live in the OS keychain; saved connection lists are encrypted (AES-256-GCM).
+- **Sources**: archives as folders (zip, tar, tar.gz / bz2 / xz, 7z; zip is writable), folder snapshots (`.pcsnap`), `git:` / `hg:` / `svn:` revisions, and remote profiles for Amazon S3 and compatibles, Azure Blob, Google Cloud Storage, Backblaze B2, FTP / FTPS, SFTP, WebDAV, OneDrive, SharePoint, Dropbox, Google Drive and GitHub (read-only). Secrets and saved connection lists are encrypted (AES-256-GCM) with a key kept in the OS keychain.
 - **Documents**: Word (docx, doc), OpenDocument, RTF and PDF compared as text, with per-extension file-format rules and external converters.
 - **Sync Automation**: interval, daily / weekly, cron, real-time and at-startup triggers · empty-side and mass-deletion guards, timeouts, retries · notifications to Microsoft Teams, Slack, email (SMTP), webhooks and the desktop · runs from the tray and at sign-in.
 - **Sessions & workspaces**: saved sessions, auto-saved recent sessions, named workspaces of open tabs, and import of saved sessions from other compare and sync tools.
