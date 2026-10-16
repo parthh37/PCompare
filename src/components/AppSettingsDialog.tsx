@@ -18,7 +18,8 @@ import {
   type Prefs,
   type ThemePref,
 } from "../lib/prefs";
-import { toneColor, type FolderLook, type Tone } from "../lib/folderColors";
+import { isMergeTone, mergeRowTone, mergeSideTone, toneColor, type FolderLook, type Tone } from "../lib/folderColors";
+import type { MergeClass } from "../lib/syncApi";
 import { SESSIONS } from "../lib/sessions";
 import { cssVar, DIFF_COLOR_VARS } from "../lib/theme";
 import type { Updater } from "../lib/useUpdater";
@@ -246,6 +247,46 @@ function FolderPreview() {
   );
 }
 
+/** Folder Merge's own roles (see mergeSideTone in folderColors.ts). */
+const MERGE_COLOR_ROWS: { key: DiffColorKey; label: string }[] = [
+  { key: "mergeLeft", label: "Left change" },
+  { key: "mergeRight", label: "Right change" },
+  { key: "mergeMergeable", label: "Mergeable (changes on both sides that merge cleanly)" },
+  { key: "mergeConflict", label: "Conflict" },
+];
+
+/** A few Folder Merge rows drawn with the live palette: left, base and right, each in its own tone. */
+function MergePreview() {
+  const rows: [MergeClass, string][] = [
+    ["leftChanged", "main.rs"],
+    ["rightChanged", "lib.rs"],
+    ["autoMerged", "notes.txt"],
+    ["conflict", "config.toml"],
+    ["unchanged", "README.md"],
+  ];
+  return (
+    <div className="diff-preview folder-preview merge-preview">
+      {rows.map(([cls, name]) => {
+        const role = mergeRowTone(cls);
+        const wash = isMergeTone(role) ? `color-mix(in srgb, ${toneColor(role)} var(--fm-tint), transparent)` : undefined;
+        return (
+          <div className="dp-row" key={name} style={{ background: wash }}>
+            {(["left", "base", "right"] as const).map((side) => {
+              const tone = mergeSideTone(cls, side);
+              return (
+                <span className="fp-side" key={side}>
+                  <ToneSpot tone={tone} />
+                  <span style={{ color: toneColor(tone) }}>{name}</span>
+                </span>
+              );
+            })}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 interface Rgba {
   r: number;
   g: number;
@@ -421,6 +462,17 @@ function AppearancePage({ prefs, set }: { prefs: Prefs; set: SetPrefs }) {
           the two most important colours below it on that side.
         </small>
         <FolderPreview />
+      </fieldset>
+      <fieldset>
+        <legend>Folder Merge colours</legend>
+        {MERGE_COLOR_ROWS.map((r) => (
+          <ColorRow key={r.key} label={r.label} colorKey={r.key} prefs={prefs} set={set} />
+        ))}
+        <small className="muted settings-hint">
+          Left, base and right are each coloured on their own: a change in the colour of the side it came from, the
+          copies it replaces in Folder Compare&apos;s Older colour. Rows with a change get a light wash of its colour.
+        </small>
+        <MergePreview />
       </fieldset>
       <fieldset>
         <legend>Text Compare layout</legend>

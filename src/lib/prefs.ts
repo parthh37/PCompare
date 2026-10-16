@@ -25,7 +25,11 @@ export type DiffColorKey =
   | "folderDifferent"
   | "folderOlder"
   | "folderOrphan"
-  | "folderUnknown";
+  | "folderUnknown"
+  | "mergeLeft"
+  | "mergeRight"
+  | "mergeMergeable"
+  | "mergeConflict";
 
 export interface Prefs {
   /** Check GitHub Releases for updates in the background. */

@@ -18,6 +18,10 @@ export const DIFF_COLOR_VARS: Record<DiffColorKey, string> = {
   folderOlder: "--fc-older",
   folderOrphan: "--fc-orphan",
   folderUnknown: "--fc-unknown",
+  mergeLeft: "--fm-left",
+  mergeRight: "--fm-right",
+  mergeMergeable: "--fm-mergeable",
+  mergeConflict: "--fm-conflict",
 };
 
 const darkQuery = window.matchMedia("(prefers-color-scheme: dark)");

@@ -1,6 +1,7 @@
 // Folder-compare status glyphs: per-detail icons for files, each side's
 // folder icon coloured by what lies below it there (see folderColors.ts), the
-// colour spot before file names, and the View > Legend popover.
+// colour spot before file names, and the legend popovers (Folder Compare's
+// View > Legend, Folder Merge's toolbar Legend).
 import {
   ArrowLeft,
   ArrowRight,
@@ -10,14 +11,17 @@ import {
   EqualApproximately,
   EqualNot,
   EyeOff,
+  Minus,
   TriangleAlert,
   type LucideIcon,
 } from "lucide-react";
-import { useEffect, useId, useLayoutEffect, useRef } from "react";
+import { useEffect, useId, useLayoutEffect, useRef, type ReactNode } from "react";
 import type { FolderEntry, StatusDetail } from "../lib/api";
-import { toneColor, type FolderLook, type Tone } from "../lib/folderColors";
+import { isMergeTone, toneColor, type AnyTone, type FolderLook } from "../lib/folderColors";
 import { countsNewer, detailOf } from "../lib/folderTree";
 import { FileIcon } from "./icons";
+// The glyphs' own styles (.fc-folder, .fc-spot), for every view that borrows them.
+import "./FolderCompare.css";
 
 export const DETAIL_ICON: Record<StatusDetail, LucideIcon> = {
   unknown: CircleDashed,
@@ -104,7 +108,7 @@ export function FolderToneIcon({ look, open, size = 16 }: { look: FolderLook; op
 }
 
 /** The colour spot before a file name: keeps the row's cue visible under a selection. */
-export const ToneSpot = ({ tone }: { tone: Tone }) => (
+export const ToneSpot = ({ tone }: { tone: AnyTone }) => (
   <span className="fc-spot" style={{ background: toneColor(tone) }} aria-hidden />
 );
 
@@ -116,7 +120,11 @@ export function StatusGlyph({ entry }: { entry: FolderEntry }) {
   return <Icon size={13} />;
 }
 
-const FILE_ROWS: [Tone, string][] = [
+/** A legend's file rows (a colour and what it means) and folder rows (an icon and what it holds). */
+type FileRows = [AnyTone, string][];
+type FolderRows = [FolderLook, string][];
+
+const FILE_ROWS: FileRows = [
   ["same", "Same"],
   ["newer", "Newer than the other side"],
   ["different", "Different, neither side newer"],
@@ -126,7 +134,7 @@ const FILE_ROWS: [Tone, string][] = [
   ["error", "Error"],
 ];
 
-const FOLDER_ROWS: [FolderLook, string][] = [
+const FOLDER_ROWS: FolderRows = [
   [{ tones: ["newer"] }, "Holds newer or different files"],
   [{ tones: ["orphan"] }, "Holds orphans, or is one"],
   [{ tones: ["older"] }, "Holds only older files"],
@@ -138,16 +146,70 @@ const FOLDER_ROWS: [FolderLook, string][] = [
   [{ tones: ["unknown"], unopened: true }, "Not opened yet"],
 ];
 
-/** View > Legend: what the row colours and status glyphs mean. */
-export function LegendPopover({
-  x,
-  y,
-  onClose,
-}: {
+// Folder Merge, three-way: each side by what its copy is in the merge (mergeSideTone).
+const MERGE_FILE_ROWS: FileRows = [
+  ["same", "Unchanged"],
+  ["left", "Changed on the left, or the same on both"],
+  ["right", "Changed on the right"],
+  ["mergeable", "Changed on both sides, merges cleanly"],
+  ["conflict", "Conflict: changed differently on both sides"],
+  ["older", "Older: the copy a change replaces"],
+  ["error", "Error"],
+];
+
+const MERGE_FOLDER_ROWS: FolderRows = [
+  [{ tones: ["conflict"] }, "Holds conflicts"],
+  [{ tones: ["conflict", "mergeable"] }, "Conflicts and clean merges"],
+  [{ tones: ["mergeable"] }, "Changes that merge cleanly"],
+  [{ tones: ["left"] }, "Holds left changes"],
+  [{ tones: ["left", "older"] }, "Left changes and older copies"],
+  [{ tones: ["right"] }, "Holds right changes"],
+  [{ tones: ["right", "older"] }, "Right changes and older copies"],
+  [{ tones: ["older"] }, "Holds only older copies"],
+  [{ tones: ["same"] }, "Nothing inside changed"],
+];
+
+// Folder Merge, two-way: no base, so it reads like Folder Compare, with conflicts for
+// differences it can't settle by date. Conflicts and newer files share a colour by
+// default, so their folder icons share a row.
+const MERGE_TWO_WAY_FILE_ROWS: FileRows = [
+  ["same", "Same"],
+  ["newer", "Newer than the other side"],
+  ["older", "Older than the other side"],
+  ["orphan", "Orphan: only on this side"],
+  ["conflict", "Conflict: different, neither side newer"],
+  ["error", "Error"],
+];
+
+const MERGE_TWO_WAY_FOLDER_ROWS: FolderRows = [
+  [{ tones: ["conflict"] }, "Holds conflicts or newer files"],
+  [{ tones: ["orphan"] }, "Holds orphans, or is one"],
+  [{ tones: ["newer", "orphan"] }, "Newer files and orphans"],
+  [{ tones: ["newer", "older"] }, "Newer and older files"],
+  [{ tones: ["orphan", "older"] }, "Orphans and older files"],
+  [{ tones: ["older"] }, "Holds only older files"],
+  [{ tones: ["same"] }, "Everything inside is the same"],
+];
+
+interface PopoverProps {
   x: number;
   y: number;
   onClose: () => void;
-}) {
+}
+
+/**
+ * A legend popover at (x, y), kept inside the window; a click outside it or
+ * Escape closes it. File rows in a Folder Merge role carry that role's row wash,
+ * as they do in the view.
+ */
+function Legend({
+  x,
+  y,
+  onClose,
+  files,
+  folders,
+  children,
+}: PopoverProps & { files: FileRows; folders: FolderRows; children: ReactNode }) {
   const ref = useRef<HTMLDivElement>(null);
   useLayoutEffect(() => {
     const el = ref.current;
@@ -171,8 +233,8 @@ export function LegendPopover({
   return (
     <div className="fc-legend" ref={ref} role="dialog" aria-label="Legend">
       <h4>Files</h4>
-      {FILE_ROWS.map(([tone, text]) => (
-        <div key={tone} className="fc-legend-row">
+      {files.map(([tone, text]) => (
+        <div key={tone} className={`fc-legend-row${isMergeTone(tone) ? ` fmr-${tone}` : ""}`}>
           <span className="fcell status">
             <ToneSpot tone={tone} />
           </span>
@@ -182,7 +244,7 @@ export function LegendPopover({
         </div>
       ))}
       <h4>Folders</h4>
-      {FOLDER_ROWS.map(([look, text]) => (
+      {folders.map(([look, text]) => (
         <div key={text} className="fc-legend-row">
           <span className="fcell status">
             <FolderToneIcon look={look} />
@@ -190,12 +252,43 @@ export function LegendPopover({
           <span className="fcell name">{text}</span>
         </div>
       ))}
-      <p className="muted">
-        Each side has its own folder icon, showing the two most important
-        colours below it on that side: red, then purple, then grey. Hover a
-        folder to see how many rows below have each status. Ignored rows show{" "}
-        <EyeOff size={11} /> and count as same.
-      </p>
+      {children}
     </div>
   );
 }
+
+/** Folder Compare's View > Legend: what the row colours and status glyphs mean. */
+export const LegendPopover = (props: PopoverProps) => (
+  <Legend {...props} files={FILE_ROWS} folders={FOLDER_ROWS}>
+    <p className="muted">
+      Each side has its own folder icon, showing the two most important
+      colours below it on that side: red, then purple, then grey. Hover a
+      folder to see how many rows below have each status. Ignored rows show{" "}
+      <EyeOff size={11} /> and count as same.
+    </p>
+  </Legend>
+);
+
+/** Folder Merge's Legend: each side's colours, three-way or (without a base) two-way. */
+export const MergeLegendPopover = ({ twoWay, ...props }: PopoverProps & { twoWay: boolean }) =>
+  twoWay ? (
+    <Legend {...props} files={MERGE_TWO_WAY_FILE_ROWS} folders={MERGE_TWO_WAY_FOLDER_ROWS}>
+      <p className="muted">
+        Without a base, the merge reads like Folder Compare. Each side's folder
+        icon shows the two most important colours below it on that side:
+        conflicts first, then newer files, orphans and older files. Conflicts
+        carry a light wash of their colour; with Take newer off, every
+        difference is one.
+      </p>
+    </Legend>
+  ) : (
+    <Legend {...props} files={MERGE_FILE_ROWS} folders={MERGE_FOLDER_ROWS}>
+      <p className="muted">
+        Changes include additions and deletions (a <Minus size={11} /> marks
+        where a file was deleted). Changed file rows carry a light wash of
+        their colour. Each side's folder icon shows the two most important
+        colours below it on that side: conflicts first, then clean merges,
+        left changes, right changes and older copies.
+      </p>
+    </Legend>
+  );
