@@ -27,7 +27,7 @@ pub enum ProviderKind {
 #[serde(rename_all = "camelCase")]
 pub enum FieldKind {
     Text,
-    /// Stored in the OS keychain, never written to disk or sent back to the UI.
+    /// Sealed in `secrets.vault`, never written in plain text or sent back to the UI.
     Secret,
     Number,
     Checkbox,

@@ -15,6 +15,10 @@
 //! A store passes the path it always used (`profiles.json`); the sealed file
 //! sits beside it as `profiles.vault`, and an existing plaintext file is
 //! sealed and removed the first time it is read.
+//!
+//! The passwords and tokens themselves are sealed the same way, in
+//! `secrets.vault` ([`VaultSecrets`]), so the file key is PCompare's only
+//! keychain entry.
 
 use crate::secrets::SecretStore;
 use crate::store::{now_ms, read_json};
@@ -22,16 +26,18 @@ use crate::{CoreError, Result};
 use aes_gcm::aead::{Aead, Generate, Key, KeyInit, Nonce, Payload};
 use aes_gcm::Aes256Gcm;
 use serde::de::DeserializeOwned;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Mutex, MutexGuard, OnceLock};
 
 const MAGIC: &[u8; 8] = b"PCVAULT1";
 const NONCE_LEN: usize = 12;
 /// Keychain slot of the file key. `~` never appears in a profile id, so it
-/// can't collide with a connection's own secrets.
-const KEY_OWNER: &str = "~vault";
+/// can't collide with a connection's own secrets. Every `~vault` entry
+/// stays in the keychain itself (see [`VaultSecrets`]).
+pub const KEY_OWNER: &str = "~vault";
 const KEY_NAME: &str = "file-key";
 
 /// One sealed JSON file.
@@ -163,6 +169,149 @@ impl SealedFile {
     }
 }
 
+/// Connection secrets sealed in one file under the file key, instead of one
+/// keychain entry each.
+///
+/// Why: on macOS every keychain entry has its own access list, and a build
+/// without a stable signing identity is trusted by its exact binary hash.
+/// So after each update, every entry asked again, one dialog per entry, and
+/// "Always Allow" covered only the entry it was clicked on. With a single
+/// entry (the file key) there is at most one dialog per build.
+///
+/// Secrets that older versions kept as separate keychain entries move into
+/// the file the first time they're read.
+pub struct VaultSecrets<K> {
+    /// Holds the file key, plus entries older versions wrote.
+    keychain: K,
+    file: SealedFile,
+}
+
+#[derive(Default, Serialize, Deserialize)]
+struct SecretFile {
+    /// owner → key → value. `null` marks a secret deleted here, so an old
+    /// keychain entry that couldn't be removed doesn't come back.
+    #[serde(default)]
+    secrets: BTreeMap<String, BTreeMap<String, Option<String>>>,
+}
+
+impl SecretFile {
+    fn slot(&self, owner: &str, key: &str) -> Option<&Option<String>> {
+        self.secrets.get(owner)?.get(key)
+    }
+
+    /// Stores `value` (`None` = a deletion marker); returns what was there.
+    fn put(&mut self, owner: &str, key: &str, value: Option<String>) -> Option<Option<String>> {
+        self.secrets.entry(owner.into()).or_default().insert(key.into(), value)
+    }
+
+    /// Forgets the slot entirely; true if there was one.
+    fn remove(&mut self, owner: &str, key: &str) -> bool {
+        let Some(keys) = self.secrets.get_mut(owner) else {
+            return false;
+        };
+        let had = keys.remove(key).is_some();
+        if keys.is_empty() {
+            self.secrets.remove(owner);
+        }
+        had
+    }
+}
+
+impl<K: SecretStore> VaultSecrets<K> {
+    /// Secrets in `<dir>/secrets.vault`.
+    pub fn new(dir: &Path, keychain: K) -> Self {
+        Self {
+            keychain,
+            file: SealedFile::new(dir.join("secrets.json")),
+        }
+    }
+
+    /// Every store in the process shares the file; each change is a
+    /// read-modify-write under this lock. Values aren't cached, so two
+    /// stores never see stale copies of each other's writes.
+    fn guard() -> MutexGuard<'static, ()> {
+        static LOCK: Mutex<()> = Mutex::new(());
+        LOCK.lock().unwrap_or_else(|p| p.into_inner())
+    }
+
+    fn read(&self) -> Result<SecretFile> {
+        self.file.read(&self.keychain)
+    }
+
+    fn write(&self, file: &SecretFile) -> Result<()> {
+        self.file.write(&self.keychain, file)
+    }
+
+    /// A secret now lives in the file; deal with the keychain entry an
+    /// older version may have left for it. The file's copy wins on every
+    /// read either way.
+    ///
+    /// `keychain.delete` must not read the entry first: on macOS, reading
+    /// an entry another build wrote asks for the password, while deleting
+    /// one just fails quietly.
+    fn retire_legacy(&self, owner: &str, key: &str) {
+        // TODO(you): working default = delete the old entry, best effort.
+        // Keeping it instead would let a downgrade to an older version still
+        // find the secret, at the cost of a stale copy in the keychain.
+        let _ = self.keychain.delete(owner, key);
+    }
+}
+
+impl<K: SecretStore> SecretStore for VaultSecrets<K> {
+    fn get(&self, owner: &str, key: &str) -> Result<Option<String>> {
+        if owner == KEY_OWNER {
+            return self.keychain.get(owner, key);
+        }
+        let _g = Self::guard();
+        let mut file = self.read()?;
+        if let Some(slot) = file.slot(owner, key) {
+            return Ok(slot.clone());
+        }
+        let Some(value) = self.keychain.get(owner, key)? else {
+            return Ok(None);
+        };
+        file.put(owner, key, Some(value.clone()));
+        // If the file can't be written, the old entry stays the only copy.
+        if self.write(&file).is_ok() {
+            self.retire_legacy(owner, key);
+        }
+        Ok(Some(value))
+    }
+
+    fn set(&self, owner: &str, key: &str, value: &str) -> Result<()> {
+        if owner == KEY_OWNER {
+            return self.keychain.set(owner, key, value);
+        }
+        let _g = Self::guard();
+        let mut file = self.read()?;
+        let before = file.put(owner, key, Some(value.into()));
+        self.write(&file)?;
+        if !matches!(before, Some(Some(_))) {
+            self.retire_legacy(owner, key);
+        }
+        Ok(())
+    }
+
+    fn delete(&self, owner: &str, key: &str) -> Result<()> {
+        if owner == KEY_OWNER {
+            return self.keychain.delete(owner, key);
+        }
+        let _g = Self::guard();
+        let mut file = self.read()?;
+        // The user asked for it gone, so an older version's entry goes too.
+        // One that can't be removed is masked by a marker instead.
+        let changed = if self.keychain.delete(owner, key).is_ok() {
+            file.remove(owner, key)
+        } else {
+            file.put(owner, key, None) != Some(None)
+        };
+        if changed {
+            self.write(&file)?;
+        }
+        Ok(())
+    }
+}
+
 fn to_hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
@@ -267,6 +416,131 @@ mod tests {
         let f = SealedFile::new(dir.path().join("profiles.json"));
         assert!(f.read::<Data>(&Refuses).unwrap().is_empty());
         assert!(f.write(&Refuses, &sample()).is_err(), "a locked keychain refuses the save");
+    }
+
+    /// A keychain as macOS treats it after an update: every read of an
+    /// entry an older build wrote is a dialog, and with `stuck` such entries
+    /// can't be deleted either.
+    #[derive(Default)]
+    struct Keychain {
+        entries: Mutex<BTreeMap<(String, String), String>>,
+        old: Mutex<std::collections::BTreeSet<(String, String)>>,
+        stuck: bool,
+        dialogs: std::sync::atomic::AtomicUsize,
+    }
+
+    impl Keychain {
+        fn with_old(stuck: bool, entries: &[(&str, &str, &str)]) -> Self {
+            let k = Keychain { stuck, ..Default::default() };
+            for (owner, key, value) in entries {
+                let id = (owner.to_string(), key.to_string());
+                k.entries.lock().unwrap().insert(id.clone(), value.to_string());
+                k.old.lock().unwrap().insert(id);
+            }
+            k
+        }
+        fn len(&self) -> usize {
+            self.entries.lock().unwrap().len()
+        }
+        fn dialogs(&self) -> usize {
+            self.dialogs.load(std::sync::atomic::Ordering::SeqCst)
+        }
+    }
+
+    impl SecretStore for Keychain {
+        fn get(&self, owner: &str, key: &str) -> Result<Option<String>> {
+            let id = (owner.to_string(), key.to_string());
+            if self.old.lock().unwrap().contains(&id) {
+                self.dialogs.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            }
+            Ok(self.entries.lock().unwrap().get(&id).cloned())
+        }
+        fn set(&self, owner: &str, key: &str, value: &str) -> Result<()> {
+            let id = (owner.to_string(), key.to_string());
+            self.old.lock().unwrap().remove(&id);
+            self.entries.lock().unwrap().insert(id, value.into());
+            Ok(())
+        }
+        fn delete(&self, owner: &str, key: &str) -> Result<()> {
+            let id = (owner.to_string(), key.to_string());
+            if self.stuck && self.old.lock().unwrap().contains(&id) {
+                return Err(CoreError::Other("not this build's entry".into()));
+            }
+            self.old.lock().unwrap().remove(&id);
+            self.entries.lock().unwrap().remove(&id);
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn every_secret_shares_the_one_keychain_entry() {
+        let dir = tempfile::tempdir().unwrap();
+        let v = VaultSecrets::new(dir.path(), Keychain::default());
+        // Longer than one Windows Credential Manager entry: no chunks now.
+        let token = "t".repeat(5000);
+        v.set("dropbox", "refresh_token", &token).unwrap();
+        v.set("dropbox", "client_secret", "s3cret").unwrap();
+        v.set("db:prod", "password", "hunter2").unwrap();
+        assert_eq!(v.get("dropbox", "refresh_token").unwrap().as_deref(), Some(token.as_str()));
+        assert_eq!(v.get("db:prod", "password").unwrap().as_deref(), Some("hunter2"));
+        assert_eq!(v.get("dropbox", "missing").unwrap(), None);
+        assert_eq!(v.keychain.len(), 1, "only the file key");
+        let raw = fs::read(dir.path().join("secrets.vault")).unwrap();
+        assert!(!String::from_utf8_lossy(&raw).contains("hunter2"));
+    }
+
+    #[test]
+    fn old_entries_move_into_the_file_on_first_read() {
+        let dir = tempfile::tempdir().unwrap();
+        let old = [("dropbox", "refresh_token", "tok"), ("dropbox", "client_secret", "sec")];
+        let v = VaultSecrets::new(dir.path(), Keychain::with_old(false, &old));
+        assert_eq!(v.get("dropbox", "refresh_token").unwrap().as_deref(), Some("tok"));
+        assert_eq!(v.get("dropbox", "refresh_token").unwrap().as_deref(), Some("tok"));
+        assert_eq!(v.keychain.dialogs(), 1, "one dialog, then the file answers");
+        assert_eq!(v.get("dropbox", "client_secret").unwrap().as_deref(), Some("sec"));
+        assert_eq!(v.keychain.len(), 1, "old entries retired; only the file key is left");
+    }
+
+    #[test]
+    fn an_old_entry_that_cannot_be_removed_stays_masked() {
+        let dir = tempfile::tempdir().unwrap();
+        let old = [("p", "password", "old"), ("p", "token", "old")];
+        let v = VaultSecrets::new(dir.path(), Keychain::with_old(true, &old));
+        // Deleting never reads it, so no dialog, and it doesn't come back.
+        v.delete("p", "password").unwrap();
+        assert_eq!(v.get("p", "password").unwrap(), None);
+        assert_eq!(v.keychain.dialogs(), 0);
+        // A newer value wins over the copy left behind.
+        v.set("p", "token", "new").unwrap();
+        assert_eq!(v.get("p", "token").unwrap().as_deref(), Some("new"));
+        v.delete("p", "token").unwrap();
+        assert_eq!(v.get("p", "token").unwrap(), None);
+        assert_eq!(v.keychain.dialogs(), 0);
+    }
+
+    #[test]
+    fn stores_sharing_a_folder_see_each_others_changes() {
+        let dir = tempfile::tempdir().unwrap();
+        let keychain = Keychain::default();
+        let a = VaultSecrets::new(dir.path(), &keychain);
+        let b = VaultSecrets::new(dir.path(), &keychain);
+        a.set("p", "password", "one").unwrap();
+        assert_eq!(b.get("p", "password").unwrap().as_deref(), Some("one"));
+        b.set("p", "password", "two").unwrap();
+        assert_eq!(a.get("p", "password").unwrap().as_deref(), Some("two"));
+        b.delete("p", "password").unwrap();
+        assert_eq!(a.get("p", "password").unwrap(), None);
+    }
+
+    #[test]
+    fn other_sealed_files_take_their_key_from_the_keychain_through_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let v = VaultSecrets::new(dir.path(), Keychain::default());
+        v.set("p", "password", "x").unwrap();
+        let f = SealedFile::new(dir.path().join("profiles.json"));
+        f.write(&v, &sample()).unwrap();
+        assert_eq!(f.read::<Data>(&v).unwrap(), sample());
+        assert_eq!(v.keychain.len(), 1, "profiles.vault and secrets.vault share the key");
     }
 
     #[test]

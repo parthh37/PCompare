@@ -452,7 +452,7 @@ fn start(app: &AppHandle) -> tauri::Result<()> {
     let store = Arc::new(TaskStore::new(config_dir.join("automation.json")));
     let channels = Arc::new(ChannelStore::new(
         config_dir.join("notify-channels.json"),
-        Box::new(KeyringSecrets),
+        Box::new(KeyringSecrets::new(&config_dir)),
     ));
     let settings = store.settings().unwrap_or_else(|e| {
         eprintln!("automation: {e}");
