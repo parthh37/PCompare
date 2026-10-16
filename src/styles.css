@@ -22,6 +22,25 @@
   --filtered: #3cc6c0;
   --different: #f2777a;
   --warn: #f5a35c;
+  /* Folder Compare's colour cues (folderColors.ts), each overridable in Settings → Colors:
+     same, the newer copy (or a difference with neither newer), the older copy, orphans,
+     not compared yet, and a folder row's own size and date. */
+  --fc-same: var(--text);
+  --fc-newer: #ec625c;
+  --fc-different: #ec625c;
+  --fc-older: #808080;
+  --fc-orphan: #a287f8;
+  --fc-unknown: #808080;
+  --fc-info: #606060;
+  /* Folder Merge's own roles (folderColors.ts), also overridable in Settings → Colors: a change
+     made on the left, one made on the right, changes on both sides that merge cleanly, and a
+     conflict. Older and same copies use the --fc-* colours. Rows carry a --fm-tint wash of
+     their role. */
+  --fm-left: #63dadc;
+  --fm-right: #dc5be2;
+  --fm-mergeable: #ee702c;
+  --fm-conflict: #ec625c;
+  --fm-tint: 18%;
   --ok: #6fcf97;
   --hatch: repeating-linear-gradient(135deg, transparent 0 5px, rgba(255, 255, 255, 0.035) 5px 10px);
   /*
@@ -55,7 +74,6 @@
   --del-fg: #f87171;
   --add-fg: #4ade80;
   --key-fg: #c9d6ff;
-  --left-fg: #8fb8ff;
   --comment-fg: #6f7c93;
   --checker-a: #2a2f3a;
   --checker-b: #3a414e;
@@ -100,6 +118,17 @@
   --filtered: #0b8580;
   --different: #b32c3e;
   --warn: #b35f0c;
+  --fc-newer: #ff0000;
+  --fc-different: #ff0000;
+  --fc-older: #808080;
+  --fc-orphan: #6a00d5;
+  --fc-unknown: #808080;
+  --fc-info: #808080;
+  --fm-left: #00bfbf;
+  --fm-right: #9f00d5;
+  --fm-mergeable: #d56a00;
+  --fm-conflict: #ff0000;
+  --fm-tint: 13%;
   --ok: #1d8049;
   --hatch: repeating-linear-gradient(135deg, transparent 0 5px, rgba(0, 0, 0, 0.045) 5px 10px);
   --glyph-ink: #000;
@@ -121,7 +150,6 @@
   --add-fg: #15803d;
   --key-fg: #2b4fa8;
   /* deep cobalt: darker than the right side's purple (--orphan), so Merge's two sides stay apart for red-green colour-blind eyes */
-  --left-fg: #1e439e;
   --comment-fg: #7b8597;
   --checker-a: #e7eaef;
   --checker-b: #d2d7df;
@@ -657,9 +685,6 @@ input[type="radio"]:focus-visible {
 .fcell.status {
   text-align: center;
   color: var(--muted);
-}
-.fcell.newer {
-  font-weight: 650;
 }
 .chevron {
   display: inline-block;
@@ -1513,17 +1538,11 @@ button,
   display: block;
   flex-shrink: 0;
 }
-/* Older of two differing files: grey (the newer stays red). */
-.s-different .fcell.name.older,
-.s-different .fcell.older {
-  color: var(--muted);
-}
 /* Suppress filters: what the filters leave out, in teal
    (a pair filtered on one side only on that side). After the rules above so
    it beats the status colours at equal specificity. */
 .frow .fcell.filtered,
 .frow .fcell.name.filtered,
-.s-different .fcell.name.older.filtered,
 .s-filtered-fg {
   color: var(--filtered);
 }
@@ -1635,6 +1654,30 @@ button,
 }
 .path-recent-forget:hover {
   color: var(--text);
+}
+/* typing a local path lists that folder instead: "In C:\Users\", then its entries */
+.path-recent-in {
+  font-family: var(--mono);
+  text-transform: none;
+  letter-spacing: 0;
+}
+.path-recent-icon {
+  align-self: center;
+  display: inline-flex;
+  color: var(--muted);
+}
+.path-recent-name.path-recent-disk {
+  flex: 1;
+  max-width: none;
+  font-weight: 400;
+}
+.path-recent-disk b {
+  font-weight: 600;
+}
+.path-recent-more {
+  padding: 4px 10px 2px;
+  font-size: 11px;
+  color: var(--muted);
 }
 
 /* ---------- Viewer toolbar buttons (StackButton) ---------- */

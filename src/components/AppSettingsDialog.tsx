@@ -18,10 +18,13 @@ import {
   type Prefs,
   type ThemePref,
 } from "../lib/prefs";
+import { isMergeTone, mergeRowTone, mergeSideTone, toneColor, type FolderLook, type Tone } from "../lib/folderColors";
+import type { MergeClass } from "../lib/syncApi";
 import { SESSIONS } from "../lib/sessions";
 import { cssVar, DIFF_COLOR_VARS } from "../lib/theme";
 import type { Updater } from "../lib/useUpdater";
 import "./AppShell.css";
+import { FolderToneIcon, ToneSpot } from "./FolderStatusLegend";
 import { Modal } from "./Modal";
 import { GitBranch } from "lucide-react";
 import { VcsSetupPage } from "./VcsSetup";
@@ -198,6 +201,92 @@ const COLOR_ROWS: { key: DiffColorKey; label: string }[] = [
   { key: "unimportant", label: "Unimportant text" },
 ];
 
+/** Folder Compare's colour cues (see folderColors.ts). */
+const FOLDER_COLOR_ROWS: { key: DiffColorKey; label: string }[] = [
+  { key: "folderSame", label: "Same" },
+  { key: "folderNewer", label: "Newer" },
+  { key: "folderDifferent", label: "Different (neither side newer)" },
+  { key: "folderOlder", label: "Older" },
+  { key: "folderOrphan", label: "Orphan (only on one side)" },
+  { key: "folderUnknown", label: "Not compared yet" },
+];
+
+/** A few Folder Compare rows drawn with the live palette: each side's folder icon, then files. */
+function FolderPreview() {
+  const rows: [FolderLook | Tone | null, string, FolderLook | Tone | null, string][] = [
+    [{ tones: ["newer", "orphan"] }, "src", { tones: ["newer", "older"] }, "src"],
+    ["newer", "main.rs", "older", "main.rs"],
+    ["orphan", "notes.txt", null, ""],
+    ["older", "lib.rs", "newer", "lib.rs"],
+    ["same", "README.md", "same", "README.md"],
+  ];
+  const side = (look: FolderLook | Tone | null, name: string, indent: boolean) => (
+    <span className="fp-side" style={{ paddingLeft: indent ? 18 : 4 }}>
+      {look === null ? null : typeof look === "string" ? (
+        <>
+          <ToneSpot tone={look} />
+          <span style={{ color: toneColor(look) }}>{name}</span>
+        </>
+      ) : (
+        <>
+          <FolderToneIcon look={look} open />
+          <span>{name}</span>
+        </>
+      )}
+    </span>
+  );
+  return (
+    <div className="diff-preview folder-preview">
+      {rows.map(([l, ln, r, rn], i) => (
+        <div className="dp-row" key={i}>
+          {side(l, ln, i > 0)}
+          {side(r, rn, i > 0)}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/** Folder Merge's own roles (see mergeSideTone in folderColors.ts). */
+const MERGE_COLOR_ROWS: { key: DiffColorKey; label: string }[] = [
+  { key: "mergeLeft", label: "Left change" },
+  { key: "mergeRight", label: "Right change" },
+  { key: "mergeMergeable", label: "Mergeable (changes on both sides that merge cleanly)" },
+  { key: "mergeConflict", label: "Conflict" },
+];
+
+/** A few Folder Merge rows drawn with the live palette: left, base and right, each in its own tone. */
+function MergePreview() {
+  const rows: [MergeClass, string][] = [
+    ["leftChanged", "main.rs"],
+    ["rightChanged", "lib.rs"],
+    ["autoMerged", "notes.txt"],
+    ["conflict", "config.toml"],
+    ["unchanged", "README.md"],
+  ];
+  return (
+    <div className="diff-preview folder-preview merge-preview">
+      {rows.map(([cls, name]) => {
+        const role = mergeRowTone(cls);
+        const wash = isMergeTone(role) ? `color-mix(in srgb, ${toneColor(role)} var(--fm-tint), transparent)` : undefined;
+        return (
+          <div className="dp-row" key={name} style={{ background: wash }}>
+            {(["left", "base", "right"] as const).map((side) => {
+              const tone = mergeSideTone(cls, side);
+              return (
+                <span className="fp-side" key={side}>
+                  <ToneSpot tone={tone} />
+                  <span style={{ color: toneColor(tone) }}>{name}</span>
+                </span>
+              );
+            })}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 interface Rgba {
   r: number;
   g: number;
@@ -362,6 +451,28 @@ function AppearancePage({ prefs, set }: { prefs: Prefs; set: SetPrefs }) {
             <RotateCcw size={13} /> Reset all colours
           </button>
         </div>
+      </fieldset>
+      <fieldset>
+        <legend>Folder Compare colours</legend>
+        {FOLDER_COLOR_ROWS.map((r) => (
+          <ColorRow key={r.key} label={r.label} colorKey={r.key} prefs={prefs} set={set} />
+        ))}
+        <small className="muted settings-hint">
+          Each side is coloured on its own: the newer copy of a file red, the older grey. A folder&apos;s icon shows
+          the two most important colours below it on that side.
+        </small>
+        <FolderPreview />
+      </fieldset>
+      <fieldset>
+        <legend>Folder Merge colours</legend>
+        {MERGE_COLOR_ROWS.map((r) => (
+          <ColorRow key={r.key} label={r.label} colorKey={r.key} prefs={prefs} set={set} />
+        ))}
+        <small className="muted settings-hint">
+          Left, base and right are each coloured on their own: a change in the colour of the side it came from, the
+          copies it replaces in Folder Compare&apos;s Older colour. Rows with a change get a light wash of its colour.
+        </small>
+        <MergePreview />
       </fieldset>
       <fieldset>
         <legend>Text Compare layout</legend>

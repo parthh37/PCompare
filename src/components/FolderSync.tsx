@@ -33,7 +33,8 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from "react";
-import { errorMessage, isRemote } from "../lib/api";
+import { errorMessage, isRemote, type Side } from "../lib/api";
+import { syncTones, toneColor, type Tone } from "../lib/folderColors";
 import { COMPARE_PRESETS, DEFAULT_FOLDER_SETTINGS, toEngineOptions, type ComparePreset } from "../lib/folderSettings";
 import { basename, formatSize, formatTime, joinPath } from "../lib/format";
 import type { SyncTask } from "../lib/automationApi"; // automation:ui
@@ -72,8 +73,8 @@ import { PathBar } from "./PathBar";
 import { SyncHistoryDialog } from "./SyncHistoryDialog";
 import { SyncOptionsDialog, TRASH_NAME, safetySummary } from "./SyncOptionsDialog";
 import { VirtualList } from "./VirtualList";
+import { FolderToneIcon, ToneSpot } from "./FolderStatusLegend";
 import "./FolderSync.css";
-import { FileIcon } from "./icons";
 
 /** "1 file", "3 files". */
 const count = (n: number, noun: string) => `${n.toLocaleString()} ${noun}${n === 1 ? "" : "s"}`;
@@ -269,6 +270,49 @@ function opLabel(op: Pick<SyncOp, "kind" | "direction">): { icon: LucideIcon; te
     case "mkdir":
       return { icon: FolderPlus, text: `Create on ${side}` };
   }
+}
+
+/** The side an op works from: where a copy (or a new folder) comes from, or where a delete removes the item. */
+function actingSide(op: Pick<SyncOp, "kind" | "direction">): Side {
+  const target: Side = op.direction === "toRight" ? "right" : "left";
+  return op.kind === "delete" ? target : target === "right" ? "left" : "right";
+}
+
+/** Each side's tone for an op: by its category, else an overwrite has both sides and anything else only the side it works from. */
+function opTones(op: SyncOp): Record<Side, Tone | null> {
+  const at = actingSide(op);
+  return syncTones(op.category, { left: op.overwrite || at === "left", right: op.overwrite || at === "right" });
+}
+
+const TONE_WORD: Record<Tone, string> = {
+  same: "same",
+  newer: "newer",
+  different: "different",
+  older: "older",
+  orphan: "only on this side",
+  unknown: "not compared",
+  error: "error",
+};
+
+/**
+ * A row's two sides before its path, left then right, coloured as Folder
+ * Compare colours them: a spot for a file, a toned icon for a folder, a gap
+ * where that side has nothing.
+ */
+function SideTones({ tones, isDir }: { tones: Record<Side, Tone | null>; isDir: boolean }) {
+  const word = (t: Tone | null) => (t ? TONE_WORD[t] : "nothing there");
+  return (
+    <span className="sync-sides" title={`Left: ${word(tones.left)} · Right: ${word(tones.right)}`}>
+      {(["left", "right"] as const).map((side) => {
+        const t = tones[side];
+        return (
+          <span key={side} className="sync-side">
+            {t && (isDir ? <FolderToneIcon look={{ tones: [t] }} /> : <ToneSpot tone={t} />)}
+          </span>
+        );
+      })}
+    </span>
+  );
 }
 
 /** Per-kind totals for a set of operations (the confirmation dialog and status bar). */
@@ -688,10 +732,8 @@ export function FolderSync({ left, right, onPathsChange, settings, onSettingsCha
             {overrideMark(s.relPath)}
           </div>
           <div className="sync-cell path">
-            <span className="ficon">
-              <FileIcon name={s.relPath} isDir={s.isDir} />
-            </span>
-            {s.relPath}
+            <SideTones tones={syncTones(s.category, { left: s.onLeft, right: s.onRight })} isDir={s.isDir} />
+            <span className="sync-path">{s.relPath}</span>
           </div>
           <div className="sync-cell num" />
           <div className="sync-cell reason">{s.reason}</div>
@@ -701,6 +743,9 @@ export function FolderSync({ left, right, onPathsChange, settings, onSettingsCha
     const op = row.op;
     const on = !excluded.has(op.id);
     const { icon: Icon, text } = opLabel(op);
+    // The path takes the tone of the side the op works from (what's copied, or what's deleted).
+    const tones = opTones(op);
+    const pathTone = tones[actingSide(op)] ?? tones.left ?? tones.right;
     return (
       <div
         className={`sync-row k-${op.kind}${on ? "" : " off"}${selection.has(op.relPath) ? " selected" : ""}`}
@@ -724,10 +769,10 @@ export function FolderSync({ left, right, onPathsChange, settings, onSettingsCha
           {overrideMark(op.relPath)}
         </div>
         <div className="sync-cell path">
-          <span className="ficon">
-            <FileIcon name={op.relPath} isDir={op.isDir} />
+          <SideTones tones={tones} isDir={op.isDir} />
+          <span className="sync-path" style={pathTone ? { color: toneColor(pathTone) } : undefined}>
+            {op.relPath}
           </span>
-          {op.relPath}
         </div>
         <div className="sync-cell num">{op.kind === "mkdir" ? "" : formatSize(op.size)}</div>
         <div className="sync-cell reason">{op.reason}</div>

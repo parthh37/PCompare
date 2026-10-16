@@ -303,7 +303,7 @@ Compares tags (ID3v1/v2, APE, Vorbis comments, MP4) and audio properties (durati
 Schema and data compare for SQL Server, MySQL/MariaDB, PostgreSQL and SQLite.
 
 ## Connections
-Pick a saved connection (or create one) and a database for each side. Passwords are kept in the OS keychain.
+Pick a saved connection (or create one) and a database for each side. Passwords are encrypted with a key kept in the OS keychain.
 
 **Import from other tools…** (in the connection list, or Home → More) finds the connections saved by SQL Server Management Studio (recent servers and Registered Servers), Azure Data Studio, VS Code (SQL Server and SQLTools extensions), DBeaver, DataGrip and other JetBrains IDEs, and MySQL Workbench, and shows them in one list. Exported files work too: \`.regsrvr\` Registered Servers exports, pgAdmin's \`servers.json\`, HeidiSQL's exported settings and \`.udl\` data link files. Connections already saved here are greyed out.
 
@@ -330,7 +330,7 @@ Copying a row that refers to another row (a foreign key) needs that row on the o
     title: "Connection profiles",
     kinds: ["profiles"],
     body: `
-Profiles connect remote storage: Amazon S3 and compatibles, Azure Blob, Google Cloud Storage, Backblaze B2, FTP/FTPS, SFTP, WebDAV, OneDrive, SharePoint, Dropbox, Google Drive and GitHub. Secrets are stored in the OS keychain, and the profile list itself is encrypted with a key kept there too, so a copied settings folder can't be read on another computer. Right-click a profile to delete it.
+Profiles connect remote storage: Amazon S3 and compatibles, Azure Blob, Google Cloud Storage, Backblaze B2, FTP/FTPS, SFTP, WebDAV, OneDrive, SharePoint, Dropbox, Google Drive and GitHub. Secrets and the profile list are encrypted with a key kept in the OS keychain, so a copied settings folder can't be read on another computer. Right-click a profile to delete it.
 
 Use \`remote://<profile>/path\` (or the globe button next to a path) on either side of any comparison. **Test** checks a profile before saving.
 
@@ -376,7 +376,7 @@ The editor's **Next runs** list shows exactly when the schedule fires.
 - Deleted and replaced files go to the Recycle Bin / Trash, a versioning folder (exact rollback), or are deleted permanently — set on the Options tab.
 
 ## Notifications
-Add channels with **Notification channels**, then tick them on a task's Notifications tab. By default you hear about failures, runs with errors or conflicts, and the first success after a failure; the same failure isn't repeated more than every 6 hours. **Send test** checks a channel. Webhook URLs and passwords are kept in the system keychain and are never exported.
+Add channels with **Notification channels**, then tick them on a task's Notifications tab. By default you hear about failures, runs with errors or conflicts, and the first success after a failure; the same failure isn't repeated more than every 6 hours. **Send test** checks a channel. Webhook URLs and passwords are encrypted with a key kept in the system keychain and are never exported.
 - **Microsoft Teams**: in the channel open **⋯ › Workflows**, choose **Post to a channel when a webhook request is received**, pick the team and channel, and paste the URL it shows. Legacy Incoming Webhook URLs also work.
 - **Slack**: an app with **Incoming Webhooks**; paste the webhook URL.
 - **Email (SMTP)**: Microsoft 365 uses \`smtp.office365.com\`, port 587, STARTTLS (SMTP AUTH must be allowed for the mailbox). Gmail uses \`smtp.gmail.com\`, 587, STARTTLS with an **app password** (Google Account › Security › App passwords), not your normal password. Leave the port blank for the default of the security mode.

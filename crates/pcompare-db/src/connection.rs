@@ -1,7 +1,8 @@
 //! Saved database connections.
 //!
-//! Like remote profiles, the password goes to the OS keychain and the rest
-//! is sealed in `db-connections.vault` (see [`pcompare_core::vault`]). A DB
+//! Like remote profiles, the password goes to the secret store (sealed in
+//! `secrets.vault`) and the rest is sealed in `db-connections.vault` (see
+//! [`pcompare_core::vault`]). A DB
 //! session's "path" is `db://<connection-id>` or `db://<connection-id>/<database>`
 //! (the second form lets one saved server compare two of its databases).
 

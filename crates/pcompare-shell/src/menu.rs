@@ -2,7 +2,8 @@
 //! `HKCU\Software\Classes`:
 //!
 //! * "Select Left Side for Compare" remembers an item (`--select-left`),
-//! * "Compare to 'name'" pairs another item with it (`--compare-to`),
+//! * "Compare to 'name'" pairs another item with it (`--compare-to`); it's
+//!   hidden while no item is remembered,
 //! * "Compare with PCompare" compares the 2 or 3 selected items at once
 //!   (`--compare-selection`, grouped by [`crate::selection`]).
 //!
@@ -19,6 +20,10 @@ const SELECT_LEFT: &str = "PCompare.SelectLeft";
 const COMPARE_TO: &str = "PCompare.CompareTo";
 const COMPARE: &str = "PCompare.Compare";
 
+/// A static verb with this value (empty) is left out of the menu but can
+/// still be invoked; the documented way to hide one, unlike `LegacyDisable`.
+const HIDDEN: &str = "ProgrammaticAccessOnly";
+
 /// Where the "don't add the menu" choice lives, so the installer, the app's
 /// startup check and Settings all agree without reading the app's prefs file.
 #[cfg_attr(not(windows), allow(dead_code))]
@@ -33,6 +38,8 @@ pub struct Entry {
     /// Relative to `HKCU`.
     pub key: String,
     pub values: Vec<(Option<&'static str>, String)>,
+    /// Values to delete if an earlier write left them there.
+    pub removed: Vec<&'static str>,
 }
 
 fn verb(
@@ -54,12 +61,34 @@ fn verb(
         Entry {
             key: key.clone(),
             values,
+            removed: Vec::new(),
         },
         Entry {
             key: format!(r"{key}\command"),
             values: vec![(None, command)],
+            removed: Vec::new(),
         },
     ]
+}
+
+/// "Compare to …" is listed only while a left side is remembered: without
+/// one it would just open the clicked item on its own. `set_left` keeps
+/// existing keys in step the same way.
+fn compare_to(
+    root: &str,
+    left: Option<&str>,
+    background: bool,
+    icon: &str,
+    command: String,
+) -> [Entry; 2] {
+    let label = compare_to_label(left, background);
+    let mut out = verb(root, COMPARE_TO, label, icon, command, false);
+    if left.is_some() {
+        out[0].removed.push(HIDDEN);
+    } else {
+        out[0].values.push((Some(HIDDEN), String::new()));
+    }
+    out
 }
 
 /// "Compare to …" names what it will compare against.
@@ -95,13 +124,12 @@ pub fn entries(exe: &str, left: Option<&str>) -> Vec<Entry> {
             run(r#"--select-left "%1""#),
             false,
         ));
-        out.extend(verb(
+        out.extend(compare_to(
             root,
-            COMPARE_TO,
-            compare_to_label(left, false),
+            left,
+            false,
             &icon,
             run(r#"--compare-to "%1""#),
-            false,
         ));
         out.extend(verb(
             root,
@@ -121,13 +149,12 @@ pub fn entries(exe: &str, left: Option<&str>) -> Vec<Entry> {
         run(r#"--select-left "%V""#),
         false,
     ));
-    out.extend(verb(
+    out.extend(compare_to(
         bg,
-        COMPARE_TO,
-        compare_to_label(left, true),
+        left,
+        true,
         &icon,
         run(r#"--compare-to "%V""#),
-        false,
     ));
     out
 }
@@ -202,15 +229,15 @@ mod imp {
 mod imp {
     use super::{
         compare_to_label, entries, owned_keys, probe, MenuStatus, BACKGROUND_ROOT, COMPARE_TO,
-        DISABLED_VALUE, ITEM_ROOTS, SETTINGS_KEY,
+        DISABLED_VALUE, HIDDEN, ITEM_ROOTS, SETTINGS_KEY,
     };
     use std::io;
     use std::ptr::{null, null_mut};
     use windows_sys::Win32::Foundation::{ERROR_FILE_NOT_FOUND, ERROR_SUCCESS};
     use windows_sys::Win32::System::Registry::{
-        RegCloseKey, RegCreateKeyExW, RegDeleteKeyW, RegDeleteTreeW, RegGetValueW, RegOpenKeyExW,
-        RegSetValueExW, HKEY, HKEY_CURRENT_USER, KEY_SET_VALUE, KEY_WRITE, REG_DWORD,
-        REG_OPTION_NON_VOLATILE, REG_SZ, RRF_RT_REG_DWORD, RRF_RT_REG_SZ,
+        RegCloseKey, RegCreateKeyExW, RegDeleteKeyW, RegDeleteTreeW, RegDeleteValueW, RegGetValueW,
+        RegOpenKeyExW, RegSetValueExW, HKEY, HKEY_CURRENT_USER, KEY_SET_VALUE, KEY_WRITE,
+        REG_DWORD, REG_OPTION_NON_VOLATILE, REG_SZ, RRF_RT_REG_DWORD, RRF_RT_REG_SZ,
     };
     use windows_sys::Win32::UI::Shell::{SHChangeNotify, SHCNE_ASSOCCHANGED, SHCNF_IDLIST};
 
@@ -275,6 +302,15 @@ mod imp {
                 (data.len() * 2) as u32,
             )
         })
+    }
+
+    /// Deletes value `name` from `key`; `Ok(false)` if it wasn't there.
+    fn delete_value(key: &Key, name: &str) -> io::Result<bool> {
+        let code = unsafe { RegDeleteValueW(key.0, wide(name).as_ptr()) };
+        if code == ERROR_FILE_NOT_FOUND {
+            return Ok(false);
+        }
+        check(code).map(|_| true)
     }
 
     fn get_string(path: &str, name: Option<&str>) -> Option<String> {
@@ -367,6 +403,9 @@ mod imp {
             for (name, value) in &entry.values {
                 set_string(&key, *name, value)?;
             }
+            for name in &entry.removed {
+                delete_value(&key, name)?;
+            }
         }
         notify_shell();
         Ok(())
@@ -417,29 +456,42 @@ mod imp {
     }
 
     /// Startup check: (re)writes the menu unless the user turned it off or it
-    /// already points here. Returns whether anything was written.
+    /// already points here; then it only brings "Compare to" in line with the
+    /// left side (a menu from before it was hidden without one, or a
+    /// selection file cleaned out of %TEMP%). Returns whether it wrote the menu.
     pub fn ensure(exe: &str, left: Option<&str>) -> io::Result<bool> {
         match status(exe) {
-            MenuStatus::Installed | MenuStatus::Disabled | MenuStatus::Unsupported => Ok(false),
+            MenuStatus::Installed => {
+                set_left(left);
+                Ok(false)
+            }
+            MenuStatus::Disabled | MenuStatus::Unsupported => Ok(false),
             MenuStatus::Missing | MenuStatus::Stale { .. } => register(exe, left).map(|_| true),
         }
     }
 
-    /// Relabels "Compare to …" after the left side changes. Only touches keys
-    /// that exist, so it never brings back a menu the user removed.
+    /// Writes `value` unless it's already there; whether it wrote.
+    fn update_string(key: &Key, path: &str, name: Option<&str>, value: &str) -> bool {
+        get_string(path, name).as_deref() != Some(value) && set_string(key, name, value).is_ok()
+    }
+
+    /// Relabels "Compare to …" after the left side changes, and hides it while
+    /// there is none (as `compare_to` writes it). Only touches keys that exist,
+    /// so it never brings back a menu the user removed, and only tells
+    /// Explorer when something changed.
     pub fn set_left(left: Option<&str>) {
         let mut changed = false;
-        for root in ITEM_ROOTS {
-            if let Some(key) =
-                open_existing(&format!(r"Software\Classes\{root}\shell\{COMPARE_TO}"))
-            {
-                changed |= set_string(&key, None, &compare_to_label(left, false)).is_ok();
-            }
-        }
-        if let Some(key) = open_existing(&format!(
-            r"Software\Classes\{BACKGROUND_ROOT}\shell\{COMPARE_TO}"
-        )) {
-            changed |= set_string(&key, None, &compare_to_label(left, true)).is_ok();
+        let roots = ITEM_ROOTS.map(|root| (root, false));
+        for (root, background) in roots.into_iter().chain([(BACKGROUND_ROOT, true)]) {
+            let path = format!(r"Software\Classes\{root}\shell\{COMPARE_TO}");
+            let Some(key) = open_existing(&path) else {
+                continue;
+            };
+            changed |= update_string(&key, &path, None, &compare_to_label(left, background));
+            changed |= match left {
+                Some(_) => delete_value(&key, HIDDEN).unwrap_or(false),
+                None => update_string(&key, &path, Some(HIDDEN), ""),
+            };
         }
         if changed {
             notify_shell();
@@ -488,13 +540,66 @@ mod tests {
     #[test]
     fn every_written_verb_is_removed_on_unregister() {
         let owned = owned_keys();
-        for e in entries(EXE, None) {
-            let verb_key = e.key.trim_end_matches(r"\command");
-            assert!(
-                owned.iter().any(|k| k == verb_key),
-                "{verb_key} would be left behind"
-            );
+        for left in [None, Some(r"D:\old")] {
+            for e in entries(EXE, left) {
+                let verb_key = e.key.trim_end_matches(r"\command");
+                assert!(
+                    owned.iter().any(|k| k == verb_key),
+                    "{verb_key} would be left behind"
+                );
+            }
         }
+    }
+
+    fn hidden(e: &Entry) -> bool {
+        e.values
+            .iter()
+            .any(|(n, v)| *n == Some(HIDDEN) && v.is_empty())
+    }
+
+    /// The three "Compare to" verb keys (item, folder, folder background).
+    fn compare_to_verbs(all: &[Entry]) -> Vec<&Entry> {
+        let verbs: Vec<_> = all
+            .iter()
+            .filter(|e| e.key.ends_with(r"\shell\PCompare.CompareTo"))
+            .collect();
+        assert_eq!(verbs.len(), 3);
+        verbs
+    }
+
+    #[test]
+    fn compare_to_is_hidden_without_a_left_side() {
+        let all = entries(EXE, None);
+        for e in compare_to_verbs(&all) {
+            assert!(hidden(e), "{} is listed", e.key);
+            assert!(e.removed.is_empty());
+        }
+        // Everything else stays listed.
+        let others = all
+            .iter()
+            .filter(|e| !e.key.ends_with("PCompare.CompareTo"));
+        for e in others {
+            assert!(!hidden(e) && e.removed.is_empty(), "{}", e.key);
+        }
+    }
+
+    #[test]
+    fn compare_to_is_listed_once_a_left_side_is_set() {
+        let all = entries(EXE, Some(r"D:\old"));
+        for e in compare_to_verbs(&all) {
+            assert!(!hidden(e), "{} is hidden", e.key);
+            // Rewriting a key that was hidden drops the marker.
+            assert_eq!(e.removed, [HIDDEN]);
+        }
+        assert!(all.iter().all(|e| !hidden(e)));
+        assert_eq!(
+            value(&all, r"Directory\shell\PCompare.CompareTo"),
+            "Compare to 'old'"
+        );
+        assert_eq!(
+            value(&all, r"Background\shell\PCompare.CompareTo"),
+            "Compare This Folder to 'old'"
+        );
     }
 
     #[test]

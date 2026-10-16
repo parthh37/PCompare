@@ -1,20 +1,21 @@
 //! Connection profiles: named, saved remote connections.
 //!
-//! Every [`FieldKind::Secret`] value (passwords, keys, OAuth tokens) goes to
-//! the OS keychain — Windows Credential Manager, macOS Keychain, or Secret
-//! Service on Linux. The rest is sealed in `profiles.vault` with a key from
-//! that same keychain (see [`pcompare_core::vault`]).
+//! Every [`FieldKind::Secret`] value (passwords, keys, OAuth tokens) is
+//! sealed in `secrets.vault`, the rest in `profiles.vault`, both under one
+//! key kept in the OS keychain — Windows Credential Manager, macOS Keychain,
+//! or Secret Service on Linux (see [`pcompare_core::vault`]).
 //! Secret values flow UI → Rust only; the UI just learns *which* secrets are
 //! stored so it can show "saved" placeholders.
 
 use crate::provider::{spec, FieldKind, ProviderKind, REFRESH_TOKEN};
 pub use pcompare_core::secrets::{ChunkedSecrets, MemorySecrets, SecretStore};
+use pcompare_core::secrets::part_key;
 use pcompare_core::store::now_ms;
-use pcompare_core::vault::SealedFile;
+use pcompare_core::vault::{SealedFile, VaultSecrets, KEY_OWNER};
 use pcompare_core::{CoreError, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -46,15 +47,48 @@ pub struct ProfileInput {
     pub secrets: BTreeMap<String, String>,
 }
 
-/// The platform keychain. Values too long for one Windows Credential
-/// Manager entry are split across several (see [`ChunkedSecrets`]).
-pub struct KeyringSecrets;
+/// The app's secret store: secrets sealed in `secrets.vault` under a key
+/// held in the platform keychain, which keeps just that one PCompare entry
+/// (see [`VaultSecrets`] for why).
+pub struct KeyringSecrets(VaultSecrets<OsKeychain>);
+
+impl KeyringSecrets {
+    /// Secrets in `<config_dir>/secrets.vault`.
+    pub fn new(config_dir: &Path) -> Self {
+        Self(VaultSecrets::new(config_dir, OsKeychain))
+    }
+}
+
+impl SecretStore for KeyringSecrets {
+    fn get(&self, profile: &str, key: &str) -> Result<Option<String>> {
+        self.0.get(profile, key)
+    }
+    fn set(&self, profile: &str, key: &str, value: &str) -> Result<()> {
+        self.0.set(profile, key, value)
+    }
+    fn delete(&self, profile: &str, key: &str) -> Result<()> {
+        self.0.delete(profile, key)
+    }
+}
 
 const KEYRING_SERVICE: &str = "PCompare";
 
 fn keyring_entry(profile: &str, key: &str) -> Result<keyring::Entry> {
     keyring::Entry::new(KEYRING_SERVICE, &format!("profile:{profile}:{key}"))
         .map_err(|e| CoreError::Other(format!("keychain: {e}")))
+}
+
+fn keychain_error(e: keyring::Error) -> CoreError {
+    CoreError::Other(format!("keychain: {e}"))
+}
+
+/// Deletes one entry without reading it; false if there was none.
+fn delete_entry(profile: &str, key: &str) -> Result<bool> {
+    match keyring_entry(profile, key)?.delete_credential() {
+        Ok(()) => Ok(true),
+        Err(keyring::Error::NoEntry) => Ok(false),
+        Err(e) => Err(keychain_error(e)),
+    }
 }
 
 /// One keychain entry per key, with the platform's size limit.
@@ -65,31 +99,66 @@ impl SecretStore for RawKeyring {
         match keyring_entry(profile, key)?.get_password() {
             Ok(v) => Ok(Some(v)),
             Err(keyring::Error::NoEntry) => Ok(None),
-            Err(e) => Err(CoreError::Other(format!("keychain: {e}"))),
+            Err(e) => Err(keychain_error(e)),
         }
     }
     fn set(&self, profile: &str, key: &str, value: &str) -> Result<()> {
-        keyring_entry(profile, key)?
-            .set_password(value)
-            .map_err(|e| CoreError::Other(format!("keychain: {e}")))
+        keyring_entry(profile, key)?.set_password(value).map_err(keychain_error)
     }
     fn delete(&self, profile: &str, key: &str) -> Result<()> {
-        match keyring_entry(profile, key)?.delete_credential() {
-            Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
-            Err(e) => Err(CoreError::Other(format!("keychain: {e}"))),
-        }
+        delete_entry(profile, key).map(|_| ())
     }
 }
 
-impl SecretStore for KeyringSecrets {
+/// The platform keychain as [`VaultSecrets`] uses it: the file key, plus
+/// entries older versions wrote (values too long for one Windows Credential
+/// Manager entry were split across several, see [`ChunkedSecrets`]).
+struct OsKeychain;
+
+/// The file key, once read: every sealed file in the process needs it, and
+/// each read of a keychain entry may show a dialog.
+static VAULT_KEYS: Mutex<BTreeMap<String, String>> = Mutex::new(BTreeMap::new());
+
+fn vault_keys() -> std::sync::MutexGuard<'static, BTreeMap<String, String>> {
+    VAULT_KEYS.lock().unwrap_or_else(|p| p.into_inner())
+}
+
+impl SecretStore for OsKeychain {
     fn get(&self, profile: &str, key: &str) -> Result<Option<String>> {
-        ChunkedSecrets::new(RawKeyring).get(profile, key)
+        let cache = profile == KEY_OWNER;
+        if cache {
+            if let Some(v) = vault_keys().get(key) {
+                return Ok(Some(v.clone()));
+            }
+        }
+        let value = ChunkedSecrets::new(RawKeyring).get(profile, key)?;
+        if let (true, Some(v)) = (cache, &value) {
+            vault_keys().insert(key.into(), v.clone());
+        }
+        Ok(value)
     }
     fn set(&self, profile: &str, key: &str, value: &str) -> Result<()> {
+        // Not cached: the vault reads a new key back in case another
+        // process stored a different one at the same moment.
+        if profile == KEY_OWNER {
+            vault_keys().remove(key);
+        }
         ChunkedSecrets::new(RawKeyring).set(profile, key, value)
     }
+    /// Never reads the entry first ([`ChunkedSecrets::delete`] would, to
+    /// count its parts): on macOS, reading an entry another build wrote asks
+    /// for the password, while deleting it doesn't. Head first, so a reader
+    /// never finds a head whose parts are gone.
     fn delete(&self, profile: &str, key: &str) -> Result<()> {
-        ChunkedSecrets::new(RawKeyring).delete(profile, key)
+        if profile == KEY_OWNER {
+            vault_keys().remove(key);
+        }
+        delete_entry(profile, key)?;
+        let mut n = 1;
+        while delete_entry(profile, &part_key(key, n))? {
+            n += 1;
+        }
+        Ok(())
     }
 }
 

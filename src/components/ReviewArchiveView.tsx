@@ -4,26 +4,20 @@
 // write them back into the archive.
 import {
   ArrowLeft,
-  ArrowRight,
   ChartColumn,
   ChevronDown,
   ChevronRight,
-  Equal,
-  EqualApproximately,
-  EqualNot,
-  EyeOff,
   FileText,
   FolderOpen,
   Lock,
   MessageSquare,
   Package,
   Save,
-  TriangleAlert,
-  type LucideIcon,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { DEFAULT_TEXT_OPTIONS, errorMessage, type EntryStatus, type FolderEntry, type TextDiffOptions } from "../lib/api";
-import { allDirs, DISPLAY_FILTERS, effectiveStatus, visibleSet, type DisplayFilter } from "../lib/folderTree";
+import { folderLook, pairTone, sideLook } from "../lib/folderColors";
+import { allDirs, detailOf, DISPLAY_FILTERS, effectiveStatus, visibleSet, type DisplayFilter } from "../lib/folderTree";
 import { formatSize, formatTime } from "../lib/format";
 import {
   ensureFolderBookmark,
@@ -42,10 +36,12 @@ import type { Bookmark } from "../lib/textEdit";
 import { CommentMark, CommentsPanel } from "./CommentsPanel";
 import { SEPARATOR, type MenuItems } from "../lib/nativeMenu";
 import { useContextMenu } from "./ContextMenu";
+import { countsSummary, DETAIL_LABEL, FolderToneIcon, StatusGlyph, ToneSpot } from "./FolderStatusLegend";
 import { FileIcon } from "./icons";
 import { StatsDialog } from "./StatsDialog";
 import { TextCompare, type TextSettings } from "./TextCompare";
 import { VirtualList, type VirtualListHandle } from "./VirtualList";
+import "./FolderCompare.css";
 import "./Review.css";
 
 interface Props {
@@ -254,16 +250,6 @@ function TextReviewPane({ review, marks, onMarks }: { review: TextReview; marks:
   );
 }
 
-const STATUS_ICON: Record<EntryStatus, LucideIcon> = {
-  same: Equal,
-  similar: EqualApproximately,
-  different: EqualNot,
-  leftOnly: ArrowLeft,
-  rightOnly: ArrowRight,
-  typeMismatch: TriangleAlert,
-  error: TriangleAlert,
-};
-
 const STATUS_LABEL: Record<EntryStatus, string> = {
   same: "Same",
   similar: "Similar",
@@ -273,6 +259,13 @@ const STATUS_LABEL: Record<EntryStatus, string> = {
   typeMismatch: "File ↔ folder",
   error: "Error",
 };
+
+/** A row's tooltip: its status in Folder Compare's words, and what a folder holds. */
+function rowLabel(e: FolderEntry): string {
+  if (e.ignored) return `Ignored (marked as same; really ${STATUS_LABEL[e.status].toLowerCase()})`;
+  const inside = e.isDir ? countsSummary(e) : "";
+  return [e.isDir ? STATUS_LABEL[e.status] : DETAIL_LABEL[detailOf(e)], inside && `inside: ${inside}`].filter(Boolean).join(" · ");
+}
 
 interface FlatRow {
   entry: FolderEntry;
@@ -292,6 +285,9 @@ function FolderReviewPane({
   onMarks: (m: FolderBookmark[]) => void;
 }) {
   const entries = review.result.entries;
+  const ignoreMinor = !!(review.settings as { ignoreMinor?: boolean }).ignoreMinor;
+  // Only one folder was compared: a plain listing, as in Folder Compare.
+  const oneSided = !review.result.leftRoot || !review.result.rightRoot;
   const [filter, setFilter] = useState<DisplayFilter>(
     ((review.settings as { filter?: DisplayFilter }).filter as DisplayFilter | undefined) ?? "all",
   );
@@ -414,12 +410,15 @@ function FolderReviewPane({
 
   const renderSide = (e: FolderEntry, side: "left" | "right", depth: number) => {
     const meta = e[side];
-    const newer = e.newer === side ? " newer" : e.newer ? " older" : "";
+    // Coloured per side, as Folder Compare drew it.
+    const { dir, toned, tone, nameClass, infoClass } = sideLook(e, side, ignoreMinor, oneSided);
+    const filtered = e.filtered === "both" || e.filtered === side ? " filtered" : "";
+    const isOpen = e.isDir && expanded.has(e.relPath);
     const mark = markMap.get(e.relPath);
     const markSide = e.left ? "left" : "right";
     return (
       <>
-        <div className={`fcell name${meta ? "" : " absent"}${newer}`} style={{ paddingLeft: 6 + depth * 16 }}>
+        <div className={`fcell name${meta ? "" : " absent"}${nameClass}${filtered}`} style={{ paddingLeft: 6 + depth * 16 }}>
           {e.isDir && meta ? (
             <span
               className="chevron"
@@ -436,9 +435,15 @@ function FolderReviewPane({
           {meta && (
             <>
               <span className="ficon">
-                <FileIcon name={e.name} isDir={e.isDir} open={e.isDir && expanded.has(e.relPath)} />
+                {!toned ? (
+                  <FileIcon name={e.name} isDir={dir} open={isOpen} />
+                ) : dir ? (
+                  <FolderToneIcon look={folderLook(e, side, ignoreMinor)} open={isOpen} />
+                ) : (
+                  <ToneSpot tone={tone!} />
+                )}
               </span>
-              {side === "left" && e.leftRelPath ? e.leftRelPath.slice(e.leftRelPath.lastIndexOf("/") + 1) : e.name}
+              <span>{side === "left" && e.leftRelPath ? e.leftRelPath.slice(e.leftRelPath.lastIndexOf("/") + 1) : e.name}</span>
               {side === markSide && embedded.has(e.relPath) && (
                 <span className="rv-embedded" title="Contents stored in the archive: double-click to compare">
                   <FileText size={11} />
@@ -448,19 +453,19 @@ function FolderReviewPane({
             </>
           )}
         </div>
-        <div className={`fcell num${newer}`}>{meta && !meta.isDir ? formatSize(meta.size) : ""}</div>
-        <div className={`fcell time${newer}`}>{meta ? formatTime(meta.modifiedMs) : ""}</div>
+        <div className={`fcell num${infoClass}${filtered}`}>{meta && !meta.isDir ? formatSize(meta.size) : ""}</div>
+        <div className={`fcell time${infoClass}${filtered}`}>{meta ? formatTime(meta.modifiedMs) : ""}</div>
       </>
     );
   };
 
   const renderRow = (i: number) => {
     const { entry: e, depth } = flat[i];
-    const StatusIcon = e.ignored ? EyeOff : STATUS_ICON[e.status];
+    const checked = e.contentChecked && e.contentChecked !== "off";
     const mark = markMap.get(e.relPath);
     return (
       <div
-        className={`frow s-${effectiveStatus(e)}${e.ignored ? " ignored" : ""}${selected === e.relPath ? " selected" : ""}${mark ? " rv-bookmarked" : ""}`}
+        className={`frow s-${effectiveStatus(e)} d-${detailOf(e)}${e.ignored ? " ignored" : ""}${selected === e.relPath ? " selected" : ""}${mark ? " rv-bookmarked" : ""}`}
         onClick={() => setSelected(e.relPath)}
         onDoubleClick={() => openFile(e)}
         onContextMenu={(ev) => {
@@ -468,11 +473,15 @@ function FolderReviewPane({
           setSelected(e.relPath);
           menu.open(ev, e);
         }}
-        title={[STATUS_LABEL[e.status], mark?.comment].filter(Boolean).join(" · ")}
+        title={[rowLabel(e), mark?.comment].filter(Boolean).join(" · ")}
       >
         {renderSide(e, "left", depth)}
-        <div className="fcell status">
-          <StatusIcon size={13} />
+        <div
+          className={`fcell status${checked ? " checked" : ""}${e.filtered === "both" ? " filtered" : ""}${
+            e.ignored ? "" : ` fct-${pairTone(detailOf(e), ignoreMinor)}`
+          }`}
+        >
+          {oneSided ? null : <StatusGlyph entry={e} />}
         </div>
         {renderSide(e, "right", depth)}
       </div>

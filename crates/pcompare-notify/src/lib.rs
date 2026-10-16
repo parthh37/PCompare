@@ -6,7 +6,7 @@
 //! Like the other engine crates this one is UI-agnostic. Channel settings
 //! live in a JSON file ([`ChannelStore`]); everything secret — webhook URLs
 //! (which embed their own credentials), SMTP passwords, HMAC keys — goes
-//! through a [`SecretStore`] (the OS keychain in the app), never the file.
+//! through a [`SecretStore`] (`secrets.vault` in the app), never the file.
 //!
 //! Delivery is synchronous and bounded: every transport has connect and
 //! overall timeouts, and transient failures (HTTP 429/5xx, connection

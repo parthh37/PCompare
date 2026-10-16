@@ -19,7 +19,17 @@ export type DiffColorKey =
   | "deleted"
   | "unimportant"
   | "intralineDeleted"
-  | "intralineInserted";
+  | "intralineInserted"
+  | "folderSame"
+  | "folderNewer"
+  | "folderDifferent"
+  | "folderOlder"
+  | "folderOrphan"
+  | "folderUnknown"
+  | "mergeLeft"
+  | "mergeRight"
+  | "mergeMergeable"
+  | "mergeConflict";
 
 export interface Prefs {
   /** Check GitHub Releases for updates in the background. */

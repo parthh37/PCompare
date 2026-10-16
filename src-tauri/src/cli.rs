@@ -626,7 +626,9 @@ pub struct AppHost {
 
 impl AppHost {
     pub fn new() -> Self {
-        Self::with_config(config_dir(), Box::new(KeyringSecrets))
+        let config = config_dir();
+        let secrets = KeyringSecrets::new(config.as_deref().unwrap_or(&std::env::temp_dir()));
+        Self::with_config(config, Box::new(secrets))
     }
 
     /// A host reading sessions, connections and file formats from `config`,

@@ -136,7 +136,11 @@ fn absolutize(paths: Vec<String>, cwd: &str) -> Vec<String> {
 /// opens them in a new tab exactly like startup arguments.
 pub fn on_second_instance(app: &AppHandle, argv: Vec<String>, cwd: String) {
     // the full launch options (viewer, titles, read-only), not just paths.
-    let mut launch = crate::resolve_launch_paths(argv.get(1..).unwrap_or_default());
+    let args = argv.get(1..).unwrap_or_default();
+    let mut launch = crate::resolve_launch_paths(args);
+    // Before focusing: the window re-reads the left side on focus, so its
+    // "Left:" chip clears too.
+    crate::consume_left_selection(args);
     launch.paths = absolutize(launch.paths, &cwd);
     launch.merge_output = launch.merge_output.and_then(|o| absolutize(vec![o], &cwd).pop());
     if let Some(window) = app.webview_windows().values().next() {

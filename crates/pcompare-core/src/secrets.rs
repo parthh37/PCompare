@@ -1,8 +1,9 @@
 //! Where saved connections keep their passwords.
 //!
 //! Remote profiles and database connections both store secrets through this
-//! trait; the app plugs in the OS keychain (see `pcompare_remote::profile::
-//! KeyringSecrets`) and tests use [`MemorySecrets`].
+//! trait; the app plugs in a sealed file keyed from the OS keychain (see
+//! `pcompare_remote::profile::KeyringSecrets`) and tests use
+//! [`MemorySecrets`].
 
 use crate::Result;
 use std::collections::HashMap;
@@ -14,6 +15,18 @@ pub trait SecretStore: Send + Sync {
     fn delete(&self, profile: &str, key: &str) -> Result<()>;
 }
 
+impl<S: SecretStore + ?Sized> SecretStore for &S {
+    fn get(&self, profile: &str, key: &str) -> Result<Option<String>> {
+        (**self).get(profile, key)
+    }
+    fn set(&self, profile: &str, key: &str, value: &str) -> Result<()> {
+        (**self).set(profile, key, value)
+    }
+    fn delete(&self, profile: &str, key: &str) -> Result<()> {
+        (**self).delete(profile, key)
+    }
+}
+
 /// Longest value one keychain entry can hold, in UTF-16 code units.
 /// Windows Credential Manager caps a credential at 2560 bytes and the
 /// keychain stores text as UTF-16; the other platforms allow more.
@@ -22,6 +35,11 @@ pub const MAX_ENTRY_UNITS: usize = 1280;
 /// Marks a head entry whose value lives in `<key>#1..=n`. Starts with a
 /// control character, which no token or password contains.
 const CHUNK_MARKER: &str = "\u{1}pcompare-chunks:";
+
+/// Entry holding part `n` (from 1) of a chunked `key`.
+pub fn part_key(key: &str, n: usize) -> String {
+    format!("{key}#{n}")
+}
 
 /// Spreads values too long for one entry (modern OAuth tokens run past
 /// 1280 characters) across several, so callers never see the limit.
@@ -38,10 +56,6 @@ impl<S: SecretStore> ChunkedSecrets<S> {
     pub fn with_limit(inner: S, max_units: usize) -> Self {
         assert!(max_units >= CHUNK_MARKER.len() + 10, "limit too small");
         Self { inner, max_units }
-    }
-
-    fn part_key(key: &str, n: usize) -> String {
-        format!("{key}#{n}")
     }
 
     /// How many parts the head entry currently points at (0 = not chunked).
@@ -82,7 +96,7 @@ impl<S: SecretStore> SecretStore for ChunkedSecrets<S> {
             .map_err(|_| crate::CoreError::Other(format!("keychain: `{key}` is damaged")))?;
         let mut value = String::new();
         for n in 1..=count {
-            match self.inner.get(profile, &Self::part_key(key, n))? {
+            match self.inner.get(profile, &part_key(key, n))? {
                 Some(part) => value.push_str(&part),
                 None => {
                     return Err(crate::CoreError::Other(format!(
@@ -104,20 +118,20 @@ impl<S: SecretStore> SecretStore for ChunkedSecrets<S> {
             // still see the old value rather than a half-written one.
             let parts = self.split(value);
             for (i, part) in parts.iter().enumerate() {
-                self.inner.set(profile, &Self::part_key(key, i + 1), part)?;
+                self.inner.set(profile, &part_key(key, i + 1), part)?;
             }
             self.inner.set(profile, key, &format!("{CHUNK_MARKER}{}", parts.len()))?;
             parts.len()
         };
         for n in new_parts + 1..=old_parts {
-            self.inner.delete(profile, &Self::part_key(key, n))?;
+            self.inner.delete(profile, &part_key(key, n))?;
         }
         Ok(())
     }
 
     fn delete(&self, profile: &str, key: &str) -> Result<()> {
         for n in 1..=self.stored_parts(profile, key)? {
-            self.inner.delete(profile, &Self::part_key(key, n))?;
+            self.inner.delete(profile, &part_key(key, n))?;
         }
         self.inner.delete(profile, key)
     }

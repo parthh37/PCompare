@@ -70,7 +70,6 @@ import {
   allDirs,
   applyVerdicts,
   COUNT_FILTERS,
-  countsNewer,
   detailOf,
   diffStops,
   DISPLAY_FILTERS,
@@ -87,6 +86,7 @@ import {
   visibleSet,
   type SelectCriteria,
 } from "../lib/folderTree";
+import { folderLook, pairTone, sideLook } from "../lib/folderColors";
 import { basename, formatSize, formatTime, hex, joinPath } from "../lib/format";
 import { writeClipboardText } from "../lib/clipboard";
 import { useShell } from "../lib/shell";
@@ -113,7 +113,7 @@ import { getPrefs, setPrefs, usePref } from "../lib/prefs";
 import { sessionForFiles } from "../lib/sessions";
 import { FolderSelectDialog, type SelectRequest } from "./FolderSelectDialog";
 import { FolderSplitPane, type SplitPair } from "./FolderSplitPane";
-import { countsSummary, DETAIL_LABEL, folderTones, LegendPopover, StatusGlyph, toneStyle } from "./FolderStatusLegend";
+import { countsSummary, DETAIL_LABEL, FolderToneIcon, LegendPopover, StatusGlyph, ToneSpot } from "./FolderStatusLegend";
 import "./FolderCompare.css";
 
 export type { FolderSettings };
@@ -687,7 +687,7 @@ export function FolderCompare({
     expand: (rels) => setExpanded((prev) => new Set([...prev, ...rels])),
     showAll: () => update({ filter: "all" }),
     engineOptions,
-    settings: { filter: cfg.filter, flatten: cfg.flatten, showAttributes: cfg.showAttributes },
+    settings: { filter: cfg.filter, flatten: cfg.flatten, showAttributes: cfg.showAttributes, ignoreMinor: cfg.ignoreMinor },
   });
 
   // multi-selection, file operations and the Operations panel.
@@ -980,24 +980,17 @@ export function FolderCompare({
 
   const renderSide = (e: FolderEntry, side: "left" | "right", depth: number) => {
     const meta = e[side];
-    // The newer of two differing files in red and the older in grey;
-    // a folder is bold on the side all newer files below it are on.
-    const newer = e.isDir
-      ? !e.ignored && countsNewer(e.counts) === side
-        ? " newer"
-        : ""
-      : e.newer === side
-        ? " newer"
-        : e.newer
-          ? " older"
-          : "";
-    const tones = e.isDir ? toneStyle(folderTones(e)) : undefined;
+    // Each side in its own colour: a file by what it is there (the newer copy
+    // red, the older grey, an orphan purple), a folder by its icon, which shows
+    // what lies below it on this side.
+    const { dir: dirHere, toned, tone, nameClass: toneClass, infoClass } = sideLook(e, side, cfg.ignoreMinor, oneSided);
     // What the filters leave out is drawn in teal; a half-filtered pair only on that side.
     const filtered = e.filtered === "both" || e.filtered === side ? " filtered" : "";
     const showChevron = e.isDir && meta && !cfg.flatten;
+    const isOpen = e.isDir && expanded.has(e.relPath) && !cfg.flatten;
     return (
       <>
-        <div className={`fcell name${meta ? "" : " absent"}${newer}${filtered}`} style={{ paddingLeft: 6 + depth * 16 }}>
+        <div className={`fcell name${meta ? "" : " absent"}${toneClass}${filtered}`} style={{ paddingLeft: 6 + depth * 16 }}>
           {showChevron ? (
             <span
               className="chevron"
@@ -1014,9 +1007,15 @@ export function FolderCompare({
           {meta && (
             <>
               <span className="ficon">
-                <FileIcon name={e.name} isDir={e.isDir} open={e.isDir && expanded.has(e.relPath) && !cfg.flatten} />
+                {!toned ? (
+                  <FileIcon name={e.name} isDir={dirHere} open={isOpen} />
+                ) : dirHere ? (
+                  <FolderToneIcon look={folderLook(e, side, cfg.ignoreMinor)} open={isOpen} />
+                ) : (
+                  <ToneSpot tone={tone!} />
+                )}
               </span>
-              <span style={tones}>
+              <span>
                 {cfg.flatten ? (side === "left" ? (e.leftRelPath ?? e.relPath) : e.relPath) : sideName(e, side)}
               </span>
               {meta.linkTarget != null && (
@@ -1028,8 +1027,8 @@ export function FolderCompare({
             </>
           )}
         </div>
-        <div className={`fcell num${newer}${filtered}`}>{meta && !meta.isDir ? formatSize(meta.size) : ""}</div>
-        <div className={`fcell time${newer}${filtered}`}>{meta ? formatTime(meta.modifiedMs) : ""}</div>
+        <div className={`fcell num${infoClass}${filtered}`}>{meta && !meta.isDir ? formatSize(meta.size) : ""}</div>
+        <div className={`fcell time${infoClass}${filtered}`}>{meta ? formatTime(meta.modifiedMs) : ""}</div>
         {cfg.showAttributes && (
           <div className={`fcell fc-attr${attributesDiffer(e) ? " differs" : ""}`}>{formatAttributes(meta)}</div>
         )}
@@ -1056,7 +1055,11 @@ export function FolderCompare({
         title={review.title(e.relPath, rowTitle(e))}
       >
         {renderSide(e, "left", depth)}
-        <div className={`fcell status${checked ? " checked" : ""}${e.filtered === "both" ? " filtered" : ""}`}>
+        <div
+          className={`fcell status${checked ? " checked" : ""}${e.filtered === "both" ? " filtered" : ""}${
+            e.ignored || e.pending ? "" : ` fct-${pairTone(detailOf(e), cfg.ignoreMinor)}`
+          }`}
+        >
           {oneSided ? null : e.pending ? (
             phase ? <span className="spinner" /> : <span className="muted">…</span>
           ) : (
