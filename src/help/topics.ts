@@ -305,6 +305,12 @@ Schema and data compare for SQL Server, MySQL/MariaDB, PostgreSQL and SQLite.
 ## Connections
 Pick a saved connection (or create one) and a database for each side. Passwords are kept in the OS keychain.
 
+**Import from other tools…** (in the connection list, or Home → More) finds the connections saved by SQL Server Management Studio (recent servers and Registered Servers), Azure Data Studio, VS Code (SQL Server and SQLTools extensions), DBeaver, DataGrip and other JetBrains IDEs, and MySQL Workbench, and shows them in one list. Exported files work too: \`.regsrvr\` Registered Servers exports, pgAdmin's \`servers.json\`, HeidiSQL's exported settings and \`.udl\` data link files. Connections already saved here are greyed out.
+
+Passwords never come over from those tools. Type a login's password in the list (or later in the connection's Edit dialog); Windows authentication needs none.
+
+**Paste string…** in the connection dialog (and **Paste a connection string…** in the import list) fills a connection in from an ADO.NET, ODBC, OLE DB or JDBC string, a \`postgres://\` / \`mysql://\` URL, or a libpq \`host=… dbname=…\` string.
+
 ## Schema compare
 Tables (columns, keys, indexes, foreign keys, checks), views, procedures, functions, triggers and sequences, with side-by-side DDL.
 

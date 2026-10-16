@@ -1,5 +1,5 @@
 import { open } from "@tauri-apps/plugin-dialog";
-import { CircleCheck, Database, FolderOpen, LoaderCircle, RefreshCw, TriangleAlert } from "lucide-react";
+import { CircleCheck, ClipboardPaste, FolderOpen, LoaderCircle, RefreshCw, TriangleAlert } from "lucide-react";
 import { useState } from "react";
 import { errorMessage } from "../lib/api";
 import {
@@ -14,37 +14,16 @@ import {
   type Engine,
   type TlsMode,
 } from "../lib/dbApi";
+import type { ImportedConnection } from "../lib/importApi";
 import { Modal } from "./Modal";
+import { PasteConnectionDialog } from "./PasteConnectionDialog";
 
 export const SQLITE_FILTERS = [
   { name: "SQLite database", extensions: ["db", "sqlite", "sqlite3", "db3", "s3db", "sl3"] },
   { name: "All files", extensions: ["*"] },
 ];
 
-/** `server/database` label like `ConnectionConfig::describe` in Rust (never credentials). */
-export function describeConfig(c: ConnectionConfig): string {
-  if (c.engine === "sqlite") return c.file;
-  let host = c.host;
-  if (c.instance) host = `${host}\\${c.instance}`;
-  else if (c.port !== null) host = `${host}:${c.port}`;
-  return c.database ? `${host}/${c.database}` : host;
-}
-
-/** A small engine tag tinted with the engine's colour. */
-export function EngineBadge({ engine }: { engine: Engine | null | undefined }) {
-  if (!engine)
-    return (
-      <span className="db-engine none" title="No connection chosen">
-        <Database size={12} />
-      </span>
-    );
-  const { short, label, color } = ENGINE_INFO[engine];
-  return (
-    <span className="db-engine" style={{ color, borderColor: `${color}66`, background: `${color}1a` }} title={label}>
-      {short}
-    </span>
-  );
-}
+export { describeConfig, EngineBadge } from "./DbBadge";
 
 interface Props {
   /** The connection being edited; absent = create a new one. */
@@ -72,6 +51,7 @@ export function DbConnectionDialog({ connection, onClose, onSaved, onDeleted }: 
   const [databases, setDatabases] = useState<string[] | null>(null);
   const [busy, setBusy] = useState<"test" | "save" | "load" | "delete" | null>(null);
   const [status, setStatus] = useState<Status>(null);
+  const [pasting, setPasting] = useState(false);
 
   const engine = config.engine ?? "mssql";
   const isSqlite = engine === "sqlite";
@@ -161,6 +141,17 @@ export function DbConnectionDialog({ connection, onClose, onSaved, onDeleted }: 
     }
   };
 
+  /** Replaces the form with what a pasted connection string says (the name stays). */
+  const fill = (conn: ImportedConnection, pw: string | null) => {
+    setConfig(conn.config);
+    setSchemasText(conn.config.schemas.join(", "));
+    if (pw) setPassword(pw);
+    setDatabases(null);
+    setPasting(false);
+    const notes = conn.notes.length ? ` ${conn.notes.join(". ")}.` : "";
+    setStatus({ tone: "ok", text: `Filled in from the connection string.${notes}` });
+  };
+
   const browse = async () => {
     const picked = await open({ multiple: false, directory: false, filters: SQLITE_FILTERS, title: "SQLite database" });
     if (typeof picked === "string") set({ file: picked });
@@ -180,6 +171,9 @@ export function DbConnectionDialog({ connection, onClose, onSaved, onDeleted }: 
               Delete
             </button>
           )}
+          <button onClick={() => setPasting(true)} disabled={busy !== null} title="Fill the form in from an ADO.NET, ODBC, JDBC or URL connection string">
+            <ClipboardPaste size={14} /> Paste string…
+          </button>
           <button onClick={() => run("test")} disabled={busy !== null || missing}>
             {busy === "test" ? <LoaderCircle size={14} className="db-spin" /> : <CircleCheck size={14} />}
             {busy === "test" ? "Testing…" : "Test connection"}
@@ -387,6 +381,7 @@ export function DbConnectionDialog({ connection, onClose, onSaved, onDeleted }: 
           <small className="muted">The password is stored in the operating system's keychain, never on disk.</small>
         )}
       </div>
+      {pasting && <PasteConnectionDialog actionLabel="Fill in" onAdd={fill} onClose={() => setPasting(false)} />}
     </Modal>
   );
 }

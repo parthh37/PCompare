@@ -122,6 +122,10 @@
   align-items: center;
   gap: 4px;
 }
+.db-empty-actions {
+  display: flex;
+  gap: 8px;
+}
 
 /* schema: object list + detail */
 .db-split {

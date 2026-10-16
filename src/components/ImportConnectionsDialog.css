@@ -1,0 +1,106 @@
+/* "Import database connections": one table for every tool found, grouped by source. */
+.modal.conn-import-modal {
+  width: min(900px, 95vw);
+}
+.conn-import-wait {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+.conn-import-filter {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted);
+}
+.conn-import-filter input {
+  flex: 1;
+}
+.conn-import-table {
+  max-height: 52vh;
+}
+.conn-row {
+  display: grid;
+  grid-template-columns: 22px minmax(200px, 1.2fr) minmax(200px, 1.3fr) 150px;
+  gap: 8px;
+  align-items: start;
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--border);
+  cursor: pointer;
+}
+.conn-row.dim {
+  opacity: 0.55;
+}
+.conn-row.import-head {
+  cursor: default;
+}
+.conn-row .db-engine {
+  min-width: 42px;
+  height: 18px;
+  font-size: 10px;
+  flex-shrink: 0;
+}
+.conn-source-head {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  padding: 7px 8px 5px;
+  background: var(--panel-sunk, var(--bg));
+  border-bottom: 1px solid var(--border);
+  min-width: 0;
+}
+.conn-source-head span {
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.conn-source-error {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  padding: 6px 10px;
+  font-size: 12px;
+  color: var(--warning-text, #d97706);
+  border-bottom: 1px solid var(--border);
+}
+.conn-skipped {
+  padding: 5px 10px;
+  border-bottom: 1px solid var(--border);
+}
+.conn-pass {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+.conn-pass input {
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+}
+.conn-paste {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.conn-paste textarea {
+  width: 100%;
+  font-family: var(--mono-font, ui-monospace, monospace);
+  font-size: 12px;
+  resize: vertical;
+}
+.conn-paste-result {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  padding: 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+.conn-paste-result > span {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}

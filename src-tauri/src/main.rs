@@ -520,6 +520,9 @@ fn main() {
             explorer::shell_menu_status,
             explorer::shell_menu_set,
             import::import_discover,
+            import::import_discover_connections,
+            import::import_read_connections,
+            import::import_parse_connection_string,
             import::import_read,
             import::import_commit,
             compare_text_files,
@@ -620,6 +623,7 @@ fn main() {
             meta::compare_audio,
             // --- database compare (db.rs) ---
             db::db_list_connections,
+            db::db_import_connections,
             db::db_save_connection,
             db::db_delete_connection,
             db::db_test_connection,

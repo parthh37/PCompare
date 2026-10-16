@@ -1,4 +1,4 @@
-import { Camera, FileCog, FileInput, Globe, Layers, Lightbulb, Package, Pencil, Search, Trash, X } from "lucide-react";
+import { Camera, DatabaseZap, FileCog, FileInput, Globe, Layers, Lightbulb, Package, Pencil, Search, Trash, X } from "lucide-react";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { isRemote, type SavedSession } from "../lib/api";
 import { formatTime, formatWhen } from "../lib/format";
@@ -14,6 +14,7 @@ import { SnapshotDialog } from "./SnapshotDialog";
 import { GettingStarted } from "./GettingStarted";
 import { setPrefs } from "../lib/prefs";
 import { ImportSessionsDialog } from "./ImportSessionsDialog";
+import { ImportConnectionsDialog } from "./ImportConnectionsDialog";
 import { QuickCompare } from "./QuickCompare";
 
 interface Props {
@@ -26,6 +27,8 @@ interface Props {
   onDeleteSaved: (s: SavedSession) => void;
   /** After "Import sessions…" saved `count` sessions from another tool. */
   onImported: (count: number) => void;
+  /** After "Import database connections…" saved `count` connections. */
+  onImportedConnections: (count: number) => void;
   workspaces: Workspace[];
   onOpenWorkspace: (w: Workspace) => void;
   onRenameWorkspace: (w: Workspace, name: string) => void;
@@ -166,6 +169,7 @@ export function Home(props: Props) {
   const [fileFormats, setFileFormats] = useState(false);
   const [snapshotting, setSnapshotting] = useState(false);
   const [importing, setImporting] = useState(false);
+  const [importingConnections, setImportingConnections] = useState(false);
   // the Getting started overview, once at first run and on request.
   const overviewDismissed = usePref("gettingStartedDismissed");
   const [overview, setOverview] = useState(false);
@@ -280,7 +284,16 @@ export function Home(props: Props) {
             <button className="more-row" onClick={() => setImporting(true)}>
               <FileInput size={14} aria-hidden /> Import sessions from other tools…
             </button>
+            <button className="more-row" onClick={() => setImportingConnections(true)}>
+              <DatabaseZap size={14} aria-hidden /> Import database connections…
+            </button>
           </div>
+          {importingConnections && (
+            <ImportConnectionsDialog
+              onImported={(added) => props.onImportedConnections(added.length)}
+              onClose={() => setImportingConnections(false)}
+            />
+          )}
           {fileFormats && <FileFormatsDialog onClose={() => setFileFormats(false)} />}
           {snapshotting && <SnapshotDialog folders={[]} onClose={() => setSnapshotting(false)} />}
         </aside>

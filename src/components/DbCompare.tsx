@@ -7,6 +7,7 @@ import {
   ChevronRight,
   CircleCheck,
   ClipboardCheck,
+  DatabaseZap,
   Equal,
   EqualNot,
   Eye,
@@ -80,6 +81,7 @@ import { mergeApi } from "../lib/mergeApi";
 import type { CompareProps } from "../lib/sessionProps";
 import { DbConnectionDialog, describeConfig, EngineBadge, SQLITE_FILTERS } from "./DbConnectionDialog";
 import { DbReviewDialog } from "./DbReviewDialog";
+import { ImportConnectionsDialog } from "./ImportConnectionsDialog";
 import { Modal } from "./Modal";
 import { VirtualList } from "./VirtualList";
 import "./TableCompare.css";
@@ -129,6 +131,7 @@ const MIN_COL = 56;
 const MAX_COL = 320;
 const NEW_CONNECTION = "\u0000new";
 const OPEN_FILE = "\u0000file";
+const IMPORT_CONNECTIONS = "\u0000import";
 
 const matchesSchema = (o: ObjectDiff, f: SchemaFilter) =>
   f === "all" || (f === "diffs" ? o.status !== "same" : o.status === f);
@@ -193,6 +196,7 @@ export function DbCompare({ left, right, onPathsChange, settings, onSettingsChan
   const root = useRef<HTMLDivElement>(null);
   const [connections, setConnections] = useState<DbConnection[]>([]);
   const [editing, setEditing] = useState<{ side: Side; connection?: DbConnection } | null>(null);
+  const [importing, setImporting] = useState(false);
   const [notice, setNotice] = useState<{ tone: "ok" | "error"; text: string } | null>(null);
   const [showOptions, setShowOptions] = useState(false);
   const [reviewing, setReviewing] = useState(false);
@@ -682,6 +686,7 @@ export function DbCompare({ left, right, onPathsChange, settings, onSettingsChan
           connections={connections}
           onChange={(p) => setSide("left", p)}
           onNew={() => setEditing({ side: "left" })}
+          onImport={() => setImporting(true)}
           onEdit={(c) => setEditing({ side: "left", connection: c })}
         />
         <button className="icon-btn" title="Swap sides" disabled={!left && !right} onClick={() => onPathsChange(right, left)}>
@@ -693,6 +698,7 @@ export function DbCompare({ left, right, onPathsChange, settings, onSettingsChan
           connections={connections}
           onChange={(p) => setSide("right", p)}
           onNew={() => setEditing({ side: "right" })}
+          onImport={() => setImporting(true)}
           onEdit={(c) => setEditing({ side: "right", connection: c })}
         />
         <button className="primary" disabled={!ready || isBusy} onClick={() => compare(mode)} title={`Compare (${shortcutLabel("database.refresh")})`}>
@@ -751,9 +757,17 @@ export function DbCompare({ left, right, onPathsChange, settings, onSettingsChan
         {!ready && (
           <div className="empty-state db-empty">
             <p>Choose a saved connection (or a SQLite file) for both sides, then Compare.</p>
-            <button onClick={() => setEditing({ side: left ? "right" : "left" })}>
-              <Plus size={14} /> New connection
-            </button>
+            <div className="db-empty-actions">
+              <button onClick={() => setEditing({ side: left ? "right" : "left" })}>
+                <Plus size={14} /> New connection
+              </button>
+              <button
+                onClick={() => setImporting(true)}
+                title="Bring connections over from SQL Server Management Studio, Azure Data Studio, DBeaver and other database tools"
+              >
+                <DatabaseZap size={14} /> Import from other tools…
+              </button>
+            </div>
           </div>
         )}
 
@@ -908,6 +922,17 @@ export function DbCompare({ left, right, onPathsChange, settings, onSettingsChan
         />
       )}
 
+      {importing && (
+        <ImportConnectionsDialog
+          onClose={() => setImporting(false)}
+          onImported={(added) => {
+            loadConnections();
+            const n = added.length;
+            setNotice({ tone: "ok", text: `Imported ${n} connection${n === 1 ? "" : "s"}. Pick them in the Left and Right lists.` });
+          }}
+        />
+      )}
+
       {showOptions && mode === "schema" && (
         <SchemaOptionsDialog value={schemaOptions} onApply={setSchemaOptions} onClose={() => setShowOptions(false)} />
       )}
@@ -965,6 +990,7 @@ function ConnPicker({
   connections,
   onChange,
   onNew,
+  onImport,
   onEdit,
 }: {
   label: string;
@@ -972,6 +998,7 @@ function ConnPicker({
   connections: DbConnection[];
   onChange: (path: string) => void;
   onNew: () => void;
+  onImport: () => void;
   onEdit: (c: DbConnection) => void;
 }) {
   const parsed = parseDbPath(path);
@@ -1006,6 +1033,7 @@ function ConnPicker({
 
   const pick = async (v: string) => {
     if (v === NEW_CONNECTION) return onNew();
+    if (v === IMPORT_CONNECTIONS) return onImport();
     if (v === OPEN_FILE) {
       const file = await open({ multiple: false, directory: false, filters: SQLITE_FILTERS, title: "SQLite database" });
       if (typeof file === "string") onChange(file);
@@ -1040,6 +1068,7 @@ function ConnPicker({
         <option disabled>──────────</option>
         <option value={OPEN_FILE}>Open SQLite file…</option>
         <option value={NEW_CONNECTION}>New connection…</option>
+        <option value={IMPORT_CONNECTIONS}>Import from other tools…</option>
       </select>
       {conn && conn.config.engine !== "sqlite" && (
         <select
