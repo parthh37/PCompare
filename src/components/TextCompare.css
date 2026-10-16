@@ -27,6 +27,17 @@
   background: var(--accent-tint);
 }
 
+/* Line numbers: brighter than --faint so they pass text contrast (4.5:1 on --panel), still quieter than the change glyphs. */
+:root {
+  --tc-ln-fg: #7b859a;
+}
+:root[data-theme="light"] {
+  --tc-ln-fg: #6f7785;
+}
+.tc-editable .trow:not(.current) .ln {
+  color: var(--tc-ln-fg);
+}
+
 /*
  * Copy arrows sit in an 18px slot at the outer (left) edge of each side's
  * gutter: on the first row of every difference section, pointing at the
@@ -303,7 +314,8 @@
 /* ---------- linked lines, sync points, markers, line ends, line drag ---------- */
 :root {
   --tc-edited: #f5a35c;
-  --tc-sync: #c38cf5;
+  /* Magenta, not violet: sync points must stay apart from moved blocks (lavender) and bookmarks (blue). */
+  --tc-sync: #bd69bd;
   --tc-band-chg: rgba(245, 158, 11, 0.22);
   --tc-band-del: rgba(239, 68, 68, 0.22);
   --tc-band-add: rgba(34, 197, 94, 0.22);
@@ -317,7 +329,7 @@
 }
 :root[data-theme="light"] {
   --tc-edited: #d97706;
-  --tc-sync: #8b5cf6;
+  --tc-sync: #710079;
   --tc-arrow-fill: #f5d55a;
   --tc-arrow-hot: #ffe066;
   --tc-arrow-sel-fill: #9cc3ff;

@@ -120,7 +120,8 @@
   --del-fg: #dc2626;
   --add-fg: #15803d;
   --key-fg: #2b4fa8;
-  --left-fg: #2563c9;
+  /* deep cobalt: darker than the right side's purple (--orphan), so Merge's two sides stay apart for red-green colour-blind eyes */
+  --left-fg: #1e439e;
   --comment-fg: #7b8597;
   --checker-a: #e7eaef;
   --checker-b: #d2d7df;
