@@ -4,6 +4,7 @@
 //! Tauri shell can hand it straight to the frontend, and every engine can be
 //! exercised from plain unit tests.
 
+pub mod complete;
 pub mod error;
 pub mod folder;
 pub mod grammar;

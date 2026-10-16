@@ -138,6 +138,23 @@ async fn disk_free(path: String) -> Option<DiskFree> {
     .flatten()
 }
 
+/// What's on disk under a half-typed local path, for the path fields'
+/// dropdown: subfolders plus, in `folders` fields, only the archives and
+/// snapshots that open as folders. `None` for remote, archive and VCS paths
+/// and folders that can't be read (the field offers recent paths instead).
+#[tauri::command]
+async fn complete_path(text: String, folders: bool, limit: usize) -> Option<pcompare_core::complete::PathCompletion> {
+    if pcompare_remote::is_remote(&text) || pcompare_archive::is_repo_path(&text) {
+        return None;
+    }
+    tauri::async_runtime::spawn_blocking(move || {
+        pcompare_core::complete::complete_path(&text, limit, |name| !folders || pcompare_archive::is_container_name(name))
+    })
+    .await
+    .ok()
+    .flatten()
+}
+
 /// The drive or share a Windows path is on (`C:\`), or "" without one.
 fn volume_label(path: &std::path::Path) -> String {
     match path.components().next() {
@@ -514,6 +531,7 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             path_kind,
             disk_free,
+            complete_path,
             launch_args,
             get_left_selection,
             set_left_selection,
