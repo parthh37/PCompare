@@ -276,29 +276,39 @@ function ColorRow({ label, colorKey, prefs, set }: { label: string; colorKey: Di
   );
 }
 
-/** A few diff rows drawn with the live palette. */
-function DiffPreview() {
+/** A few diff rows drawn with the live palette (and the change glyphs, when they are on). */
+function DiffPreview({ glyphs }: { glyphs: boolean }) {
+  const glyph = (sign: string, color: string) =>
+    glyphs && (
+      <span className="dp-glyph" style={{ color }}>
+        {sign}
+      </span>
+    );
   return (
     <div className="diff-preview">
       <div className="dp-row" style={{ background: "var(--chg-bg)" }}>
         <span>
-          total = <mark style={{ background: "var(--del-mark)" }}>price</mark> * qty;
+          {glyph("~", "var(--chg-glyph)")}total = <mark style={{ background: "var(--del-mark)" }}>price</mark> * qty;
         </span>
         <span>
-          total = <mark style={{ background: "var(--add-mark)" }}>unitPrice</mark> * qty;
+          {glyph("~", "var(--chg-glyph)")}total = <mark style={{ background: "var(--add-mark)" }}>unitPrice</mark> * qty;
         </span>
       </div>
       <div className="dp-row">
-        <span style={{ background: "var(--del-bg)" }}>log(&quot;removed&quot;);</span>
+        <span style={{ background: "var(--del-bg)" }}>
+          {glyph("−", "var(--del-glyph)")}log(&quot;removed&quot;);
+        </span>
         <span className="dp-absent" />
       </div>
       <div className="dp-row">
         <span className="dp-absent" />
-        <span style={{ background: "var(--add-bg)" }}>validate(order);</span>
+        <span style={{ background: "var(--add-bg)" }}>
+          {glyph("+", "var(--add-glyph)")}validate(order);
+        </span>
       </div>
       <div className="dp-row" style={{ color: "var(--unimportant)" }}>
-        <span>// $Id: 41 $</span>
-        <span>// $Id: 42 $</span>
+        <span>{glyph("≈", "var(--unimportant)")}// $Id: 41 $</span>
+        <span>{glyph("≈", "var(--unimportant)")}// $Id: 42 $</span>
       </div>
     </div>
   );
@@ -334,7 +344,19 @@ function AppearancePage({ prefs, set }: { prefs: Prefs; set: SetPrefs }) {
         {COLOR_ROWS.map((r) => (
           <ColorRow key={r.key} label={r.label} colorKey={r.key} prefs={prefs} set={set} />
         ))}
-        <DiffPreview />
+        <label className="field check">
+          <input
+            type="checkbox"
+            checked={prefs.textChangeGlyphs}
+            onChange={(e) => set({ textChangeGlyphs: e.target.checked })}
+          />
+          Change glyphs beside line numbers: + added, − removed, ~ changed
+        </label>
+        <small className="muted settings-hint">
+          Text Compare marks each differing line with a sign as well as a colour, so the kind of difference reads
+          without telling colours apart (≈ marks unimportant lines).
+        </small>
+        <DiffPreview glyphs={prefs.textChangeGlyphs} />
         <div className="settings-actions">
           <button disabled={!Object.keys(prefs.diffColors).length} onClick={() => set({ diffColors: {} })}>
             <RotateCcw size={13} /> Reset all colours

@@ -81,7 +81,7 @@ The toolbar:
 - Files are watched: when one changes on disk the compare refreshes by itself (never over unsaved edits).
 
 ## Colours
-Changed lines are amber, lines only on the left red, only on the right green. Change them in *Settings → Colors*.
+Changed lines are amber, lines only on the left red, only on the right green. Beside each line number a sign says the same without colour: **~** changed, **−** only on the left, **+** only on the right, **≈** unimportant (turn the signs off in *Settings → Colors* or the **…** menu). Change the colours there too.
 ` +
       `
 ## Numbers and ignored blocks
@@ -436,7 +436,7 @@ Shows a \`.patch\` or \`.diff\` file as a side-by-side comparison. Opening (or d
     body: `
 Open **Settings** in the tab bar.
 
-- **Appearance**: Dark, Light or System theme (System follows the OS setting live) and the diff colours — changed, inserted, deleted, unimportant text and the intra-line highlights. Each colour can be reset to the theme's default.
+- **Appearance**: Dark, Light or System theme (System follows the OS setting live) and the diff colours — changed, inserted, deleted, unimportant text and the intra-line highlights. Each colour can be reset to the theme's default. **Change glyphs** (on by default) put +, − or ~ beside Text Compare's line numbers, so differences can be told apart without relying on colour.
 - **Fonts**: the interface font and size, and the editor (monospace) font and size used by the text, merge, hex and table views.
 - **Keyboard**: every command with its shortcut. Click a shortcut and press the new keys; conflicts with another command in the same view are flagged. Shortcuts marked *built-in* can't be changed yet.
 `,

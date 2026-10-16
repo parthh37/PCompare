@@ -126,6 +126,13 @@
 .dp-absent {
   background: var(--hatch);
 }
+.dp-glyph {
+  display: inline-block;
+  width: 1ch;
+  margin-right: 8px;
+  text-align: center;
+  font-weight: 700;
+}
 
 /* fonts */
 .font-size select {
