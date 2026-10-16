@@ -81,6 +81,24 @@ pub trait VfsWrite: Vfs {
 
     /// Sets the modification time ([`WriteCaps::set_modified`]).
     fn set_modified(&self, path: &str, modified_ms: i64) -> io::Result<()>;
+
+    /// What this file system writes to, for one that other instances can
+    /// write to as well (an archive opened under several spellings of its
+    /// path): the address of something it keeps alive, so two live
+    /// instances share an id exactly when a path means the same file on
+    /// both. `None` (the default) when this instance alone reaches it.
+    fn store(&self) -> Option<usize> {
+        None
+    }
+}
+
+/// Whether `a` and `b` write to the same files: one instance, or two
+/// views of one store ([`VfsWrite::store`]).
+pub fn same_store(a: &dyn VfsWrite, b: &dyn VfsWrite) -> bool {
+    match (a.store(), b.store()) {
+        (Some(x), Some(y)) => x == y,
+        _ => std::ptr::addr_eq(a, b),
+    }
 }
 
 /// The error back ends return for an operation their caps rule out.

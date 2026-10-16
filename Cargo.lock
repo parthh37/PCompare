@@ -5427,6 +5427,7 @@ dependencies = [
  "filetime",
  "fs4",
  "globset",
+ "pcompare-archive",
  "pcompare-core",
  "pcompare-merge",
  "rayon",
