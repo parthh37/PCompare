@@ -99,7 +99,7 @@ import { FileFormatsDialog } from "./FileFormatsDialog";
 import { PathBar } from "./PathBar";
 import { VirtualList } from "./VirtualList";
 import { ReportDialog } from "./ReportDialog";
-import { useFolderFileOps } from "./FolderFileOps";
+import { useFolderFileOps, type SelSide } from "./FolderFileOps";
 import { ArchiveBanner } from "./ArchiveBanner";
 import { SnapshotDialog } from "./SnapshotDialog";
 import { useFolderReview } from "./FolderReview";
@@ -803,13 +803,42 @@ export function FolderCompare({
     if (parsed.includeFiles !== cfg.includeFiles || parsed.exclude !== cfg.exclude) update(parsed);
   };
 
+  /**
+   * "Set as Base Folder" items: re-root the comparison at the picked folder(s).
+   * One folder sets its own side, or both sides when the whole row is selected.
+   * Two folders become left and right: both from the selected side when they
+   * are there, else one's left folder and the other's right one.
+   */
+  const baseFolderItems = (list: FolderEntry[], selSide: SelSide, clicked: Side): MenuItems => {
+    if (!result || cfg.flatten || list.length > 2 || list.some((e) => !e.isDir)) return [];
+    const setBoth = (l: string, r: string): MenuItems => [{ label: "Set as Base Folders", onClick: () => onPathsChange(l, r) }];
+    const setOne = (s: Side, p: string) => () => (s === "left" ? onPathsChange(p, right) : onPathsChange(left, p));
+    if (list.length === 2) {
+      const [a, b] = list;
+      if (selSide !== "both" && a[selSide] && b[selSide]) return setBoth(sidePath(a, selSide), sidePath(b, selSide));
+      const pair = a.left && b.right ? [a, b] : b.left && a.right ? [b, a] : null;
+      return pair ? setBoth(sidePath(pair[0], "left"), sidePath(pair[1], "right")) : [];
+    }
+    const [e] = list;
+    if (selSide === "both" && e.left && e.right) return setBoth(sidePath(e, "left"), sidePath(e, "right"));
+    if (!e[clicked]) return [];
+    const p = sidePath(e, clicked);
+    return [
+      { label: "Set as Base Folder", onClick: setOne(clicked, p) },
+      { label: "Set as Base on Other Side", onClick: setOne(clicked === "left" ? "right" : "left", p) },
+    ];
+  };
+
   const menu = useContextMenu(({ entry, side }: MenuTarget): Promise<MenuItems> | MenuItems => {
     // context-menu actions cover the whole selection.
     const list = fops.menuEntries(entry);
     const files = list.flatMap((e) => (e.isDir ? pairedFiles(e.children) : paths(e) ? [e] : []));
     const pair = !entry.isDir ? paths(entry) : null;
     const path = sidePath(entry, side);
+    const base = baseFolderItems(list, fops.sel.rows.has(entry.relPath) ? fops.sel.side : side, side);
     const items = (tools: MenuItems): MenuItems => [
+      ...base,
+      SEPARATOR,
       ...(pair
         ? [
             { label: "Open in Text Compare", onClick: () => onOpenFiles(...pair, engineOptions.rules) },
