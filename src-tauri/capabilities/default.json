@@ -8,6 +8,7 @@
   "permissions": [
     "core:default",
     "core:window:allow-request-user-attention",
+    "core:window:allow-set-theme",
     "dialog:default",
     "updater:default",
     "process:allow-restart",

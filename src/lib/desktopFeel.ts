@@ -202,7 +202,15 @@ function onKeyDownCapture(e: KeyboardEvent) {
   );
 }
 
+/** OS the app runs on, for platform-specific styling (`:root[data-platform]`). */
+export const platform: "windows" | "mac" | "linux" = /Windows/.test(navigator.userAgent)
+  ? "windows"
+  : /Mac|iPhone|iPad/.test(navigator.platform)
+    ? "mac"
+    : "linux";
+
 export function installDesktopFeel() {
+  document.documentElement.dataset.platform = platform;
   window.addEventListener("contextmenu", onContextMenu);
   window.addEventListener("keydown", onKeyDownCapture, true);
 }
