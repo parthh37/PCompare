@@ -9,7 +9,10 @@
 //!   through a shared [`Control`],
 //! - settles name clashes by a [`ConflictMode`], asking the caller when it
 //!   is [`ConflictMode::Ask`],
-//! - and the [`OpQueue`] serializes operations whose paths overlap, so two
+//! - copies and moves treat a file in use by another program like Folder
+//!   Sync does: retried with backoff, then tried once more after everything
+//!   else, and if it is still held the failure names the program (Windows),
+////! - and the [`OpQueue`] serializes operations whose paths overlap, so two
 //!   background jobs never write (or read what the other writes) at once.
 //!
 //! Local copies keep every guarantee of the sync executor: data goes to a
@@ -20,7 +23,7 @@
 use std::fs::{self, File};
 use std::io::{self, Read, Seek};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::mpsc::{self, RecvTimeoutError};
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant, UNIX_EPOCH};
@@ -31,8 +34,8 @@ use pcompare_core::folder::{attr, pair_passes, EntryMeta, FolderFilters};
 use pcompare_core::vfs_write::{pump, VfsWrite};
 use serde::{Deserialize, Serialize};
 
-use crate::exec::hold;
-use crate::failure::{classify, FailureKind, OpError};
+use crate::exec::{self, backoff_delay, hold, is_transient, ExecOptions};
+use crate::failure::{classify, lock_holders, FailureKind, LockHolder, OpError};
 use crate::fsops::{self, AttrChange, Deleter, PermanentDeleter};
 use crate::remote::Root;
 
@@ -134,6 +137,14 @@ pub struct FileOpOptions {
     /// Copy and move: files transferred at once. 0 picks a number for the
     /// two sides ([`copy_threads`]).
     pub threads: usize,
+    /// Copy and move: extra attempts after the first when a file is in use
+    /// by another program or the connection drops ([`is_transient`]). The
+    /// wait starts at `retry_delay_ms` and doubles up to
+    /// `retry_max_delay_ms`; a file still in use after that is tried once
+    /// more when everything else is done.
+    pub retry_attempts: u32,
+    pub retry_delay_ms: u64,
+    pub retry_max_delay_ms: u64,
 }
 
 /// The folder compare's name, attribute, size and date filters, as far as
@@ -231,6 +242,8 @@ impl CompiledFilter {
 
 impl Default for FileOpOptions {
     fn default() -> Self {
+        // The same retries as Folder Sync.
+        let sync = ExecOptions::default();
         FileOpOptions {
             conflicts: ConflictMode::Ask,
             permanent: false,
@@ -243,6 +256,9 @@ impl Default for FileOpOptions {
             touch: TouchTime::Now,
             filter: None,
             threads: 0,
+            retry_attempts: sync.retry_attempts,
+            retry_delay_ms: sync.retry_delay_ms,
+            retry_max_delay_ms: sync.retry_max_delay_ms,
         }
     }
 }
@@ -271,6 +287,8 @@ pub enum FilePhase {
     Paused,
     /// Waiting for an answer to [`FileOpProgress::question`].
     Asking,
+    /// Copy and move: trying again the files that were still in use.
+    Deferred,
     Finished,
 }
 
@@ -296,6 +314,11 @@ pub struct FileOpProgress {
     pub current: Option<String>,
     pub failed: usize,
     pub skipped: usize,
+    /// Copy and move: files waiting to try again, because another program
+    /// holds them or the connection dropped.
+    pub retrying: usize,
+    /// Copy and move: files left for the end because they were still in use.
+    pub deferred: usize,
     pub question: Option<ConflictQuestion>,
     /// Copy and move: items that arrived at the destination since the last
     /// message, relative to the destination root, so a view can show them
@@ -314,6 +337,9 @@ pub struct FileOpFailure {
     pub path: String,
     pub kind: FailureKind,
     pub message: String,
+    /// Processes holding the file, when it was in use (Windows only).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub locked_by: Vec<LockHolder>,
 }
 
 #[derive(Debug, Clone, Default, Serialize)]
@@ -545,6 +571,14 @@ impl<'a> Place<'a> {
         }
     }
 
+    /// The path on this computer, for a local place.
+    fn local(&self) -> Option<&Path> {
+        match self {
+            Place::Local(p) => Some(p),
+            Place::Remote { .. } => None,
+        }
+    }
+
     /// The full path in the place's own syntax.
     fn path(&self) -> String {
         match self {
@@ -760,14 +794,26 @@ struct Runner<'r> {
     last_tick: Option<Instant>,
     /// Leaves filtered items out of scanned folders (copy and move).
     filter: Option<CompiledFilter>,
-    /// Bytes of the files the copy workers are moving right now.
-    inflight: Arc<AtomicU64>,
+    /// What the copy workers are up to right now.
+    flow: Arc<Flow>,
+    /// Copy and move: the second round, for the files that were in use.
+    second_round: bool,
+}
+
+/// Counters the copy workers keep up to date for the progress messages.
+#[derive(Default)]
+struct Flow {
+    /// Bytes of the files being moved right now.
+    inflight: AtomicU64,
+    /// Files waiting to try again.
+    retrying: AtomicUsize,
 }
 
 impl Runner<'_> {
     fn emit(&mut self) {
         self.last_tick = Some(Instant::now());
-        let flowing = self.inflight.load(Ordering::Relaxed);
+        self.state.retrying = self.flow.retrying.load(Ordering::Relaxed);
+        let flowing = self.flow.inflight.load(Ordering::Relaxed);
         self.state.bytes_done += flowing;
         (self.progress)(&self.state);
         self.state.bytes_done -= flowing;
@@ -824,6 +870,11 @@ impl Runner<'_> {
 
     /// Records a failure; a cancellation is not one.
     fn fail(&mut self, path: &str, e: OpError) {
+        self.fail_held(path, e, Vec::new());
+    }
+
+    /// [`Self::fail`] for a file in use by `locked_by`.
+    fn fail_held(&mut self, path: &str, e: OpError, locked_by: Vec<LockHolder>) {
         if e.kind == FailureKind::Cancelled || self.cancelled() {
             return;
         }
@@ -833,6 +884,7 @@ impl Runner<'_> {
             path: path.to_owned(),
             kind: e.kind,
             message: e.message,
+            locked_by,
         });
         self.emit();
     }
@@ -985,6 +1037,8 @@ impl Runner<'_> {
                 meta: node.meta.clone(),
                 replace: existing.is_some(),
                 moving,
+                copied: None,
+                deferred: false,
             },
             JobInfo {
                 shown: shown.to_owned(),
@@ -1074,6 +1128,8 @@ impl Runner<'_> {
                 let paused = self.ctl.pause.load(Ordering::Relaxed) && !self.cancelled();
                 let phase = if paused {
                     FilePhase::Paused
+                } else if self.second_round {
+                    FilePhase::Deferred
                 } else {
                     FilePhase::Running
                 };
@@ -1089,11 +1145,24 @@ impl Runner<'_> {
                 })
             };
             match next {
-                Ok((id, outcome)) => {
+                Ok(Finished {
+                    job,
+                    outcome,
+                    locked_by,
+                }) => {
                     pool.outstanding -= 1;
-                    let info = std::mem::take(&mut pool.info[id]);
+                    let id = job.id;
+                    if job.deferred {
+                        self.state.deferred -= 1;
+                    }
                     match outcome {
+                        Err(e) if !self.cancelled() && defers(&job, &e) => {
+                            // Kept (with its info) for the second round.
+                            self.state.deferred += 1;
+                            pool.deferred.push(job);
+                        }
                         Ok(notes) => {
+                            let info = std::mem::take(&mut pool.info[id]);
                             self.note(&info.shown, notes);
                             self.succeed(1, info.size);
                             self.landed(&info.shown, &info.dst_shown, info.moving);
@@ -1101,7 +1170,12 @@ impl Runner<'_> {
                             pool.results[id] = Some(true);
                         }
                         Err(e) => {
-                            self.fail(&info.shown, e);
+                            let info = std::mem::take(&mut pool.info[id]);
+                            if job.copied.is_some() {
+                                // A move whose original stays: the copy is there all the same.
+                                self.state.landed.push(info.dst_shown);
+                            }
+                            self.fail_held(&info.shown, e, locked_by);
                             pool.results[id] = Some(false);
                         }
                     }
@@ -1184,13 +1258,13 @@ impl Runner<'_> {
         moving: bool,
     ) {
         let (job_tx, job_rx) = mpsc::channel::<Job<'a>>();
-        let (done_tx, done_rx) = mpsc::channel::<JobOutcome>();
+        let (done_tx, done_rx) = mpsc::channel::<Finished<'a>>();
         let job_rx = Mutex::new(job_rx);
-        let inflight = self.inflight.clone();
+        let flow = self.flow.clone();
         std::thread::scope(|scope| {
             for _ in 0..threads.max(1) {
-                let (jobs, done, inflight) = (&job_rx, done_tx.clone(), &*inflight);
-                scope.spawn(move || mover.serve(jobs, &done, inflight));
+                let (jobs, done, flow) = (&job_rx, done_tx.clone(), &*flow);
+                scope.spawn(move || mover.serve(jobs, &done, flow));
             }
             drop(done_tx);
             let mut pool = Pool {
@@ -1200,6 +1274,7 @@ impl Runner<'_> {
                 info: Vec::new(),
                 results: Vec::new(),
                 outstanding: 0,
+                deferred: Vec::new(),
             };
             let mut planned = Vec::new();
             for ((shown, at, to, node), dst_shown) in items.iter().zip(dst_rels) {
@@ -1219,9 +1294,22 @@ impl Runner<'_> {
                 planned.push(self.plan_node(&mut pool, at, node, to, shown, dst_shown, moving));
             }
             pool.release();
+            self.collect(&mut pool, true);
+            // A second round for the files that were in use: by now the
+            // program holding them has often let go.
+            let deferred = std::mem::take(&mut pool.deferred);
+            if !deferred.is_empty() && !self.cancelled() {
+                self.second_round = true;
+                for mut job in deferred {
+                    job.deferred = true;
+                    pool.resend(job);
+                }
+                self.collect(&mut pool, true);
+                self.second_round = false;
+            }
+            self.state.deferred = 0;
             // No more jobs: the workers stop once the queue runs dry.
             pool.jobs = None;
-            self.collect(&mut pool, true);
             let results = std::mem::take(&mut pool.results);
             for p in planned {
                 self.finish(p, &results);
@@ -1272,6 +1360,38 @@ struct Job<'a> {
     replace: bool,
     /// Remove `src` once the copy is in place.
     moving: bool,
+    /// The copy is in place (with these caveats); a move whose original
+    /// couldn't be removed yet only has that left to do.
+    copied: Option<Vec<String>>,
+    /// Back for the second round, after being in use the first time.
+    deferred: bool,
+}
+
+/// Whether a failed job gets a second round once everything else is done.
+/// Files in use are usually held only for a moment (an antivirus scan, a
+/// cloud-sync client, a program saving), and by the end it has often let go.
+fn defers(job: &Job, e: &OpError) -> bool {
+    // TODO(you): Windows often reports a destination open in Excel or Word as
+    // AccessDenied (the rename into place), not Locked. Decide whether that
+    // also earns a second round; for now this matches Folder Sync.
+    !job.deferred && e.kind == FailureKind::Locked
+}
+
+/// The programs holding the file a job failed on. When the error doesn't
+/// say which of its files that was (or names a temp file), both are asked.
+fn holders(e: &OpError, job: &Job) -> Vec<LockHolder> {
+    let (src, dst) = (job.src.local(), job.dst.local());
+    let asked: Vec<&Path> = match e.path.as_deref() {
+        Some(p) if Some(p) == src || Some(p) == dst => vec![p],
+        _ => src.into_iter().chain(dst).collect(),
+    };
+    let mut out: Vec<LockHolder> = Vec::new();
+    for h in asked.into_iter().flat_map(lock_holders) {
+        if !out.contains(&h) {
+            out.push(h);
+        }
+    }
+    out
 }
 
 /// What the coordinator keeps about a submitted [`Job`].
@@ -1283,7 +1403,14 @@ struct JobInfo {
     moving: bool,
 }
 
-type JobOutcome = (usize, Result<Vec<String>, OpError>);
+/// A job back from a worker, done or failed.
+struct Finished<'a> {
+    job: Job<'a>,
+    /// The copy's caveats, or why it failed.
+    outcome: Result<Vec<String>, OpError>,
+    /// Who holds the file, when it failed for good because it is in use.
+    locked_by: Vec<LockHolder>,
+}
 
 /// The copy workers' queue, as the coordinating thread sees it.
 struct Pool<'a> {
@@ -1292,11 +1419,13 @@ struct Pool<'a> {
     /// Jobs kept from the workers until the walk is done, when it must not
     /// overlap them (see [`read_out_first`]).
     held: Option<Vec<Job<'a>>>,
-    done: mpsc::Receiver<JobOutcome>,
+    done: mpsc::Receiver<Finished<'a>>,
     info: Vec<JobInfo>,
     /// Per job: `None` while it runs, then whether it succeeded.
     results: Vec<Option<bool>>,
     outstanding: usize,
+    /// Jobs whose files were in use, waiting for the second round.
+    deferred: Vec<Job<'a>>,
 }
 
 impl<'a> Pool<'a> {
@@ -1320,6 +1449,12 @@ impl<'a> Pool<'a> {
             self.results[id] = Some(false);
             self.outstanding -= 1;
         }
+    }
+
+    /// Hands a deferred job (already submitted once) to the workers again.
+    fn resend(&mut self, job: Job<'a>) {
+        self.outstanding += 1;
+        self.send(job);
     }
 
     /// Lets the workers start on the jobs held during the walk.
@@ -1402,35 +1537,94 @@ struct Mover<'r> {
     deleter: &'r dyn Deleter,
 }
 
-impl Mover<'_> {
+impl<'a> Mover<'_> {
     /// A worker: takes jobs until the queue closes.
-    fn serve(&self, jobs: &Mutex<mpsc::Receiver<Job>>, done: &mpsc::Sender<JobOutcome>, inflight: &AtomicU64) {
+    fn serve(&self, jobs: &Mutex<mpsc::Receiver<Job<'a>>>, done: &mpsc::Sender<Finished<'a>>, flow: &Flow) {
         loop {
             let job = {
                 let rx = jobs.lock().unwrap_or_else(|e| e.into_inner());
                 rx.recv()
             };
-            let Ok(job) = job else { return };
+            let Ok(mut job) = job else { return };
             let outcome = if self.ctl.is_cancelled() {
                 Err(OpError::new(FailureKind::Cancelled, "cancelled"))
             } else {
                 // A panic must not leave the coordinator waiting for this job.
-                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| self.work(&job, inflight)))
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| self.work(&mut job, flow)))
                     .unwrap_or_else(|_| Err(OpError::new(FailureKind::Other, "the copy crashed")))
             };
-            if done.send((job.id, outcome)).is_err() {
+            // Asked here, off the coordinator's thread, and only once the
+            // failure is final: the lookup takes a moment per file.
+            let locked_by = match &outcome {
+                Err(e) if matches!(e.kind, FailureKind::Locked | FailureKind::AccessDenied) && !defers(&job, e) => {
+                    holders(e, &job)
+                }
+                _ => Vec::new(),
+            };
+            let finished = Finished {
+                job,
+                outcome,
+                locked_by,
+            };
+            if done.send(finished).is_err() {
                 return;
             }
         }
     }
 
-    /// Copies one file (removing the original for a move), counting the
-    /// bytes in flight in `inflight` while it runs.
-    fn work(&self, job: &Job, inflight: &AtomicU64) -> Result<Vec<String>, OpError> {
+    /// Copies one file, then removes the original for a move, each step
+    /// retried on its own: a retry never copies again what is in place.
+    fn work(&self, job: &mut Job, flow: &Flow) -> Result<Vec<String>, OpError> {
+        if job.copied.is_none() {
+            let notes = self.retrying(flow, |again| self.copy_once(job, again, flow))?;
+            job.copied = Some(notes);
+        }
+        if job.moving {
+            let src = &job.src;
+            self.retrying(flow, |_| {
+                src.remove_file().map_err(|e| OpError {
+                    path: src.local().map(Path::to_path_buf),
+                    ..OpError::new(
+                        classify(&e),
+                        format!("copied, but the original couldn't be removed: {e}"),
+                    )
+                })
+            })?;
+        }
+        Ok(job.copied.take().unwrap_or_default())
+    }
+
+    /// Runs `step` until it succeeds, fails for good, or runs out of
+    /// retries; `step(true)` is a retry. Waits back off like Folder Sync's.
+    fn retrying<T>(&self, flow: &Flow, mut step: impl FnMut(bool) -> Result<T, OpError>) -> Result<T, OpError> {
+        let mut retry = 0;
+        loop {
+            match step(retry > 0) {
+                Err(e) if is_transient(e.kind) && retry < self.opts.retry_attempts && !self.ctl.is_cancelled() => {
+                    retry += 1;
+                    let wait = backoff_delay(self.opts.retry_delay_ms, self.opts.retry_max_delay_ms, retry);
+                    flow.retrying.fetch_add(1, Ordering::Relaxed);
+                    let go_on = exec::pause(wait, &self.ctl.cancel);
+                    flow.retrying.fetch_sub(1, Ordering::Relaxed);
+                    if !go_on {
+                        return Err(OpError::new(FailureKind::Cancelled, "cancelled"));
+                    }
+                }
+                done => return done,
+            }
+        }
+    }
+
+    /// One attempt at copying a job's file, counting the bytes in flight in
+    /// `flow` while it runs.
+    fn copy_once(&self, job: &Job, again: bool, flow: &Flow) -> Result<Vec<String>, OpError> {
         let ctl = self.ctl;
         if !hold(&ctl.pause, &ctl.cancel, |_| {}) {
             return Err(OpError::new(FailureKind::Cancelled, "cancelled"));
         }
+        // An earlier attempt may have sent the old version to the Trash
+        // before it failed; there is nothing left to replace then.
+        let replace = job.replace && (!again || job.dst.stat().map_or(true, |m| m.is_some()));
         let mut sent = 0u64;
         let result = {
             let mut on_bytes = |n: u64| {
@@ -1438,22 +1632,13 @@ impl Mover<'_> {
                     return Err(io::Error::new(io::ErrorKind::Interrupted, "cancelled"));
                 }
                 sent += n;
-                inflight.fetch_add(n, Ordering::Relaxed);
+                flow.inflight.fetch_add(n, Ordering::Relaxed);
                 Ok(())
             };
-            self.transfer(&job.src, &job.meta, &job.dst, job.replace, &mut on_bytes)
+            self.transfer(&job.src, &job.meta, &job.dst, replace, &mut on_bytes)
         };
-        inflight.fetch_sub(sent, Ordering::Relaxed);
-        let notes = result?;
-        if job.moving {
-            job.src.remove_file().map_err(|e| {
-                OpError::new(
-                    classify(&e),
-                    format!("copied, but the original couldn't be removed: {e}"),
-                )
-            })?;
-        }
-        Ok(notes)
+        flow.inflight.fetch_sub(sent, Ordering::Relaxed);
+        result
     }
 
     /// Copies one file's data (and times) from `src` to `dst`, replacing
@@ -1579,10 +1764,13 @@ impl Mover<'_> {
             }
             return fs::rename(&tmp, dst).map_err(|e| {
                 let _ = fs::remove_file(&tmp);
-                OpError::new(
-                    classify(&e),
-                    format!("{e}; the previous version is in the Recycle Bin / Trash"),
-                )
+                OpError {
+                    path: Some(dst.to_path_buf()),
+                    ..OpError::new(
+                        classify(&e),
+                        format!("{e}; the previous version is in the Recycle Bin / Trash"),
+                    )
+                }
             });
         }
         // Overwrite for good, but keep the old file one rename away until
@@ -1899,7 +2087,8 @@ pub fn run(
         report: FileOpReport::default(),
         last_tick: None,
         filter: None,
-        inflight: Arc::new(AtomicU64::new(0)),
+        flow: Arc::new(Flow::default()),
+        second_round: false,
     };
     if matches!(req.action, FileAction::Copy | FileAction::Move) {
         if let Some(f) = &req.options.filter {
@@ -3270,6 +3459,249 @@ mod tests {
             let gone = all(FileAction::Delete, &["docs"], right, None);
             assert_eq!(gone.succeeded, 1);
             assert_eq!(files(&p.right), ["a.txt"]);
+        }
+    }
+
+    // ----- files in use -----
+
+    /// Retries without the waiting.
+    fn quick(conflicts: ConflictMode) -> FileOpOptions {
+        FileOpOptions {
+            conflicts,
+            retry_delay_ms: 1,
+            retry_max_delay_ms: 2,
+            ..Default::default()
+        }
+    }
+
+    /// Counts one more refusal down; false once there are none left.
+    fn refuse(left: &Mutex<u32>) -> bool {
+        let mut n = left.lock().unwrap();
+        *n = match n.checked_sub(1) {
+            Some(rest) => rest,
+            None => return false,
+        };
+        true
+    }
+
+    /// A Recycle Bin that refuses the first `n` files it is given, as Windows
+    /// does while another program has them open.
+    struct Busy(Mutex<u32>);
+
+    impl Busy {
+        fn new(n: u32) -> Self {
+            Busy(Mutex::new(n))
+        }
+    }
+
+    impl Deleter for Busy {
+        fn delete(&self, path: &Path) -> io::Result<()> {
+            if refuse(&self.0) {
+                return Err(io::Error::from(io::ErrorKind::ResourceBusy));
+            }
+            PermanentDeleter.delete(path)
+        }
+    }
+
+    /// Runs `req` between two local folders, replacing files through `bin`.
+    fn go_with(
+        req: &FileOpRequest,
+        src: Root,
+        dst: Root,
+        bin: &dyn Deleter,
+        progress: &mut dyn FnMut(&FileOpProgress),
+    ) -> FileOpReport {
+        run(
+            req,
+            src,
+            Some(dst),
+            bin,
+            &Control::default(),
+            progress,
+            &mut |_| panic!("not expected to ask"),
+        )
+    }
+
+    #[test]
+    fn a_file_in_use_is_retried_until_it_is_free() {
+        let p = pair();
+        // The old a.txt can't be put in the Trash for two attempts.
+        let busy = Busy::new(2);
+        let copy = req(FileAction::Copy, &["a.txt"], quick(ConflictMode::Overwrite));
+        let r = go_with(&copy, Root::Local(&p.left), Root::Local(&p.right), &busy, &mut |_| {});
+        assert_eq!((r.succeeded, r.failed), (1, 0), "{:?}", r.failures);
+        assert_eq!(read(&p.right, "a.txt"), "left a");
+        assert_eq!(files(&p.right), ["a.txt"], "no temp files left behind");
+    }
+
+    #[test]
+    fn a_file_still_in_use_gets_a_second_round_at_the_end() {
+        let p = pair();
+        // Held through the first round's four attempts, free by the second.
+        let busy = Busy::new(4);
+        let options = FileOpOptions {
+            threads: 1,
+            ..quick(ConflictMode::Overwrite)
+        };
+        let copy = req(FileAction::Copy, &["a.txt", "docs"], options);
+        let (mut landed, mut phases) = (Vec::new(), Vec::new());
+        let r = go_with(&copy, Root::Local(&p.left), Root::Local(&p.right), &busy, &mut |pr| {
+            landed.extend(pr.landed.iter().cloned());
+            phases.push(pr.phase);
+        });
+        assert_eq!((r.succeeded, r.failed), (3, 0), "{:?}", r.failures);
+        assert_eq!(read(&p.right, "a.txt"), "left a");
+        assert_eq!(landed.last().map(String::as_str), Some("a.txt"), "{landed:?}");
+        assert!(phases.contains(&FilePhase::Deferred));
+    }
+
+    #[test]
+    fn a_file_in_use_to_the_end_fails_and_keeps_the_old_version() {
+        let p = pair();
+        let busy = Busy::new(u32::MAX);
+        let copy = req(FileAction::Copy, &["a.txt", "docs"], quick(ConflictMode::Overwrite));
+        let r = go_with(&copy, Root::Local(&p.left), Root::Local(&p.right), &busy, &mut |_| {});
+        assert_eq!((r.succeeded, r.failed), (2, 1), "{:?}", r.failures);
+        assert_eq!(r.failures[0].path, "a.txt");
+        assert_eq!(r.failures[0].kind, FailureKind::Locked);
+        assert_eq!(read(&p.right, "a.txt"), "right a (old)");
+        assert_eq!(files(&p.right), ["a.txt", "docs/b.txt", "docs/sub/c.txt"]);
+        // Holders are listed only where the OS can tell (Windows).
+        let json = serde_json::to_value(&r.failures[0]).unwrap();
+        assert_eq!(json["kind"], "locked");
+        assert_eq!(json.get("lockedBy").is_some(), !r.failures[0].locked_by.is_empty());
+    }
+
+    #[test]
+    fn cancelling_ends_a_wait_to_retry() {
+        let p = pair();
+        let busy = Busy::new(u32::MAX);
+        let options = FileOpOptions {
+            retry_delay_ms: 60_000,
+            retry_max_delay_ms: 60_000,
+            ..opts(ConflictMode::Overwrite)
+        };
+        let ctl = Control::default();
+        let started = Instant::now();
+        let r = run(
+            &req(FileAction::Copy, &["a.txt"], options),
+            Root::Local(&p.left),
+            Some(Root::Local(&p.right)),
+            &busy,
+            &ctl,
+            &mut |pr| {
+                if pr.retrying > 0 {
+                    ctl.cancel();
+                }
+            },
+            &mut |_| panic!("not expected to ask"),
+        );
+        assert!(r.cancelled);
+        assert!(r.failures.is_empty(), "{:?}", r.failures);
+        assert!(started.elapsed() < Duration::from_secs(10));
+        assert_eq!(read(&p.right, "a.txt"), "right a (old)");
+    }
+
+    /// A remote whose files can't be removed while `busy` lasts (open in
+    /// another program), counting how often files are read.
+    struct Held {
+        inner: FakeRemote,
+        busy: Mutex<u32>,
+        reads: AtomicUsize,
+    }
+
+    impl Vfs for Held {
+        fn read_dir(&self, dir: &str) -> pcompare_core::Result<Vec<VfsEntry>> {
+            self.inner.read_dir(dir)
+        }
+        fn open(&self, path: &str) -> pcompare_core::Result<Box<dyn Read + Send>> {
+            self.reads.fetch_add(1, Ordering::SeqCst);
+            self.inner.open(path)
+        }
+        fn join(&self, dir: &str, name: &str) -> String {
+            self.inner.join(dir, name)
+        }
+    }
+
+    impl VfsWrite for Held {
+        fn caps(&self) -> WriteCaps {
+            self.inner.caps()
+        }
+        fn stat(&self, path: &str) -> io::Result<Option<EntryMeta>> {
+            self.inner.stat(path)
+        }
+        fn open_at(&self, path: &str, offset: u64) -> io::Result<Box<dyn Read + Send>> {
+            self.reads.fetch_add(1, Ordering::SeqCst);
+            self.inner.open_at(path, offset)
+        }
+        fn write(
+            &self,
+            path: &str,
+            offset: u64,
+            src: &mut dyn Read,
+            on_bytes: &mut dyn FnMut(u64) -> io::Result<()>,
+        ) -> io::Result<u64> {
+            self.inner.write(path, offset, src, on_bytes)
+        }
+        fn create_dir_all(&self, path: &str) -> io::Result<()> {
+            self.inner.create_dir_all(path)
+        }
+        fn remove_file(&self, path: &str) -> io::Result<()> {
+            if refuse(&self.busy) {
+                return Err(io::Error::from(io::ErrorKind::ResourceBusy));
+            }
+            self.inner.remove_file(path)
+        }
+        fn remove_dir_all(&self, path: &str) -> io::Result<()> {
+            self.inner.remove_dir_all(path)
+        }
+        fn rename(&self, from: &str, to: &str) -> io::Result<()> {
+            self.inner.rename(from, to)
+        }
+        fn set_modified(&self, path: &str, ms: i64) -> io::Result<()> {
+            self.inner.set_modified(path, ms)
+        }
+    }
+
+    #[test]
+    fn a_move_whose_original_is_in_use_copies_it_only_once() {
+        for (busy, removed) in [(4, true), (u32::MAX, false)] {
+            let p = pair();
+            let held = Held {
+                inner: FakeRemote(SFTP),
+                busy: Mutex::new(busy),
+                reads: AtomicUsize::new(0),
+            };
+            let l_path = p.left.to_string_lossy().into_owned();
+            let left = Root::Remote {
+                fs: &held,
+                path: &l_path,
+                label: "remote://test",
+            };
+            let (mut landed, mut gone) = (Vec::new(), Vec::new());
+            let r = go_with(
+                &req(FileAction::Move, &["docs/b.txt"], quick(ConflictMode::Overwrite)),
+                left,
+                Root::Local(&p.right),
+                &PermanentDeleter,
+                &mut |pr| {
+                    landed.extend(pr.landed.iter().cloned());
+                    gone.extend(pr.removed.iter().cloned());
+                },
+            );
+            assert_eq!(held.reads.load(Ordering::SeqCst), 1, "copied once (busy {busy})");
+            assert_eq!(read(&p.right, "docs/b.txt"), "bb");
+            assert_eq!(landed, ["docs/b.txt"]);
+            assert_eq!(p.left.join("docs/b.txt").exists(), !removed);
+            if removed {
+                assert_eq!((r.succeeded, r.failed), (1, 0), "{:?}", r.failures);
+                assert_eq!(gone, ["docs/b.txt"]);
+            } else {
+                assert_eq!(r.failed, 1);
+                assert_eq!(r.failures[0].kind, FailureKind::Locked);
+                assert!(r.failures[0].message.starts_with("copied, but"), "{}", r.failures[0].message);
+                assert!(gone.is_empty());
+            }
         }
     }
 }

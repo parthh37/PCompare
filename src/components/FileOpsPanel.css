@@ -157,6 +157,12 @@
   overflow-y: auto;
   font-size: 12px;
 }
+.fop-lockers {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--warn);
+}
 
 /* ----- toolbar toggle ----- */
 .tool-btn .fop-badge {
