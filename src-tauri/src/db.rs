@@ -77,6 +77,17 @@ pub async fn db_save_connection(app: AppHandle, input: DbConnectionInput) -> Cmd
     blocking(move || state(&app).db.save(input)).await
 }
 
+/// Saves imported connections in one go (passwords typed in the import
+/// dialog go to the keychain); clashing names get a ` (2)` suffix.
+#[tauri::command]
+pub async fn db_import_connections(app: AppHandle, inputs: Vec<DbConnectionInput>) -> CmdResult<Vec<DbConnection>> {
+    blocking(move || {
+        let inputs = inputs.into_iter().map(|i| DbConnectionInput { id: None, ..i }).collect();
+        state(&app).db.save_all(inputs)
+    })
+    .await
+}
+
 #[tauri::command]
 pub async fn db_delete_connection(app: AppHandle, id: String) -> CmdResult<()> {
     blocking(move || state(&app).db.delete(&id)).await

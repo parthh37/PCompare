@@ -11,6 +11,8 @@
 //! Files are recognised by content, not extension. Nothing here writes: the
 //! app shows what was read and saves the sessions the user picks.
 
+pub mod connections;
+
 mod beyond_compare;
 mod freefilesync;
 mod meld;
@@ -34,7 +36,7 @@ pub enum ImportError {
 
 pub type Result<T> = std::result::Result<T, ImportError>;
 
-fn format_err(msg: impl Into<String>) -> ImportError {
+pub(crate) fn format_err(msg: impl Into<String>) -> ImportError {
     ImportError::Format(msg.into())
 }
 
@@ -181,7 +183,7 @@ pub(crate) fn parse_bytes(bytes: &[u8], path: &Path) -> Result<Parsed> {
 }
 
 /// UTF-8 (with or without a BOM) or UTF-16 with a BOM; tools on Windows write both.
-fn decode(bytes: &[u8]) -> String {
+pub(crate) fn decode(bytes: &[u8]) -> String {
     let utf16 = |le: bool| {
         let units: Vec<u16> = bytes[2..]
             .as_chunks::<2>()

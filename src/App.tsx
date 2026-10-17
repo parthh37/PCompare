@@ -588,6 +588,9 @@ export default function App() {
               setToast(`Imported ${count} session${count === 1 ? "" : "s"}.`);
               refreshSaved();
             }}
+            onImportedConnections={(count) =>
+              setToast(`Imported ${count} database connection${count === 1 ? "" : "s"}. Open Database Compare to use them.`)
+            }
             onRenameSaved={(s, name) =>
               api
                 .renameSession(s.id, name)

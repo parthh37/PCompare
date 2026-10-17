@@ -204,47 +204,64 @@ impl ConnectionStore {
     }
 
     pub fn save(&self, input: DbConnectionInput) -> Result<DbConnection> {
-        let name = input.name.trim();
-        if name.is_empty() {
-            return Err(CoreError::Other("connection name cannot be empty".into()));
+        let mut saved = self.save_all(vec![input])?;
+        Ok(saved.remove(0))
+    }
+
+    /// Saves several connections with one read and one write of the vault
+    /// (an import can bring dozens). Inputs without an id are added; a name
+    /// already in use gets a ` (2)` suffix.
+    pub fn save_all(&self, inputs: Vec<DbConnectionInput>) -> Result<Vec<DbConnection>> {
+        for input in &inputs {
+            if input.name.trim().is_empty() {
+                return Err(CoreError::Other("connection name cannot be empty".into()));
+            }
+            input.config.engine()?;
         }
-        input.config.engine()?;
         let _g = self.guard();
         let mut file: ConnectionFile = self.file.read(&*self.secrets)?;
         let now = now_ms();
-        let idx = input.id.as_ref().and_then(|id| file.connections.iter().position(|c| &c.id == id));
-        let id = match idx {
-            Some(i) => file.connections[i].id.clone(),
-            None => unique_slug(name, &file.connections),
-        };
-        let mut has_password = idx.is_some_and(|i| file.connections[i].has_password);
-        match input.password.as_deref() {
-            Some("") => {
-                self.secrets.delete(&secret_owner(&id), PASSWORD)?;
-                has_password = false;
+        let mut out = Vec::with_capacity(inputs.len());
+        for input in inputs {
+            let idx = input.id.as_ref().and_then(|id| file.connections.iter().position(|c| &c.id == id));
+            let name = match idx {
+                Some(_) => input.name.trim().to_owned(),
+                None => unique_name(input.name.trim(), &file.connections),
+            };
+            let id = match idx {
+                Some(i) => file.connections[i].id.clone(),
+                None => unique_slug(&name, &file.connections),
+            };
+            let mut has_password = idx.is_some_and(|i| file.connections[i].has_password);
+            match input.password.as_deref() {
+                Some("") => {
+                    self.secrets.delete(&secret_owner(&id), PASSWORD)?;
+                    has_password = false;
+                }
+                Some(p) => {
+                    self.secrets.set(&secret_owner(&id), PASSWORD, p)?;
+                    has_password = true;
+                }
+                None => {}
             }
-            Some(p) => {
-                self.secrets.set(&secret_owner(&id), PASSWORD, p)?;
-                has_password = true;
+            let mut config = input.config;
+            config.password.clear();
+            let conn = DbConnection {
+                id,
+                name,
+                config,
+                has_password,
+                created_ms: idx.map_or(now, |i| file.connections[i].created_ms),
+                modified_ms: now,
+            };
+            match idx {
+                Some(i) => file.connections[i] = conn.clone(),
+                None => file.connections.push(conn.clone()),
             }
-            None => {}
-        }
-        let mut config = input.config;
-        config.password.clear();
-        let conn = DbConnection {
-            id,
-            name: name.to_owned(),
-            config,
-            has_password,
-            created_ms: idx.map_or(now, |i| file.connections[i].created_ms),
-            modified_ms: now,
-        };
-        match idx {
-            Some(i) => file.connections[i] = conn.clone(),
-            None => file.connections.push(conn.clone()),
+            out.push(conn);
         }
         self.file.write(&*self.secrets, &file)?;
-        Ok(conn)
+        Ok(out)
     }
 
     pub fn delete(&self, id: &str) -> Result<()> {
@@ -254,6 +271,15 @@ impl ConnectionStore {
         self.file.write(&*self.secrets, &file)?;
         self.secrets.delete(&secret_owner(id), PASSWORD)
     }
+}
+
+/// `name`, or `name (2)`, `name (3)`... when another connection uses it.
+fn unique_name(name: &str, existing: &[DbConnection]) -> String {
+    let used = |n: &str| existing.iter().any(|c| c.name.eq_ignore_ascii_case(n));
+    if !used(name) {
+        return name.to_owned();
+    }
+    (2..).map(|i| format!("{name} ({i})")).find(|n| !used(n)).expect("finitely many names")
 }
 
 /// `"Prod SQL (EU)"` → `"prod-sql-eu"`, suffixed `-2`, `-3`... when taken.
@@ -323,6 +349,22 @@ mod tests {
         clear.id = Some(c.id.clone());
         assert!(!s.save(clear).unwrap().has_password);
         assert_eq!(s.resolve("prod-db").unwrap().password, "");
+    }
+
+    #[test]
+    fn save_all_writes_once_and_keeps_names_apart() {
+        let dir = tempfile::tempdir().unwrap();
+        let s = store(&dir);
+        s.save(input("Prod DB", None)).unwrap();
+        let saved = s
+            .save_all(vec![input("Prod DB", Some("pw")), input("Dev", None), input("dev", None)])
+            .unwrap();
+        let names: Vec<_> = saved.iter().map(|c| c.name.as_str()).collect();
+        assert_eq!(names, ["Prod DB (2)", "Dev", "dev (2)"]);
+        assert_eq!(s.resolve(&saved[0].id).unwrap().password, "pw");
+        assert_eq!(s.list().unwrap().len(), 4);
+        assert!(s.save_all(vec![input("ok", None), input("  ", None)]).is_err());
+        assert_eq!(s.list().unwrap().len(), 4, "nothing saved when one input is invalid");
     }
 
     #[test]

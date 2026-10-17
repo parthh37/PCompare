@@ -68,7 +68,7 @@ Installed copies update themselves: PCompare checks for signed updates at startu
 | **Table Compare** | CSV / TSV, Excel / ODS workbooks and HTML tables cell by cell · rows by key columns or order · column mapping · case, whitespace, numeric and date tolerances |
 | **Picture Compare** | PNG, JPEG, GIF, BMP, ICO, TIFF, WebP, TGA, PNM, QOI · highlight, difference, blend and swipe views · per-channel tolerance · synced zoom and pan |
 | **Hex Compare** | Files of any size, streamed in pages · aligned inserted bytes · editable |
-| **Database Compare** | Schema and data compare for SQL Server, MySQL / MariaDB, PostgreSQL and SQLite · tables, views, procedures, functions, triggers, sequences with side-by-side DDL · rows matched by key with cell-level differences · pick changes with ← / → arrows, review them in plain words, then apply in all-or-nothing batches (*Show SQL* to see the statements) |
+| **Database Compare** | Schema and data compare for SQL Server, MySQL / MariaDB, PostgreSQL and SQLite · tables, views, procedures, functions, triggers, sequences with side-by-side DDL · rows matched by key with cell-level differences · pick changes with ← / → arrows, review them in plain words, then apply in all-or-nothing batches (*Show SQL* to see the statements) · import saved connections from other database tools or paste a connection string |
 | **Registry Compare** | `.reg` exports or live keys on Windows |
 | **Version Compare** | `.exe` / `.dll` version resources and PE header facts (architecture, ASLR / DEP / CFG, signature) |
 | **MP3 Compare** | Tags and audio properties of MP3, FLAC, M4A, OGG / Opus, WAV and AIFF, with cover art |
@@ -293,7 +293,7 @@ crates/pcompare-convert/     Document-to-text converters and file-format rules
 crates/pcompare-report/      Text / folder / table reports (HTML, text, patch, CSV)
 crates/pcompare-review/      Comparison archives (.pcmpz)
 crates/pcompare-script/      Script processor (`pcompare @script.txt`), quick compare (`/qc`), headless merge
-crates/pcompare-import/      Saved-session import
+crates/pcompare-import/      Saved-session and database-connection import
 crates/pcompare-shell/       Windows Explorer menu verbs
 src-tauri/                   Tauri shell exposing the engines as commands
 src/                         React + TypeScript UI

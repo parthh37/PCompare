@@ -50,6 +50,27 @@ export const emptyConfig = (engine: Engine): ConnectionConfig => ({
   schemas: [],
 });
 
+/**
+ * Two configs with the same key point at the same place, so "Import
+ * connections…" shows the second as a duplicate (of a saved connection, or of
+ * one another tool also lists) instead of saving it twice.
+ */
+export function connectionKey(c: ConnectionConfig): string {
+  const engine = c.engine ?? "mssql";
+  if (engine === "sqlite") return `sqlite|${c.file.replace(/\\/g, "/").toLowerCase()}`;
+  // TODO(you): decide what counts as "the same connection". This default is
+  // strict: every field below must match (host, instance and login compared
+  // case-insensitively, a missing port = the engine's default). Questions
+  // worth settling: should `localhost`, `127.0.0.1` and `.` be one host? Is
+  // `server/SalesDb` a duplicate of `server/HrDb` with the same login, given
+  // the header's database picker can switch databases on one saved
+  // connection? And PostgreSQL role names are case-sensitive, unlike SQL
+  // Server logins.
+  const port = c.port ?? ENGINE_INFO[engine].port;
+  const login = c.auth === "integrated" ? "(windows)" : c.user.toLowerCase();
+  return [engine, c.host.trim().toLowerCase(), c.instance.toLowerCase(), port, c.database.toLowerCase(), login].join("|");
+}
+
 export interface DbConnection {
   id: string;
   name: string;

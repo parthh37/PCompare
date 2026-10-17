@@ -1,7 +1,10 @@
 // Typed bridge to src-tauri/src/import.rs: reading saved sessions from Beyond
-// Compare, WinMerge, FreeFileSync and other tools, and saving the chosen ones.
+// Compare, WinMerge, FreeFileSync and other tools, and saving the chosen ones;
+// plus database connections from SQL Server Management Studio and other
+// database tools.
 import { invoke } from "@tauri-apps/api/core";
 import type { SavedSession, SessionInput } from "./api";
+import type { ConnectionConfig, DbConnection, DbConnectionInput } from "./dbApi";
 import type { CompareKind } from "./sessions";
 
 /** A sessions file found where another tool keeps it (`pcompare_import::Candidate`). */
@@ -55,4 +58,45 @@ export const importApi = {
   read: (path: string) => invoke<ImportSource>("import_read", { path }),
   /** Saves the sessions; clashing names get a ` (2)` suffix like any save. */
   commit: (sessions: SessionInput[]) => invoke<SavedSession[]>("import_commit", { sessions }),
+};
+
+// ---------- database connections (pcompare_import::connections) ----------
+
+/** One connection read from a database tool; `config` is ready to save. Passwords never come over. */
+export interface ImportedConnection {
+  name: string;
+  /** The tool's folder or server group ("Prod/EU"), if it has them. */
+  group?: string;
+  config: ConnectionConfig;
+  /** Settings that had no PCompare equivalent, or were adjusted. */
+  notes: string[];
+}
+
+export interface ConnectionSource {
+  /** The tool and version the file came from, e.g. "SQL Server Management Studio 20". */
+  label: string;
+  path: string;
+  connections: ImportedConnection[];
+  skipped: { name: string; reason: string }[];
+}
+
+/** A pasted connection string; `password` is whatever the string itself carried. */
+export interface PastedConnection {
+  connection: ImportedConnection;
+  password: string | null;
+}
+
+/** Connection files the importer reads, for the open dialog. */
+export const CONNECTION_FILTERS = [
+  { name: "Connection files", extensions: ["xml", "regsrvr", "json", "udl", "txt"] },
+  { name: "All files", extensions: ["*"] },
+];
+
+export const connectionImportApi = {
+  /** Connection lists of installed database tools, in their usual locations. */
+  discover: () => invoke<ImportCandidate[]>("import_discover_connections"),
+  read: (path: string) => invoke<ConnectionSource>("import_read_connections", { path }),
+  parseString: (text: string) => invoke<PastedConnection>("import_parse_connection_string", { text }),
+  /** Saves them in one go; clashing names get a ` (2)` suffix. */
+  commit: (inputs: DbConnectionInput[]) => invoke<DbConnection[]>("db_import_connections", { inputs }),
 };
