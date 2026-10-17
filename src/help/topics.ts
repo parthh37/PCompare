@@ -205,6 +205,8 @@ Right-click, the toolbar or the shortcuts below act on the selection:
 
 ## Operations panel
 Operations run in the background while you keep comparing. The **Ops** button shows the panel: progress, the current file, **Pause / Resume** and **Cancel** per operation, questions about existing files, and errors when it is done. Operations on overlapping folders wait for each other; the comparison rescans when one finishes.
+
+A file in use by another program doesn't stop a copy or move. It is retried a few times, with longer waits each time, and then once more after everything else is done. A file that is still in use after that is listed with the error and, on Windows, the program holding it. A move whose original can't be removed keeps the copy, and the second round only removes the original.
 ` + // Selecting, File operations, Operations panel
       `
 ## Split view

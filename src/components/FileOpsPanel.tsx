@@ -1,7 +1,7 @@
 // The docked Operations panel of Folder Compare: every
 // background file operation with its progress, a Pause / Resume and Cancel
 // per operation, name-clash questions, and errors once it is done.
-import { ChevronDown, ChevronRight, CircleAlert, CircleCheck, CircleX, Hourglass, Pause, Play, X } from "lucide-react";
+import { ChevronDown, ChevronRight, CircleAlert, CircleCheck, CircleX, Hourglass, Lock, Pause, Play, X } from "lucide-react";
 import { useState } from "react";
 import { errorMessage } from "../lib/api";
 import { fileOps, type ConflictAnswer, type FileOp, type FileOpProgress } from "../lib/fileOpsApi";
@@ -19,6 +19,7 @@ const PHASE_LABEL: Record<FileOpProgress["phase"], string> = {
   running: "",
   paused: "Paused",
   asking: "Waiting for your answer",
+  deferred: "Trying the files that were in use again…",
   finished: "Finishing…",
 };
 
@@ -40,7 +41,9 @@ function statusLine(op: FileOp): string {
   const phase = PHASE_LABEL[p.phase];
   const counts = p.filesTotal ? `${p.filesDone.toLocaleString()} / ${p.filesTotal.toLocaleString()}` : "";
   const bytes = p.bytesTotal ? `${formatSize(p.bytesDone)} of ${formatSize(p.bytesTotal)}` : "";
-  return [phase, counts, bytes].filter(Boolean).join(" · ");
+  const waiting = p.retrying ? `${p.retrying.toLocaleString()} in use, retrying` : "";
+  const later = p.deferred && p.phase !== "deferred" ? `${p.deferred.toLocaleString()} left for the end` : "";
+  return [phase, counts, bytes, waiting, later].filter(Boolean).join(" · ");
 }
 
 function percent(p: FileOpProgress | null): number {
@@ -149,6 +152,11 @@ function OpRow({ op }: { op: FileOp }) {
           {op.report.failures.map((f, i) => (
             <li key={`f${i}`} className="s-error-fg">
               <b>{f.path}</b>: {f.message}
+              {f.lockedBy?.length ? (
+                <div className="fop-lockers">
+                  <Lock size={11} /> In use by: {f.lockedBy.map((h) => `${h.name} (pid ${h.pid})`).join(", ")}
+                </div>
+              ) : null}
             </li>
           ))}
           {op.report.notes.map((n, i) => (
