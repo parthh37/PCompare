@@ -241,12 +241,18 @@ pub fn is_transient(kind: FailureKind) -> bool {
 
 /// Delay before retry number `retry` (1-based): exponential, capped.
 fn backoff(opts: &ExecOptions, retry: u32) -> Duration {
+    backoff_delay(opts.retry_delay_ms, opts.retry_max_delay_ms, retry)
+}
+
+/// The wait before retry number `retry` (1-based): `first_ms`, doubling
+/// each time, capped at `max_ms`. Shared with Folder Compare's copy and move.
+pub(crate) fn backoff_delay(first_ms: u64, max_ms: u64, retry: u32) -> Duration {
     let factor = 1u64 << (retry.saturating_sub(1)).min(16);
-    Duration::from_millis(opts.retry_delay_ms.saturating_mul(factor).min(opts.retry_max_delay_ms))
+    Duration::from_millis(first_ms.saturating_mul(factor).min(max_ms))
 }
 
 /// Sleeps for `d`, waking early (returning false) if the run is cancelled.
-fn pause(d: Duration, cancel: &AtomicBool) -> bool {
+pub(crate) fn pause(d: Duration, cancel: &AtomicBool) -> bool {
     let until = Instant::now() + d;
     while Instant::now() < until {
         if cancel.load(Ordering::Relaxed) {

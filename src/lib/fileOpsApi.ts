@@ -6,7 +6,7 @@
 import { Channel, invoke } from "@tauri-apps/api/core";
 import { useSyncExternalStore } from "react";
 import { errorMessage, type EntryMeta, type FolderCompareOptions, type FolderEntry, type Side } from "./api";
-import type { FailureKind } from "./syncApi";
+import type { FailureKind, LockHolder } from "./syncApi";
 
 export type FileAction = "copy" | "move" | "delete" | "rename" | "newFolder" | "attributes" | "touch";
 /** What a copy does when a file is already at its destination. */
@@ -45,6 +45,10 @@ export interface FileOpOptions {
   filter: ItemFilter | null;
   /** Copy/move: files transferred at once; 0 = automatic (more for local disks, 4 for remotes). */
   threads: number;
+  /** Copy/move: extra attempts for a file in use (or a dropped connection), waiting `retryDelayMs`, doubling up to `retryMaxDelayMs`. */
+  retryAttempts: number;
+  retryDelayMs: number;
+  retryMaxDelayMs: number;
 }
 
 /** The folder compare's filters as file operations apply them (`ItemFilter` in fileops.rs). */
@@ -98,7 +102,7 @@ export interface FileOpRequest {
   options: Partial<FileOpOptions>;
 }
 
-export type FilePhase = "queued" | "scanning" | "running" | "paused" | "asking" | "finished";
+export type FilePhase = "queued" | "scanning" | "running" | "paused" | "asking" | "deferred" | "finished";
 
 export interface ConflictQuestion {
   path: string;
@@ -115,6 +119,10 @@ export interface FileOpProgress {
   current: string | null;
   failed: number;
   skipped: number;
+  /** Copy/move: files waiting to try again (in use by another program, or the connection dropped). */
+  retrying: number;
+  /** Copy/move: files left for a second round at the end because they were in use. */
+  deferred: number;
   question: ConflictQuestion | null;
   /** Items that arrived since the last message, relative to the destination root. */
   landed?: string[];
@@ -126,6 +134,8 @@ export interface FileOpFailure {
   path: string;
   kind: FailureKind;
   message: string;
+  /** The programs holding the file, when it was in use (Windows only). */
+  lockedBy?: LockHolder[];
 }
 
 export interface FileOpReport {
