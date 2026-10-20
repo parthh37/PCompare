@@ -5,6 +5,7 @@ import { invoke } from "@tauri-apps/api/core";
 import type { LineEnding, TextDiffOptions, TextDiffResult, TextFileInfo } from "./api";
 import type { TextDocument as BaseDocument, TextFormat } from "./mergeApi";
 import type { Conversion } from "./convertApi";
+import type { BackupOrigin } from "./backupsApi";
 
 export interface TextDocument extends BaseDocument {
   /** Each line's terminator as read ("none" for an unterminated last line). */
@@ -94,6 +95,8 @@ export interface SavedText {
   info: TextFileInfo;
   /** Where the previous version was backed up, if a backup was made. */
   backup: string | null;
+  /** The Backups tab entry holding the previous version, when Backups are on. */
+  backupId: string | null;
 }
 
 let encodings: Promise<EncodingChoice[]> | null = null;
@@ -106,8 +109,9 @@ export const textApi = {
   loadText: (path: string, encoding: string | null) => invoke<TextDocument>("text_load", { path, encoding }),
   diffTexts: (left: DiffSide, right: DiffSide, options: TextDiffOptions) =>
     invoke<TextDiffResult>("text_diff", { left, right, options }),
-  saveTextFile: (path: string, text: string, format: TextFormat, backup: BackupOptions | null) =>
-    invoke<SavedText>("text_save", { path, text, format, backup }),
+  /** With Backups on, the previous version goes there on every save and `backup` is ignored. */
+  saveTextFile: (path: string, text: string, format: TextFormat, backup: BackupOptions | null, origin?: BackupOrigin) =>
+    invoke<SavedText>("text_save", { path, text, format, backup, origin }),
   /** Cached: the lists never change while the app runs. */
   encodings: () => (encodings ??= invoke<EncodingChoice[]>("text_encodings")),
   grammars: () => (grammars ??= invoke<GrammarInfo[]>("text_grammars")),

@@ -19,6 +19,7 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use pcompare_core::vfs_write::VfsWrite;
 use std::time::{Duration, Instant};
 
+use pcompare_core::backups::BackupOrigin;
 use pcompare_core::folder::{ChecksumCache, FolderCompareOptions, FolderCompareResult};
 use pcompare_core::store::now_ms;
 use pcompare_core::CoreError;
@@ -371,7 +372,21 @@ fn run_job(
 ) -> SyncRun {
     let ix = index(app);
     let started = job.map_or_else(now_ms, |(_, t)| t);
-    let deleter = exec_opts.disposal.deleter(&job_stamp(started));
+    let local: Vec<(&str, &Path)> = [("left", &roots.0), ("right", &roots.1)]
+        .into_iter()
+        .filter_map(|(side, root)| match root {
+            Root::Local(p) => Some((side, *p)),
+            Root::Remote { .. } => None,
+        })
+        .collect();
+    let origin = BackupOrigin {
+        tool: "Folder Sync".into(),
+        action: crate::backups::sync_action(spec.mode).into(),
+        left: spec.left.to_owned(),
+        right: spec.right.to_owned(),
+    };
+    let (deleter, batch) =
+        crate::backups::run_deleter(app, &exec_opts.disposal, &job_stamp(started), origin, &local);
     let mut null = NullJournal;
     let mut db_journal = job.zip(ix).map(|((id, _), ix)| ix.journal(id));
     let journal: &mut dyn Journal = match db_journal.as_mut() {
@@ -390,6 +405,9 @@ fn run_job(
         progress,
     );
     drop(db_journal);
+    if let Some(b) = &batch {
+        crate::backups::finish(app, b);
+    }
     if let (Some((id, _)), Some(ix)) = (job, ix) {
         if let Err(e) = ix.finish_job(id, &report, job_status(&report)) {
             eprintln!("scan database: {e}");
@@ -819,7 +837,19 @@ pub async fn folder_merge_execute(
                 require_existing_dir(label, path)?;
             }
         }
-        let deleter = disposal.deleter(&fsops::run_stamp(now_ms()));
+        let origin = BackupOrigin {
+            tool: "Folder Merge".into(),
+            action: "Merge into the output folder".into(),
+            left: left.clone(),
+            right: right.clone(),
+        };
+        let (deleter, batch) = crate::backups::run_deleter(
+            &app,
+            &disposal,
+            &fsops::run_stamp(now_ms()),
+            origin,
+            &[("output", Path::new(&output))],
+        );
         let mut last_sent: Option<Instant> = None;
         let mut send = |p: &MergeProgress| {
             if p.current.is_none() || last_sent.is_none_or(|t| t.elapsed() >= PROGRESS_INTERVAL) {
@@ -831,7 +861,7 @@ pub async fn folder_merge_execute(
             cancel: &guard.flag,
             on_progress: &mut send,
         };
-        merge::execute_merge_with(
+        let report = merge::execute_merge_with(
             (!base.is_empty()).then(|| Path::new(&base)),
             Path::new(&left),
             Path::new(&right),
@@ -839,7 +869,11 @@ pub async fn folder_merge_execute(
             &decisions,
             &*deleter,
             run,
-        )
+        );
+        if let Some(b) = &batch {
+            crate::backups::finish(&app, b);
+        }
+        report
     })
     .await
 }

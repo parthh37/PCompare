@@ -2,6 +2,7 @@
 //! or 2-way when no base file is given).
 
 use crate::CmdResult;
+use pcompare_core::backups::BackupOrigin;
 use pcompare_core::text::{self, TextDiffOptions, TextDiffResult};
 use pcompare_core::textfile::{self, LineEnding, TextFileInfo, TextFormat};
 use pcompare_core::CoreError;
@@ -98,16 +99,31 @@ pub async fn diff_texts(left: Vec<String>, right: Vec<String>, options: TextDiff
 }
 
 /// Writes `text` to a local file in `format` (line breaks are normalized to
-/// the format's style). Remote paths are rejected: they are read-only.
+/// the format's style). Remote paths are rejected: they are read-only. With
+/// an `origin` (a merge's output, not an export), the file it replaces is
+/// kept in the app's backups when they are on.
 #[tauri::command]
-pub async fn save_text_file(path: String, text: String, format: TextFormat) -> CmdResult<TextFileInfo> {
+pub async fn save_text_file(
+    app: AppHandle,
+    path: String,
+    text: String,
+    format: TextFormat,
+    origin: Option<BackupOrigin>,
+) -> CmdResult<TextFileInfo> {
     if pcompare_remote::is_remote(&path) {
         return Err(format!("{path}: remote files are read-only"));
     }
     if pcompare_remote::is_inside_container(&path) {
         return Err(pcompare_remote::read_only_inside(&path));
     }
-    crate::blocking(move || textfile::save_text(&path, &text, &format)).await
+    crate::blocking(move || {
+        if let Some(origin) = origin {
+            textfile::encode_text(&text, &format)?;
+            crate::backups::keep_before_save(&app, Path::new(&path), origin)?;
+        }
+        textfile::save_text(&path, &text, &format)
+    })
+    .await
 }
 
 #[derive(Serialize)]

@@ -23,6 +23,7 @@ import {
   type FileAction,
   type FileOpOptions,
 } from "../lib/fileOpsApi";
+import type { BackupOrigin } from "../lib/backupsApi";
 import { eventBinding, isMac, matches, shortcutLabel } from "../lib/keymap";
 import { SEPARATOR, type MenuItems } from "../lib/nativeMenu";
 import {
@@ -281,12 +282,23 @@ export function useFolderFileOps({
       .map((s) => part(s, list))
       .filter((p) => p.items.length);
 
+  /** How the Backups tab names a copy or move, e.g. "Copy left → right" or "Move to folder". */
+  const backupOrigin = (action: FileAction, p: ReadyPart): BackupOrigin | undefined => {
+    if (action !== "copy" && action !== "move") return undefined;
+    const verb = action === "copy" ? "Copy" : "Move";
+    const [l, r] = [rootOf("left"), rootOf("right")];
+    const way = p.srcRoot === l && p.dstRoot === r ? "left → right" : p.srcRoot === r && p.dstRoot === l ? "right → left" : null;
+    return way
+      ? { tool: "Folder Compare", action: `${verb} ${way}`, left: l, right: r }
+      : { tool: "Folder Compare", action: `${verb} to folder`, left: p.srcRoot, right: p.dstRoot ?? undefined };
+  };
+
   const start = (ready: ReadyPart[], action: FileAction, options: Partial<FileOpOptions>) => {
     setDialog(null);
     setPanelOpen(true);
     for (const p of ready) {
       if (!p.items.length) continue;
-      fileOps.start(p.title, p.srcRoot, p.dstRoot, { action, items: p.items, options });
+      fileOps.start(p.title, p.srcRoot, p.dstRoot, { action, items: p.items, options }, backupOrigin(action, p));
     }
   };
 

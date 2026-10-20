@@ -14,6 +14,7 @@ import {
   type BlockPattern,
   type GrammarInfo,
 } from "../lib/textApi";
+import { usePref } from "../lib/prefs";
 import { Modal } from "./Modal";
 import "./TextRulesDialog.css";
 
@@ -89,6 +90,8 @@ export function TextRulesDialog({
   const [tolPercent, setTolPercent] = useState(tolerance.relativePercent ? String(tolerance.relativePercent) : "");
   const [blocks, setBlocks] = useState<BlockPattern[]>(options.ignoreBlocks ?? []);
   const [backups, setBackups] = useState<BackupOptions>(loadBackups);
+  /** App-wide Backups take over from the options on the Backups page. */
+  const appBackups = usePref("backups").enabled;
   const [grammars, setGrammars] = useState<GrammarInfo[]>([]);
   const [error, setError] = useState<string | null>(null);
   const set = <K extends keyof TextDiffOptions>(k: K, v: TextDiffOptions[K]) => setO((p) => ({ ...p, [k]: v }));
@@ -458,7 +461,13 @@ export function TextRulesDialog({
 
       {page === "backups" && (
         <div className="settings-grid single">
-          <fieldset>
+          {appBackups && (
+            <div className="banner info">
+              Backups are on for the whole app: every save keeps the previous version on the Backups tab. The options
+              below apply only while Backups are off.
+            </div>
+          )}
+          <fieldset disabled={appBackups} style={appBackups ? { opacity: 0.55 } : undefined}>
             <legend>When saving a file</legend>
             {(
               [

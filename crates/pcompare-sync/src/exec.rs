@@ -1330,6 +1330,40 @@ mod tests {
     }
 
     #[test]
+    fn backups_record_where_old_versions_lived_and_rollback_still_works() {
+        use pcompare_core::backups::{BackupOrigin, BackupReason, BackupStore};
+        let p = synced();
+        let store = BackupStore::new(p._dir.path().join("backups"));
+        let batch = std::sync::Arc::new(store.begin(BackupOrigin::default()));
+        let deleter = crate::fsops::BackupDeleter::new(batch.clone())
+            .with_root("left", &p.left)
+            .with_root("right", &p.right);
+        write(&p.left, "a.txt", "a2", NEW);
+        fs::remove_file(p.left.join("b.txt")).unwrap();
+        let plan = p.plan(SyncMode::MirrorLeftToRight, ConflictPolicy::Skip);
+        let mut journal = MemoryJournal::default();
+        let r = execute(&p.left, &p.right, &plan.ops, &fast(), &deleter, &mut journal, &AtomicBool::new(false), &mut |_| {});
+        assert_eq!(r.failed, 0, "{:?}", r.results);
+
+        let kept = store.get(&batch.id().unwrap()).unwrap();
+        let find = |name: &str| kept.items.iter().find(|i| i.original == p.right.join(name).to_string_lossy()).unwrap();
+        assert_eq!(find("a.txt").reason, BackupReason::Replaced);
+        assert_eq!(find("b.txt").reason, BackupReason::Removed);
+        assert_eq!(fs::read_to_string(Path::new(&kept.folder).join(&find("a.txt").stored)).unwrap(), "a1");
+
+        let items: Vec<_> = plan
+            .ops
+            .iter()
+            .zip(&r.results)
+            .map(|(op, res)| RollbackItem { op: op.clone(), result: res.clone() })
+            .collect();
+        let undo = rollback(&p.left, &p.right, &items, &PermanentDeleter);
+        assert!(undo.iter().all(|u| u.ok), "{undo:?}");
+        assert_eq!(read(&p.right, "a.txt"), "a1");
+        assert_eq!(read(&p.right, "b.txt"), "b1");
+    }
+
+    #[test]
     fn rollback_keeps_files_edited_after_the_sync() {
         let p = synced();
         write(&p.left, "z.txt", "z", OLD);

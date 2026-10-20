@@ -2,6 +2,8 @@ import { open } from "@tauri-apps/plugin-dialog";
 import { FolderOpen } from "lucide-react";
 import { useRef, useState } from "react";
 import { errorMessage } from "../lib/api";
+import { backupsOn } from "../lib/backupsApi";
+import { usePref } from "../lib/prefs";
 import {
   DEFAULT_EXEC_OPTIONS,
   syncApi,
@@ -36,7 +38,7 @@ export function safetySummary(o: ExecOptions): string {
     o.onLocked === "defer" ? "Locked files deferred" : o.onLocked === "skip" ? "Locked files skipped" : "Stop on locked files",
     o.retryAttempts === 0 ? "no retries" : `${o.retryAttempts} retr${o.retryAttempts === 1 ? "y" : "ies"}`,
     o.disposal.kind === "trash"
-      ? `replaced files → ${TRASH_NAME}`
+      ? `replaced files → ${backupsOn() ? "Backups" : TRASH_NAME}`
       : o.disposal.kind === "versioning"
         ? "replaced files → versioning folder"
         : "replaced files deleted permanently",
@@ -95,6 +97,8 @@ export function ExecOptionsForm({ value: o, onChange }: { value: ExecOptions; on
   const set = <K extends keyof ExecOptions>(k: K, v: ExecOptions[K]) => onChange({ ...o, [k]: v });
   const clamp = (v: string, min: number, max: number) => Math.min(max, Math.max(min, Math.round(Number(v) || 0)));
   const versioning = o.disposal.kind === "versioning";
+  /** With Backups on, the Trash choice keeps files there instead. */
+  const backups = usePref("backups").enabled;
   // The default versioning folder arrives asynchronously; apply it to the options as they are by then.
   const latest = useRef(o);
   latest.current = o;
@@ -200,7 +204,14 @@ export function ExecOptionsForm({ value: o, onChange }: { value: ExecOptions; on
         <label className="field radio">
           <input type="radio" name="disposal" checked={o.disposal.kind === "trash"} onChange={() => setDisposal("trash")} />
           <span>
-            <b>Move to {TRASH_NAME}</b>
+            {backups ? (
+              <>
+                <b>Keep in Backups</b>
+                <small className="muted">Restore them from the Backups tab.</small>
+              </>
+            ) : (
+              <b>Move to {TRASH_NAME}</b>
+            )}
           </span>
         </label>
         <label className="field radio">
@@ -239,6 +250,7 @@ export function ExecOptionsForm({ value: o, onChange }: { value: ExecOptions; on
             <small>Can't be undone or rolled back.</small>
           </span>
         </label>
+        {backups && <small className="muted">A versioning folder or permanent deletion bypasses Backups.</small>}
       </fieldset>
 
       {/* dates on copies */}

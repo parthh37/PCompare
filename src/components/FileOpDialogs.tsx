@@ -17,6 +17,8 @@ import {
   type TouchTime,
 } from "../lib/fileOpsApi";
 import { formatSize } from "../lib/format";
+import { keepLabel } from "../lib/backupsApi";
+import { usePref } from "../lib/prefs";
 import { Modal } from "./Modal";
 import { TRASH_NAME } from "./SyncOptionsDialog";
 
@@ -94,6 +96,8 @@ export function TransferDialog({ action, parts, toFolder, filter, onCancel, onCo
   // The default (include filtered off): filtered items stay behind.
   const [includeFiltered, setIncludeFiltered] = useState(false);
   const [threads, setThreads] = useState(() => Number(localStorage.getItem("pcompare.fileOps.threads")) || 0);
+  /** With Backups on, replaced local files go there instead of the Trash. */
+  const backups = usePref("backups");
 
   const verb = action === "copy" ? "Copy" : "Move";
   const files = parts.reduce((n, p) => n + p.files, 0);
@@ -215,7 +219,9 @@ export function TransferDialog({ action, parts, toFolder, filter, onCancel, onCo
         {!anyRemoteDst && (
           <label className="field check">
             <input type="checkbox" checked={trashReplaced} onChange={(e) => setTrashReplaced(e.target.checked)} />
-            Move replaced files to the {TRASH_NAME}
+            {backups.enabled
+              ? `Keep replaced files in Backups (${backups.keepDays ? `kept for ${keepLabel(backups.keepDays)}` : "kept until removed"})`
+              : `Move replaced files to the ${TRASH_NAME}`}
           </label>
         )}
         {IS_WINDOWS && allLocal && (

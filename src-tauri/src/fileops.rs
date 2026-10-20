@@ -13,12 +13,13 @@ use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
+use pcompare_core::backups::BackupOrigin;
 use pcompare_core::vfs_write::VfsWrite;
 use pcompare_sync::fileops::{
     self, ConflictAnswer, ConflictQuestion, Control, FileOpProgress, FileOpReport, FileOpRequest,
     FilePhase, OpQueue,
 };
-use pcompare_sync::fsops::TrashDeleter;
+use pcompare_sync::fsops::{BackupDeleter, Deleter, TrashDeleter};
 use pcompare_sync::remote::Root;
 use tauri::ipc::Channel;
 use tauri::{AppHandle, Manager};
@@ -126,6 +127,7 @@ pub async fn fileop_start(
     src_root: String,
     dst_root: Option<String>,
     request: FileOpRequest,
+    origin: Option<BackupOrigin>,
     on_progress: Channel<FileOpProgress>,
 ) -> CmdResult<FileOpReport> {
     let ctl = Arc::new(Control::default());
@@ -159,7 +161,22 @@ pub async fn fileop_start(
             return Ok(report);
         };
         let dst = dst_root.clone().unwrap_or_default();
-        with_remote(&app, [&src_root, &dst], |r| {
+        // With backups on, replaced local files are kept there (deletes
+        // still go to the Recycle Bin / Trash).
+        let batch = crate::backups::begin(
+            &app,
+            origin.unwrap_or_else(|| BackupOrigin {
+                tool: "Folder Compare".into(),
+                action: format!("{:?}", request.action),
+                left: src_root.clone(),
+                right: dst.clone(),
+            }),
+        );
+        let deleter: Box<dyn Deleter> = match &batch {
+            Some(b) => Box::new(BackupDeleter::new(b.clone()).deleting_with(Box::new(TrashDeleter::new()))),
+            None => Box::new(TrashDeleter::new()),
+        };
+        let mut report = with_remote(&app, [&src_root, &dst], |r| {
             let sfs = r.target_write(&src_root)?;
             let dfs = if dst.is_empty() {
                 None
@@ -173,12 +190,18 @@ pub async fn fileop_start(
                 &request,
                 src,
                 to,
-                &TrashDeleter::new(),
+                &*deleter,
                 &ctl,
                 &mut send,
                 &mut ask,
             ))
-        })
+        })?;
+        if let Some(b) = &batch {
+            report.backup = b.id();
+            report.backed_up = b.kept();
+            crate::backups::finish(&app, b);
+        }
+        Ok(report)
     })
     .await
 }

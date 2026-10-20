@@ -7,6 +7,7 @@ import { Channel, invoke } from "@tauri-apps/api/core";
 import { useSyncExternalStore } from "react";
 import { errorMessage, type EntryMeta, type FolderCompareOptions, type FolderEntry, type Side } from "./api";
 import type { FailureKind, LockHolder } from "./syncApi";
+import type { BackupOrigin } from "./backupsApi";
 
 export type FileAction = "copy" | "move" | "delete" | "rename" | "newFolder" | "attributes" | "touch";
 /** What a copy does when a file is already at its destination. */
@@ -149,6 +150,10 @@ export interface FileOpReport {
   failures: FileOpFailure[];
   notes: string[];
   elapsedMs: number;
+  /** The backup holding the files this operation replaced (Backups on, something replaced). */
+  backup: string | null;
+  /** How many replaced files that backup holds. */
+  backedUp: number;
 }
 
 export type OpStatus = "running" | "done" | "errors" | "failed" | "cancelled";
@@ -199,8 +204,14 @@ function subscribe(cb: () => void) {
 }
 
 export const fileOps = {
-  /** Starts an operation in the background; resolves when it is done. */
-  async start(title: string, srcRoot: string, dstRoot: string | null, request: FileOpRequest): Promise<FileOp> {
+  /** Starts an operation in the background; resolves when it is done. `origin` labels its backup on the Backups tab. */
+  async start(
+    title: string,
+    srcRoot: string,
+    dstRoot: string | null,
+    request: FileOpRequest,
+    origin?: BackupOrigin,
+  ): Promise<FileOp> {
     const id = crypto.randomUUID();
     ops = [
       ...ops,
@@ -234,7 +245,14 @@ export const fileOps = {
       }
     };
     try {
-      const report = await invoke<FileOpReport>("fileop_start", { opId: id, srcRoot, dstRoot, request, onProgress: channel });
+      const report = await invoke<FileOpReport>("fileop_start", {
+        opId: id,
+        srcRoot,
+        dstRoot,
+        request,
+        origin,
+        onProgress: channel,
+      });
       const status: OpStatus = report.cancelled ? "cancelled" : report.failed ? "errors" : "done";
       patch(id, { report, status, paused: false, finishedMs: Date.now() });
     } catch (e) {

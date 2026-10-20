@@ -358,6 +358,11 @@ pub struct FileOpReport {
     /// Caveats on items that succeeded (e.g. an ACL that couldn't be copied).
     pub notes: Vec<String>,
     pub elapsed_ms: u128,
+    /// The backup holding the files this operation replaced (set by the
+    /// app when backups are on and something was replaced).
+    pub backup: Option<String>,
+    /// How many replaced files that backup holds.
+    pub backed_up: usize,
 }
 
 /// Pause and cancel switches shared between a running operation and the UI.
@@ -1738,12 +1743,13 @@ impl<'a> Mover<'_> {
     }
 
     /// Gets a replaced local file out of the way: to the Recycle Bin / Trash
-    /// (the operation's deleter) or for good.
-    fn dispose_local(&self, path: &Path) -> Result<(), OpError> {
+    /// or the backups (the operation's deleter), or for good. Returns where
+    /// the old version was kept, when the deleter knows.
+    fn dispose_local(&self, path: &Path) -> Result<Option<PathBuf>, OpError> {
         let r = if self.opts.trash_replaced {
-            self.deleter.delete(path)
+            self.deleter.dispose_replaced(path)
         } else {
-            PermanentDeleter.delete(path)
+            PermanentDeleter.delete(path).map(|()| None)
         };
         r.map_err(|e| OpError::io(path, e))
     }
@@ -1757,19 +1763,23 @@ impl<'a> Mover<'_> {
             });
         }
         if self.opts.trash_replaced {
-            // The old version goes to the Trash under its own name.
-            if let Err(e) = self.dispose_local(dst) {
-                let _ = fs::remove_file(&tmp);
-                return Err(e);
-            }
+            // The old version goes to the Trash (or the backups) under its own name.
+            let kept = match self.dispose_local(dst) {
+                Ok(kept) => kept,
+                Err(e) => {
+                    let _ = fs::remove_file(&tmp);
+                    return Err(e);
+                }
+            };
             return fs::rename(&tmp, dst).map_err(|e| {
                 let _ = fs::remove_file(&tmp);
+                let whereabouts = match &kept {
+                    Some(p) => format!("the previous version was kept as {}", p.display()),
+                    None => "the previous version is in the Recycle Bin / Trash".to_owned(),
+                };
                 OpError {
                     path: Some(dst.to_path_buf()),
-                    ..OpError::new(
-                        classify(&e),
-                        format!("{e}; the previous version is in the Recycle Bin / Trash"),
-                    )
+                    ..OpError::new(classify(&e), format!("{e}; {whereabouts}"))
                 }
             });
         }
@@ -2488,6 +2498,53 @@ mod tests {
             "left a",
             "copies leave the source alone"
         );
+    }
+
+    #[test]
+    fn replaced_files_go_to_the_backups_and_deletes_to_the_bin() {
+        use pcompare_core::backups::{BackupOrigin, BackupReason, BackupStore};
+        let p = pair();
+        let store = BackupStore::new(p._dir.path().join("backups"));
+        let batch = Arc::new(store.begin(BackupOrigin {
+            tool: "Folder Compare".into(),
+            action: "Copy left → right".into(),
+            ..Default::default()
+        }));
+        let deleter = crate::fsops::BackupDeleter::new(batch.clone()).deleting_with(Box::new(PermanentDeleter));
+        let mut o = opts(ConflictMode::Overwrite);
+        o.trash_replaced = true;
+        let ctl = Control::default();
+        let r = run(
+            &req(FileAction::Copy, &["a.txt", "docs"], o),
+            Root::Local(&p.left),
+            Some(Root::Local(&p.right)),
+            &deleter,
+            &ctl,
+            &mut |_| {},
+            &mut |_| panic!("not expected to ask"),
+        );
+        assert_eq!((r.succeeded, r.failed), (3, 0), "{:?}", r.failures);
+        assert_eq!(read(&p.right, "a.txt"), "left a");
+        // Only the replaced file was kept; new files had nothing to replace.
+        let kept = store.get(&batch.id().unwrap()).unwrap();
+        assert_eq!(kept.items.len(), 1);
+        let item = &kept.items[0];
+        assert_eq!(Path::new(&item.original), p.right.join("a.txt"));
+        assert_eq!(item.reason, BackupReason::Replaced);
+        assert_eq!(fs::read_to_string(Path::new(&kept.folder).join(&item.stored)).unwrap(), "right a (old)");
+
+        // A plain delete doesn't fill the backups.
+        let r = run(
+            &req(FileAction::Delete, &["docs"], FileOpOptions::default()),
+            Root::Local(&p.right),
+            None,
+            &deleter,
+            &ctl,
+            &mut |_| {},
+            &mut |_| panic!("not expected to ask"),
+        );
+        assert_eq!(r.failed, 0, "{:?}", r.failures);
+        assert_eq!(batch.kept(), 1);
     }
 
     #[test]

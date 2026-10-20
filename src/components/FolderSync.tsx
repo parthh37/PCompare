@@ -66,6 +66,7 @@ import {
   type SyncRun,
   type SyncSkip,
 } from "../lib/syncApi";
+import { usePref } from "../lib/prefs";
 import { useContextMenu } from "./ContextMenu";
 import { Modal } from "./Modal";
 import { SyncMatrixEditor } from "./SyncMatrixEditor";
@@ -1267,6 +1268,14 @@ function SyncConfirmDialog({
   const needsAck = plan.warnings.length > 0;
   const permanent = exec.disposal.kind === "permanent";
   const ready = issues !== null && !blocked && (!needsAck || ack);
+  // With Backups on, what would go to the Trash is kept there instead.
+  const backups = usePref("backups").enabled;
+  const disposed =
+    exec.disposal.kind !== "trash"
+      ? "moved to the versioning folder"
+      : backups
+        ? "kept in Backups (restore them from the Backups tab)"
+        : `moved to the ${TRASH_NAME}`;
 
   return (
     <Modal
@@ -1325,10 +1334,7 @@ function SyncConfirmDialog({
             Deleted and replaced files are removed permanently. This can't be undone or rolled back.
           </p>
         ) : (
-          <p className={deletions > 0 ? "sync-confirm-warn" : "muted"}>
-            Deleted and replaced files are moved to{" "}
-            {exec.disposal.kind === "trash" ? `the ${TRASH_NAME}` : "the versioning folder"}.
-          </p>
+          <p className={deletions > 0 ? "sync-confirm-warn" : "muted"}>Deleted and replaced files are {disposed}.</p>
         ))}
 
       {needsAck && (
@@ -1642,6 +1648,8 @@ export function RollbackDialog({ // automation:ui — exported for Sync Automati
 
   const done = detail?.ops.filter((o) => o.state === "done").length ?? 0;
   const disposal = detail?.options.disposal.kind;
+  // Run with Backups on: what would have gone to the Trash was kept there and rolls back from it.
+  const inBackups = disposal === "trash" && !!detail?.ops.some((o) => o.result?.backup);
   const failed = results?.filter((r) => !r.ok) ?? [];
   // Closing mid-rollback would hide its result.
   const close = rolling ? () => {} : onClose;
@@ -1676,10 +1684,10 @@ export function RollbackDialog({ // automation:ui — exported for Sync Automati
             </p>
           )}
           <p>
-            Restores replaced and deleted files from the versioning folder, removes files and folders this sync created.
-            Files changed since the sync are left alone.
+            Restores replaced and deleted files from {inBackups ? "Backups" : "the versioning folder"}, removes files and
+            folders this sync created. Files changed since the sync are left alone.
           </p>
-          {disposal === "trash" && (
+          {disposal === "trash" && !inBackups && (
             <p className="sync-confirm-warn">Items moved to the {TRASH_NAME} can't be restored automatically.</p>
           )}
           {disposal === "permanent" && (

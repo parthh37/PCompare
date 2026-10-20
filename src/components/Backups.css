@@ -1,0 +1,91 @@
+/* Backup settings: the shared fields, the one-time question and the tab
+   bar's Backups button and panel. (The Backups tab has BackupsPage.css.) */
+
+/* doubled class: `.settings-grid fieldset` (loaded later) would otherwise frame it */
+.bkset .bkset-body {
+  border: none;
+  border-radius: 0;
+  margin: 0;
+  padding: 0;
+  min-width: 0;
+}
+.bkset-body:disabled {
+  opacity: 0.55;
+}
+.bkset-hint {
+  display: block;
+  margin: -6px 0 12px;
+  font-size: 11.5px;
+}
+.bkset-where .field.radio {
+  margin-bottom: 6px;
+}
+.bkset-path {
+  display: block;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11.5px;
+}
+.bkset-folder {
+  margin: 2px 0 8px 22px;
+}
+.bkset-where .bkset-hint {
+  margin: 0 0 0 22px;
+}
+
+/* the one-time question */
+.bkset-prompt {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  margin-bottom: 12px;
+  max-width: 460px;
+}
+.bkset-prompt p {
+  margin: 0;
+  line-height: 1.45;
+}
+.bkset-prompt-icon {
+  color: var(--accent);
+  margin-top: 2px;
+}
+
+/* the tab bar button: green when backups are on */
+.tab-action.bkset-btn.on {
+  color: var(--ok);
+}
+.tab-action.bkset-btn.on:hover {
+  color: var(--ok);
+}
+.bkset-panel {
+  position: fixed;
+  z-index: 70;
+  width: 340px;
+  padding: 12px 14px 10px;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 10px 30px var(--shadow);
+}
+.bkset-panel .field-row {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 0;
+}
+.bkset-panel-foot {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+}
+.bkset-actions {
+  align-items: center;
+  gap: 8px;
+  margin-top: 0;
+}
+.bkset-actions small {
+  margin-right: auto;
+}

@@ -2,6 +2,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod archive;
+mod backups;
 mod automation; // automation:shell
 mod close_guard;
 mod convert;
@@ -537,6 +538,7 @@ fn main() {
             }
             remote::install_prompter(app.handle());
             explorer::ensure_on_startup();
+            backups::prune_soon(app.handle());
             // automation:shell — after AppState: the scheduler uses its scan database.
             // Also shows the main window (created hidden for `--background`).
             automation::setup(app)?;
@@ -683,6 +685,12 @@ fn main() {
             workspace::recent_remove,
             workspace::recent_clear,
             workspace::session_autosave,
+            // --- backups of overwritten files (backups.rs) ---
+            backups::backups_info,
+            backups::backups_list,
+            backups::backups_restore,
+            backups::backups_delete,
+            backups::backups_prune,
             // --- Text Compare encodings, grammars, backups (text_compare.rs) ---
             text_compare::text_load_pair,
             text_compare::text_load,

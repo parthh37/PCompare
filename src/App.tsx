@@ -1,7 +1,10 @@
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { CircleArrowUp, CircleQuestionMark, Globe, Layers, Plus, Save, Settings, X } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { AppSettingsDialog } from "./components/AppSettingsDialog";
+import { AppSettingsDialog, type SettingsPage } from "./components/AppSettingsDialog";
+import { BackupsButton } from "./components/BackupsButton";
+import { BackupsPage } from "./components/BackupsPage";
+import { BackupsPrompt } from "./components/BackupsPrompt";
 import { DbCompare } from "./components/DbCompare";
 import { CloseGuardDialog } from "./components/CloseGuardDialog";
 import { CrashedView, ErrorBoundary } from "./components/ErrorBoundary";
@@ -139,6 +142,11 @@ export default function App() {
   const [closeAsk, setCloseAsk] = useState<closeGuard.CloseAsk | null>(null);
   const updater = useUpdater(setToast);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [settingsPage, setSettingsPage] = useState<SettingsPage>("general");
+  const openSettings = (page: SettingsPage = "general") => {
+    setSettingsPage(page);
+    setSettingsOpen(true);
+  };
   /** Bumped to remount the sessions after one crashed while closing. */
   const [workareaEpoch, setWorkareaEpoch] = useState(0);
   const dbNames = useDbConnectionNames();
@@ -223,6 +231,25 @@ export default function App() {
   }, []);
   const clearAutomationPrefill = useCallback(() => setAutomationPrefill(null), []);
   // automation:ui end
+
+  // One Backups tab; `focus` is the backup it shows first (e.g. from "View" after a copy).
+  const [backupsFocus, setBackupsFocus] = useState<{ id: string | null; seq: number }>({ id: null, seq: 0 });
+  const openBackups = (focus?: string | null) => {
+    setBackupsFocus((f) => ({ id: focus ?? null, seq: f.seq + 1 }));
+    focusOr((t) => t.kind === "backups", () => openTab("backups"));
+  };
+  // The one-time "Keep backups?" question, asked when the first comparison
+  // opens (after the stored answer has been read, so it never asks twice).
+  const [askBackups, setAskBackups] = useState(false);
+  const [prefsLoaded, setPrefsLoaded] = useState(false);
+  useEffect(() => {
+    prefsReady.then(() => setPrefsLoaded(true));
+  }, []);
+  const backupsAsked = usePref("backups").asked;
+  const activeKind = tabs.find((t) => t.id === active)?.kind;
+  useEffect(() => {
+    if (prefsLoaded && !backupsAsked && activeKind && isCompareKind(activeKind)) setAskBackups(true);
+  }, [prefsLoaded, backupsAsked, activeKind]);
 
   const openSaved = (s: SavedSession) =>
     focusOr(
@@ -526,7 +553,7 @@ export default function App() {
       else if (matches(e, "app.saveWorkspace")) setSavingWorkspace(true);
       else if (matches(e, "app.nextTab")) cycleTab(1);
       else if (matches(e, "app.prevTab")) cycleTab(-1);
-      else if (matches(e, "app.settings")) setSettingsOpen(true);
+      else if (matches(e, "app.settings")) openSettings();
       else if (matches(e, "app.help")) toggleHelp();
       else return;
       e.preventDefault();
@@ -579,7 +606,9 @@ export default function App() {
                 ? openProfiles()
                 : kind === "automation" // automation:ui
                   ? openAutomation()
-                  : updateTab(t.id, { kind })
+                  : kind === "backups"
+                    ? openBackups()
+                    : updateTab(t.id, { kind })
             }
             onCompare={(left, right) => openAuto(left, right).catch((e) => setToast(errorMessage(e)))}
             saved={saved}
@@ -668,6 +697,15 @@ export default function App() {
           />
         );
       // automation:ui end
+      case "backups":
+        return (
+          <BackupsPage
+            focusId={backupsFocus.id}
+            focusSeq={backupsFocus.seq}
+            onCompare={(left, right) => openAuto(left, right).catch((e) => setToast(errorMessage(e)))}
+            onHelp={() => setHelpTopic("backups")}
+          />
+        );
       case "text":
         return (
           <TextCompare
@@ -738,7 +776,7 @@ export default function App() {
   };
 
   return (
-    <ShellContext.Provider value={{ openProfiles, leftSelection, selectLeft, compareToLeft }}>
+    <ShellContext.Provider value={{ openProfiles, leftSelection, selectLeft, compareToLeft, openBackups }}>
       <div className="app">
         <nav
           className="tabbar"
@@ -813,6 +851,7 @@ export default function App() {
           >
             <CalendarClock size={14} /> Automation
           </button>
+          <BackupsButton onOpenBackups={() => openBackups()} onOpenSettings={() => openSettings("backups")} />
           {updater.pending && (
             <button
               className="tab-action update-badge"
@@ -825,7 +864,7 @@ export default function App() {
           <button
             className="tab-action"
             title={`Settings: fonts, colors, keyboard and updates (${shortcutLabel("app.settings")})`}
-            onClick={() => setSettingsOpen(true)}
+            onClick={() => openSettings()}
           >
             <Settings size={14} /> Settings
           </button>
@@ -897,7 +936,18 @@ export default function App() {
             onCancel={() => setCloseAsk(null)}
           />
         )}
-        {settingsOpen && <AppSettingsDialog updater={updater} onClose={() => setSettingsOpen(false)} />}
+        {settingsOpen && (
+          <AppSettingsDialog
+            updater={updater}
+            initialPage={settingsPage}
+            onClose={() => setSettingsOpen(false)}
+            onOpenBackups={() => {
+              setSettingsOpen(false);
+              openBackups();
+            }}
+          />
+        )}
+        {askBackups && <BackupsPrompt onDone={() => setAskBackups(false)} />}
         {savingWorkspace && (
           <SaveWorkspaceDialog
             tabs={tabs.map(toWorkspaceTab)}

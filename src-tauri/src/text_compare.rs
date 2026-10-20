@@ -3,6 +3,7 @@
 //! saving with automatic backups.
 
 use crate::CmdResult;
+use pcompare_core::backups::BackupOrigin;
 use pcompare_core::grammar;
 use pcompare_core::text::{self, SideInput, TextDiffOptions, TextDiffResult};
 use pcompare_core::textfile::{self, BackupOptions, EncodingChoice, LineEnding, TextFileInfo, TextFormat};
@@ -221,6 +222,8 @@ pub struct SavedText {
     info: TextFileInfo,
     /// Where the previous version was backed up, if a backup was made.
     backup: Option<String>,
+    /// The Backups page's id for that backup (backups on).
+    backup_id: Option<String>,
 }
 
 /// Files already backed up in this app session (see [`BackupOptions::every_save`]).
@@ -248,17 +251,21 @@ fn save_with_backup(
     Ok(SavedText {
         info,
         backup: made.map(|p| p.display().to_string()),
+        backup_id: None,
     })
 }
 
 /// Writes `text` to a local file in `format`, first backing up the existing
-/// file per `backup`. Remote paths are rejected: they are read-only.
+/// file: to the app's backups when they are on (every save, described by
+/// `origin`), else per `backup`. Remote paths are rejected: they are read-only.
 #[tauri::command]
 pub async fn text_save(
+    app: AppHandle,
     path: String,
     text: String,
     format: TextFormat,
     backup: Option<BackupOptions>,
+    origin: Option<BackupOrigin>,
 ) -> CmdResult<SavedText> {
     if pcompare_remote::is_remote(&path) {
         return Err(format!("{path}: remote files are read-only"));
@@ -266,7 +273,21 @@ pub async fn text_save(
     if pcompare_remote::is_inside_container(&path) {
         return Err(pcompare_remote::read_only_inside(&path));
     }
-    crate::blocking(move || save_with_backup(&path, &text, &format, backup)).await
+    crate::blocking(move || {
+        if !crate::backups::settings(&app).enabled {
+            return save_with_backup(&path, &text, &format, backup);
+        }
+        // Encode first, so a save that would fail leaves no stray backup.
+        textfile::encode_text(&text, &format)?;
+        let origin = origin.unwrap_or_else(|| crate::backups::save_origin("Text Compare", &path));
+        let kept = crate::backups::keep_before_save(&app, Path::new(&path), origin)?;
+        Ok(SavedText {
+            info: textfile::save_text(&path, &text, &format)?,
+            backup: kept.as_ref().map(|k| k.path.clone()),
+            backup_id: kept.map(|k| k.id),
+        })
+    })
+    .await
 }
 
 /// Encodings offered by the per-side encoding picker.

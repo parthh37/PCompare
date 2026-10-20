@@ -1,6 +1,7 @@
 // Typed wrappers for the editable hex compare commands (src-tauri/src/hex.rs).
 import { invoke } from "@tauri-apps/api/core";
 import type { HexEditAt, HexRow, HexState, HexTarget, HexView } from "./api";
+import type { BackupOrigin } from "./backupsApi";
 
 export type HexSide = 0 | 1;
 
@@ -35,8 +36,9 @@ export const hexApi = {
     invoke<number[]>("hex_read", { id, side, offset, len }),
   replaceAll: (id: string, side: HexSide, pattern: number[], replacement: number[], foldCase: boolean, view: HexView) =>
     invoke<{ state: HexState; count: number }>("hex_replace_all", { id, side, pattern, replacement, foldCase, view }),
-  save: (id: string, side: HexSide, backup: boolean, view: HexView) =>
-    invoke<HexState>("hex_save", { id, side, backup, view }),
+  /** With Backups on, the previous version goes there and `backup` (.bak) is ignored. */
+  save: (id: string, side: HexSide, backup: boolean, view: HexView, origin?: BackupOrigin) =>
+    invoke<HexState>("hex_save", { id, side, backup, view, origin }),
   diskChanged: (id: string) => invoke<[boolean, boolean]>("hex_disk_changed", { id }),
 };
 
