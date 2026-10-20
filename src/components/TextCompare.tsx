@@ -564,7 +564,7 @@ export function TextCompare({
   const [saving, setSaving] = useState(false);
   const [hunkIdx, setHunkIdx] = useState(-1);
   const [hx, setHx] = useState(0);
-  /** The inline line editor (double-click / Enter), or null. */
+  /** The inline line editor (click / Enter), or null. */
   const [editor, setEditor] = useState<LineEditor | null>(null);
   const editorSeq = useRef(0);
   const editorEl = useRef<HTMLTextAreaElement>(null);
@@ -925,11 +925,15 @@ export function TextCompare({
     hunks.forEach((h, i) => map.fill(i, h.startRow, h.endRow));
     return map;
   }, [hunks, rows.length]);
-  const maxChars = useMemo(() => {
+  /** The widest line in columns (tabs expanded): how far the panes scroll sideways. */
+  const maxCols = useMemo(() => {
     let m = 0;
     for (const r of rows)
-      for (const side of [r.left, r.right])
-        if (side) m = Math.max(m, side.reduce((n, s) => n + s.text.length, 0));
+      for (const segs of [r.left, r.right]) {
+        if (!segs) continue;
+        const text = segText(segs);
+        m = Math.max(m, text.includes("\t") ? columnOf(text, text.length, TAB_SIZE) : text.length);
+      }
     return m;
   }, [rows]);
 
@@ -1004,7 +1008,8 @@ export function TextCompare({
   // Character width and columns per pane, measured from the real font (the editor font size is a preference).
   const gridRef = useRef<HTMLDivElement>(null);
   const probeRef = useRef<HTMLSpanElement>(null);
-  const [metrics, setMetrics] = useState({ charW: CHAR_WIDTH, cols: 80, cellW: 400 });
+  /** `vsb`: width of the list's vertical scrollbar, which the horizontal bars below it leave free. */
+  const [metrics, setMetrics] = useState({ charW: CHAR_WIDTH, cols: 80, cellW: 400, vsb: 0 });
   const hasGrid = !!diff;
   useLayoutEffect(() => {
     const grid = gridRef.current;
@@ -1014,9 +1019,13 @@ export function TextCompare({
     const measure = () => {
       const charW = probe.getBoundingClientRect().width / PROBE_CHARS || CHAR_WIDTH;
       const lnW = LN_WIDTH + (changeGlyphs ? GLYPH_WIDTH : 0) + (blameOn ? BLAME_WIDTH : 0);
-      const cellW = Math.max(40, ((listEl?.clientWidth ?? grid.clientWidth) - 2 * lnW - DIVIDER_WIDTH) / 2);
+      const mid = padding ? DIVIDER_WIDTH : MID_WIDTH; // the linked view links the panes in a wider gutter
+      const cellW = Math.max(40, ((listEl?.clientWidth ?? grid.clientWidth) - 2 * lnW - mid) / 2);
       const cols = Math.max(8, Math.floor((cellW - CELL_PAD - 4) / charW));
-      setMetrics((m) => (m.charW === charW && m.cols === cols && m.cellW === cellW ? m : { charW, cols, cellW }));
+      const vsb = listEl ? listEl.offsetWidth - listEl.clientWidth : 0;
+      setMetrics((m) =>
+        m.charW === charW && m.cols === cols && m.cellW === cellW && m.vsb === vsb ? m : { charW, cols, cellW, vsb },
+      );
     };
     const ro = new ResizeObserver(measure);
     ro.observe(grid);
@@ -1044,6 +1053,19 @@ export function TextCompare({
     }
     return off;
   }, [wordWrap, display, rows, metrics.cols]);
+
+  // Sideways scrolling: both sides share `hx`, moved by the wheel, the scrollbars under the panes and the caret.
+  // The edited line can outgrow every compared line until the re-compare lands.
+  const editText = editor && docs ? (docs[editor.side].lines[editor.line] ?? "") : "";
+  const editCols = editText.includes("\t") ? columnOf(editText, editText.length, TAB_SIZE) : editText.length;
+  /** A cell's text width, with room after the longest line for the line-ending mark and the caret. */
+  const textW = CELL_PAD + (Math.max(maxCols, editCols) + 2) * metrics.charW;
+  const maxHx = wordWrap ? 0 : Math.max(0, Math.ceil(textW - metrics.cellW));
+  useEffect(() => setHx((x) => Math.min(x, maxHx)), [maxHx]);
+  const hbars = useRef<Record<Side, HTMLDivElement | null>>({ left: null, right: null });
+  useLayoutEffect(() => {
+    for (const el of Object.values(hbars.current)) if (el && Math.abs(el.scrollLeft - hx) > 0.5) el.scrollLeft = hx;
+  }, [hx, maxHx]);
 
   // Syntax: a clipboard side borrows the other side's language.
   const langs = useMemo(() => {
@@ -1142,7 +1164,7 @@ export function TextCompare({
     caretApplied.current = editor.seq;
     el.focus({ preventScroll: true });
     el.setSelectionRange(editor.caret, editor.caret);
-    setCaretIdx(editor.caret);
+    caretMoved(el);
   });
 
   useEffect(() => {
@@ -1464,6 +1486,21 @@ export function TextCompare({
     setAnchor(null);
   };
 
+  /**
+   * Whether a click on a cell edits right there, like any editor (`segs`: that
+   * side's line, null on a padding row). Modified clicks keep their own jobs:
+   * Shift extends the line selection, Ctrl/⌘ sets a sync point.
+   */
+  const clickEdits = (e: ReactMouseEvent, segs: Segment[] | null): boolean => {
+    if (e.button !== 0 || e.shiftKey || e.ctrlKey || e.metaKey || e.altKey) return false;
+    // A drag that selected text keeps its selection, for copying.
+    if (window.getSelection()?.isCollapsed === false) return false;
+    // TODO(you): a padding row has no line on this side yet. Editing it inserts an empty
+    // line there first (startEdit), so a stray click would change the file. Default: such
+    // clicks only move the caret (double-click or Enter still inserts and edits).
+    return segs != null;
+  };
+
   /** The character under a click in a cell, for placing the caret. */
   const caretFromPoint = (e: ReactMouseEvent<HTMLElement>, text: string) => {
     const rect = e.currentTarget.getBoundingClientRect();
@@ -1497,6 +1534,7 @@ export function TextCompare({
     const next = lines.slice();
     next[editor.line] = value;
     commitSide(editor.side, next, undefined, `type:${editor.side}:${editor.line}`);
+    caretMoved(e.target);
   };
 
   /** Up/Down leave the line unless word wrap still has visual lines to move through. */
@@ -1538,6 +1576,13 @@ export function TextCompare({
       if (!leavesLine(ta, up)) return;
       moveEditor(up ? -1 : 1, s);
     } else if (e.key === "Escape") setEditor(null);
+    // Nothing selected: Copy and Cut take the whole line, as they do without the editor.
+    else if (mod && !e.shiftKey && !e.altKey && key === "c" && s === end)
+      writeClipboardText(value).catch((err) => setError(errorMessage(err)));
+    else if (mod && !e.shiftKey && !e.altKey && key === "x" && s === end && fresh) {
+      setEditor(null);
+      cutLines();
+    }
     else if (mod && !e.shiftKey && !e.altKey && key === "z") undo();
     else if (mod && !e.altKey && (key === "y" || (e.shiftKey && key === "z"))) redo();
     else return;
@@ -1572,7 +1617,7 @@ export function TextCompare({
       const x0 = columnOf(text, m.start, TAB_SIZE) * metrics.charW;
       const x1 = columnOf(text, m.end, TAB_SIZE) * metrics.charW;
       const view = metrics.cellW - CELL_PAD;
-      if (x0 < hx || x1 > hx + view) setHx(Math.max(0, x0 - view / 3));
+      if (x0 < hx || x1 > hx + view) setHx(Math.min(maxHx, Math.max(0, x0 - view / 3)));
     }
   };
 
@@ -2173,6 +2218,18 @@ export function TextCompare({
       const t = e.target as HTMLElement | null;
       const inField = !!t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.tagName === "SELECT");
       const plain = !mod && !e.altKey;
+      /** Alt+arrows: the next or previous difference section, or copy the current one across. */
+      const section = !e.altKey
+        ? null
+        : e.key === "ArrowDown"
+          ? () => goHunk(hunkIdx + 1)
+          : e.key === "ArrowUp"
+            ? () => goHunk(hunkIdx - 1)
+            : e.key === "ArrowRight"
+              ? () => copyTo("right")
+              : e.key === "ArrowLeft"
+                ? () => copyTo("left")
+                : null;
       if (mod && !e.shiftKey && !e.altKey && key === "s") save();
       // find, bookmarks: also from the line editor and the find bar.
       else if (mod && !e.shiftKey && !e.altKey && key === "f") openFind(false);
@@ -2184,7 +2241,11 @@ export function TextCompare({
       else if (keyMatches(e, "text.goToLine")) openGoto();
       else if (keyMatches(e, "text.togglePadding")) togglePadding();
       else if (keyMatches(e, "text.lineEndings")) setShowEol((v) => !v);
-      else if (inField) return;
+      // Sections from the line editor too, which closes first (on macOS ⌥←/→ keep moving the caret by word).
+      else if (section && t === editorEl.current && !(isMac && (e.key === "ArrowLeft" || e.key === "ArrowRight"))) {
+        setEditor(null);
+        section();
+      } else if (inField) return;
       else if (mod && !e.shiftKey && key === "z") undo();
       else if (mod && (key === "y" || (e.shiftKey && key === "z"))) redo();
       else if (mod && !e.shiftKey && !e.altKey && key === "c") {
@@ -2205,10 +2266,7 @@ export function TextCompare({
       else if (keyMatches(e, "text.markResolved")) toggleResolved();
       else if (e.key === "Escape" && syncPick) setSyncPick(null);
       else if (e.key === "Escape" && gotoOpen) setGotoOpen(false);
-      else if (e.altKey && e.key === "ArrowDown") goHunk(hunkIdx + 1);
-      else if (e.altKey && e.key === "ArrowUp") goHunk(hunkIdx - 1);
-      else if (e.altKey && e.key === "ArrowRight") copyTo("right");
-      else if (e.altKey && e.key === "ArrowLeft") copyTo("left");
+      else if (section) section();
       else if (plain && (e.key === "ArrowDown" || e.key === "ArrowUp")) moveCursor(e.key === "ArrowDown" ? 1 : -1, e.shiftKey);
       else if (plain && !e.shiftKey && cursor && (e.key === "ArrowLeft" || e.key === "ArrowRight")) {
         setCursor({ ...cursor, side: e.key === "ArrowLeft" ? "left" : "right" });
@@ -2238,7 +2296,29 @@ export function TextCompare({
     if (wordWrap) return;
     const dx = e.shiftKey ? e.deltaY : e.deltaX;
     if (!dx || (!e.shiftKey && Math.abs(e.deltaX) < Math.abs(e.deltaY))) return;
-    setHx((x) => Math.max(0, Math.min(maxChars * metrics.charW, x + dx)));
+    setHx((x) => Math.max(0, Math.min(maxHx, x + dx)));
+  };
+
+  /** Brings the line editor's caret back on screen (it went past an edge) by scrolling both panes sideways. */
+  const revealCaret = (ta: HTMLTextAreaElement) => {
+    if (wordWrap) return;
+    const at = ta.selectionDirection === "backward" ? ta.selectionStart : ta.selectionEnd;
+    const x = columnOf(ta.value, at, TAB_SIZE) * metrics.charW;
+    const view = metrics.cellW - CELL_PAD;
+    // While typing, the textarea is ahead of the last render (and of its `maxHx`).
+    const ends = CELL_PAD + (columnOf(ta.value, ta.value.length, TAB_SIZE) + 2) * metrics.charW;
+    const max = Math.max(maxHx, Math.ceil(ends - metrics.cellW));
+    if (x < hx) setHx(Math.max(0, x - view / 3));
+    else if (x > hx + view) setHx(Math.min(max, x - view + view / 3));
+  };
+  /**
+   * The caret moved or the text changed: Ln/Col and the sideways scroll follow.
+   * Called on input as well as on select, because React's onSelect misses
+   * inserts that come without keys (paste from the menu, IME, drag and drop).
+   */
+  const caretMoved = (ta: HTMLTextAreaElement) => {
+    setCaretIdx(ta.selectionStart);
+    revealCaret(ta);
   };
 
   const shift = { transform: `translateX(${-hx}px)` };
@@ -2246,10 +2326,13 @@ export function TextCompare({
   /** Click (caret), Shift+click (extend the selection) on a cell or a line number. */
   const pointAt = (e: ReactMouseEvent, row: number, side: Side, selectLine: boolean) => {
     if (e.button !== 0) return;
-    if (e.shiftKey && cursor?.side === side) {
+    const extend = e.shiftKey && cursor?.side === side;
+    if (extend) {
       e.preventDefault();
       setAnchor(anchor ?? cursor.row);
     } else setAnchor(selectLine ? row : null);
+    // A line selection takes over from the line editor (preventDefault keeps its focus, so it would stay open).
+    if (extend || selectLine) setEditor(null);
     setCursor({ side, row });
     if (selectLine) {
       e.preventDefault();
@@ -2329,6 +2412,8 @@ export function TextCompare({
         data-tc-row={rowIdx}
         data-tc-side={side}
         onMouseDown={(e) => syncClick(e, rowIdx, side) || pointAt(e, rowIdx, side, false)}
+        onClick={(e) => clickEdits(e, segs) && startEdit(rowIdx, side, segs ? caretFromPoint(e, segText(segs)) : undefined)}
+        // Reached when the first click did not open the editor (a padding row): insert a line there.
         onDoubleClick={(e) => startEdit(rowIdx, side, segs ? caretFromPoint(e, segText(segs)) : undefined)}
         onContextMenu={(e) => openMenu(e, rowIdx, side)}
         title={readOnly[side] ? READ_ONLY_HINT : undefined}
@@ -2522,25 +2607,31 @@ export function TextCompare({
     );
   };
 
-  /** The line editor's textarea, in grid column `column` of its row. */
+  /**
+   * The line editor's textarea, in grid column `column` of its row. Without word
+   * wrap it is wider than the longest line and shifted like the rows' text, so it
+   * never scrolls on its own and its text stays where the line was.
+   */
   const editorArea = (column: number) =>
     editor &&
     docs && (
-      <textarea
-        ref={editorEl}
-        className="tc-edit-area"
-        style={{ gridColumn: column }}
-        wrap={wordWrap ? "soft" : "off"}
-        spellCheck={false}
-        rows={1}
-        value={docs[editor.side].lines[editor.line] ?? ""}
-        onChange={onEditorChange}
-        onKeyDown={onEditorKey}
-        onPaste={onEditorPaste}
-        onSelect={(e) => setCaretIdx(e.currentTarget.selectionStart)} // Ln/Col
-        // Switching windows keeps the editor; clicking elsewhere in the app closes it.
-        onBlur={() => document.hasFocus() && setEditor(null)}
-      />
+      <div className="tc-edit-cell" style={{ gridColumn: column }}>
+        <textarea
+          ref={editorEl}
+          className="tc-edit-area"
+          style={wordWrap ? undefined : { width: textW + metrics.cellW, transform: `translateX(${-hx}px)` }}
+          wrap={wordWrap ? "soft" : "off"}
+          spellCheck={false}
+          rows={1}
+          value={docs[editor.side].lines[editor.line] ?? ""}
+          onChange={onEditorChange}
+          onKeyDown={onEditorKey}
+          onPaste={onEditorPaste}
+          onSelect={(e) => caretMoved(e.currentTarget)}
+          // Switching windows keeps the editor; clicking elsewhere in the app closes it.
+          onBlur={() => document.hasFocus() && setEditor(null)}
+        />
+      </div>
     );
 
   // ---------- the linked (padding off) view ----------
@@ -3035,33 +3126,50 @@ export function TextCompare({
               listKind={linked ? "linked" : "padded"}
               moved={moveRows}
             />
-            {/* padding off: linked lines */}
-            {linked ? (
-              <TextLinkedView
-                ref={list}
-                className={`text-list tc-linked${dropAt ? " tc-dragging" : ""}`}
-                layout={linked}
-                rowHeight={ROW_HEIGHT}
-                midWidth={MID_WIDTH}
-                renderSide={renderSide}
-                currentHunk={hunkIdx}
-                onPickHunk={setHunkIdx}
-                syncLinks={syncLinks}
-                overlay={linkedOverlay()}
-                onWheel={onWheel}
-              />
-            ) : (
-              <VarList
-                ref={list}
-                className={`text-list${wordWrap ? " tc-wrap" : ""}${dropAt ? " tc-dragging" : ""}`}
-                count={display.length}
-                rowHeight={ROW_HEIGHT}
-                offsets={offsets}
-                renderRow={renderRow}
-                overlay={renderEditor()}
-                onWheel={onWheel}
-              />
-            )}
+            <div className="tc-panes">
+              {/* padding off: linked lines */}
+              {linked ? (
+                <TextLinkedView
+                  ref={list}
+                  className={`text-list tc-linked${dropAt ? " tc-dragging" : ""}`}
+                  layout={linked}
+                  rowHeight={ROW_HEIGHT}
+                  midWidth={MID_WIDTH}
+                  renderSide={renderSide}
+                  currentHunk={hunkIdx}
+                  onPickHunk={setHunkIdx}
+                  syncLinks={syncLinks}
+                  overlay={linkedOverlay()}
+                  onWheel={onWheel}
+                />
+              ) : (
+                <VarList
+                  ref={list}
+                  className={`text-list${wordWrap ? " tc-wrap" : ""}${dropAt ? " tc-dragging" : ""}`}
+                  count={display.length}
+                  rowHeight={ROW_HEIGHT}
+                  offsets={offsets}
+                  renderRow={renderRow}
+                  overlay={renderEditor()}
+                  onWheel={onWheel}
+                />
+              )}
+              {/* one horizontal scrollbar under each side's text, kept in step */}
+              {maxHx > 0 && (
+                <div className={`tc-hbar${linked ? " tc-hbar-linked" : ""}`} style={{ paddingRight: metrics.vsb }}>
+                  {SIDES.map((side) => (
+                    <div
+                      key={side}
+                      ref={(el) => void (hbars.current[side] = el)}
+                      className={`tc-hscroll tc-hscroll-${side}`}
+                      onScroll={(e) => setHx(e.currentTarget.scrollLeft)}
+                    >
+                      <div style={{ width: textW }} />
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
           </div>
         )}
         {diff && showDetails && (
@@ -3143,7 +3251,7 @@ export function TextCompare({
               ? "Read-only"
               : editor
                 ? "Enter splits · Backspace/Delete at the ends join lines · Esc stops editing"
-                : "Double-click or Enter to edit · drag line numbers to select · right-click for more"}
+                : "Click a line to edit · drag line numbers to select · right-click for more"}
           </span>
         )}
         {lnCol && (

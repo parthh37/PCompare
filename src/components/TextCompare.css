@@ -103,20 +103,34 @@
 .tc-editor-layer .trow {
   background: transparent;
 }
-.tc-editable .tc-edit-area {
+/*
+ * The edited cell clips its textarea, which is shifted sideways like the rows'
+ * text (see editorArea). `clip`, not `hidden`: a box that cannot scroll, so
+ * typing past the edge never scrolls it out of line with the other rows.
+ */
+.tc-edit-cell {
   pointer-events: auto;
   min-width: 0;
+  overflow: hidden;
+  overflow: clip;
+  /* An outline takes no room, so the text lines up with the rows around it. */
+  outline: 1px solid var(--accent);
+  outline-offset: -1px;
+  background: var(--bg);
+}
+.tc-editable .tc-edit-area {
+  pointer-events: auto;
+  display: block;
+  width: 100%;
   height: 100%;
   margin: 0;
   padding: 0 4px 0 6px;
   resize: none;
   overflow: hidden;
-  /* An outline takes no room, so the text lines up with the rows around it. */
   border: none;
-  outline: 1px solid var(--accent);
-  outline-offset: -1px;
+  outline: none;
   border-radius: 0;
-  background: var(--bg);
+  background: transparent;
   color: var(--text);
   font: inherit;
   line-height: 20px;
@@ -218,6 +232,52 @@
 }
 .find-hit.find-cur {
   background: var(--find-cur);
+}
+
+/* The panes, with their horizontal scrollbars underneath. */
+.tc-panes {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+/*
+ * One scrollbar under each side's text, both moving `hx`. The columns mirror
+ * the rows' (padding-right: the list's vertical scrollbar, set inline).
+ */
+.tc-hbar {
+  display: grid;
+  grid-template-columns: var(--tc-ln) 1fr 14px var(--tc-ln) 1fr;
+  flex-shrink: 0;
+  border-top: 1px solid var(--border);
+  background: var(--panel);
+}
+.tc-hbar.tc-hbar-linked {
+  grid-template-columns: var(--tc-ln) 1fr 40px var(--tc-ln) 1fr;
+}
+.tc-hscroll {
+  min-width: 0;
+  height: 12px;
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+.tc-hscroll > div {
+  height: 1px;
+}
+.tc-hscroll-left {
+  grid-column: 2;
+}
+.tc-hscroll-right {
+  grid-column: 5;
+}
+.tc-editable.tc-lgutter-right .tc-hbar {
+  grid-template-columns: 1fr var(--tc-ln) 14px var(--tc-ln) 1fr;
+}
+.tc-editable.tc-lgutter-right .tc-hbar.tc-hbar-linked {
+  grid-template-columns: 1fr var(--tc-ln) 40px var(--tc-ln) 1fr;
+}
+.tc-editable.tc-lgutter-right .tc-hscroll-left {
+  grid-column: 1;
 }
 
 /* Measures the editor font's character width (see TextCompare `metrics`). */
