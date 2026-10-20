@@ -63,6 +63,7 @@ import { joinLines, type TextDocument, type TextFormat } from "../lib/mergeApi";
 import { EyeOff, SlidersHorizontal } from "lucide-react";
 import { FilePen } from "lucide-react";
 import { addRange, lineEndingsFor, loadBackups, removeRange, textApi, type DiffSide } from "../lib/textApi";
+import { saveOrigin } from "../lib/backupsApi";
 import { SEPARATOR, type MenuEntry, type MenuItems } from "../lib/nativeMenu";
 import { useContextMenu } from "./ContextMenu";
 import { TextEncodingPicker } from "./TextEncodingPicker";
@@ -1753,14 +1754,16 @@ export function TextCompare({
     try {
       for (const s of sides) {
         const doc = current[s];
-        // backups per the rules dialog setting.
-        const { info, backup } = await textApi.saveTextFile(
+        // backups per the rules dialog setting, or app-wide Backups when on.
+        const { info, backup, backupId } = await textApi.saveTextFile(
           doc.info.path,
           joinLines(doc.lines, doc.trailingNewline),
           doc.format,
           loadBackups(),
+          saveOrigin("Text Compare", s, left, right),
         );
-        if (backup) setNotice(`Previous version backed up to ${backup}`);
+        if (backupId) setNotice(`Saved ${basename(doc.info.path)} · previous version kept in Backups`);
+        else if (backup) setNotice(`Previous version backed up to ${backup}`);
         // Edits made while saving stay dirty: only the saved array is marked clean.
         setDocs((d) => d && { ...d, [s]: { ...d[s], info: { ...info, path: doc.info.path }, saved: doc.lines } });
         setEdited((m) => m.filter((b) => b.side !== s));

@@ -19,6 +19,8 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState, type MouseEv
 import { errorMessage, isRemote, type HexRow, type HexRowFilter, type HexState, type HexView } from "../lib/api";
 import { formatSize, hex } from "../lib/format";
 import { encodePattern, hexApi, type FindEncoding, type HexSide } from "../lib/hexApi";
+import { saveOrigin } from "../lib/backupsApi";
+import { usePref } from "../lib/prefs";
 import type { CompareProps } from "../lib/sessionProps";
 import { autoRefreshTitle, useAutoRefresh } from "../lib/useAutoRefresh";
 import { PathBar } from "./PathBar";
@@ -113,6 +115,8 @@ export function HexCompare({
   useEffect(() => void reportSettings.current?.(prefs), [prefs]);
   const setPref = <K extends keyof HexSettings>(key: K, value: HexSettings[K]) =>
     setPrefs((p) => ({ ...p, [key]: value }));
+  /** App-wide Backups replace the .bak copy. */
+  const appBackups = usePref("backups").enabled;
   const [limitMb, setLimitMb] = useState(readLimit);
 
   const baseId = useRef(crypto.randomUUID()).current;
@@ -564,7 +568,10 @@ export function HexCompare({
       if (!st) return;
       const ep = epoch.current;
       const sides = ([0, 1] as HexSide[]).filter((s) => st.dirty[s] && !readOnly[s]);
-      for (const s of sides) accept(await hexApi.save(sid(), s, prefs.backup, viewRef.current), ep);
+      for (const s of sides) {
+        const origin = saveOrigin("Hex Compare", s === 0 ? "left" : "right", left, right);
+        accept(await hexApi.save(sid(), s, prefs.backup, viewRef.current, origin), ep);
+      }
       if (sides.length) setMessage(`Saved ${sides.map((s) => (s === 0 ? "left" : "right")).join(" and ")}`);
     });
   saveForClose.current = () => {
@@ -1016,10 +1023,16 @@ export function HexCompare({
           </button>
           {optionsOpen && (
             <div className="hx-options" onMouseLeave={() => setOptionsOpen(false)}>
-              <label className="check">
-                <input type="checkbox" checked={prefs.backup} onChange={(e) => setPref("backup", e.target.checked)} />
+              <label className="check" title={appBackups ? "Previous versions go to Backups" : undefined}>
+                <input
+                  type="checkbox"
+                  checked={prefs.backup}
+                  disabled={appBackups}
+                  onChange={(e) => setPref("backup", e.target.checked)}
+                />
                 Keep a .bak copy when saving
               </label>
+              {appBackups && <small className="muted">Previous versions go to Backups</small>}
               <label>
                 Context rows
                 <input

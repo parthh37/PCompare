@@ -891,7 +891,12 @@ export function TextMerge({
     setSaving(true);
     setError(null);
     try {
-      await mergeApi.saveTextFile(target, written, data.outputFormat);
+      await mergeApi.saveTextFile(target, written, data.outputFormat, {
+        tool: "Text Merge",
+        action: "Save merge output",
+        left,
+        right,
+      });
       setSavedText(written);
     } catch (e) {
       setError(errorMessage(e));

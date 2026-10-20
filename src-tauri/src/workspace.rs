@@ -35,6 +35,12 @@ fn shell(app: &AppHandle) -> tauri::State<'_, ShellState> {
 
 // ---------- preferences ----------
 
+/// The stored preferences (an empty object when unreadable), for settings
+/// the Rust side honours too, such as backups.
+pub(crate) fn prefs_value(app: &AppHandle) -> serde_json::Value {
+    shell(app).prefs.load().unwrap_or_else(|_| serde_json::Value::Object(Default::default()))
+}
+
 #[tauri::command]
 pub async fn prefs_load(app: AppHandle) -> CmdResult<serde_json::Value> {
     blocking(move || shell(&app).prefs.load()).await

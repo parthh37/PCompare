@@ -394,6 +394,33 @@ The bottom panel lists runs for all tasks or the selected one: what started it, 
   },
   // automation:ui end
   {
+    id: "backups",
+    title: "Backups",
+    kinds: ["backups"],
+    body: `
+With backups on, PCompare keeps a copy of every file it is about to overwrite or remove, all in one backup folder, so you can put it back later. Each operation makes one backup: a copy in Folder Compare (left → right or right → left), saving an edited side in Text, Hex or Registry Compare, saving a Text Merge's output, a Folder Sync or Folder Merge run (automated ones too), and applying a patch.
+
+## Turning them on
+PCompare asks once whether to keep backups. Change your mind at any time with **Backups** in the tab bar (**Turn on** in the banner at the top of the page) or in **Settings → Backups**.
+
+With backups off, each tool keeps its usual behaviour: replaced and deleted files go to the Recycle Bin / Trash or a versioning folder, as set in the tool's options, and saves in Text and Hex Compare keep a \`.bak\` copy (Text Compare's rules can use a backup folder instead). With backups on, a backup takes the place of the Recycle Bin / Trash and the \`.bak\` file; a sync set to use a versioning folder or to delete permanently still does that.
+
+Files on remote and cloud locations (S3, OneDrive, FTP and the like) aren't backed up.
+
+## How long they're kept
+**Settings → Backups** sets how long backups are kept (a week to a year, or forever), an optional size limit for the whole folder (the oldest backups go first) and the folder itself. Expired backups are removed now and then by themselves; **Clean up now** removes them straight away.
+
+## Finding a backup
+Backups are grouped by day, newest first. Each row shows the time, the tool, what it did, the folders or files it worked on, and how much was kept. Click a row (or press Enter) to see its files: **replaced** means something new was written over it, **removed** means a sync or merge deleted it. The search box finds backups by file path, folder, tool or action.
+
+## Restoring
+**Restore all** on a backup, or **Restore** on one file, puts the kept version back where it was. Whatever is there now is backed up first, so the **Undo** that appears afterwards puts things back as they were (that backup is in the list too). **Compare with current** opens the kept version on the left and the file as it is now on the right; **Show** shows the kept copy in Explorer / Finder.
+
+## Deleting
+**Delete** removes a backup and its files for good, after asking.
+`,
+  },
+  {
     id: "edit",
     title: "Text Edit",
     kinds: ["edit"],

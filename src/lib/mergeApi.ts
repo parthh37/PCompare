@@ -3,6 +3,7 @@
 // pcompare-core (textfile) and pcompare-merge.
 import { invoke } from "@tauri-apps/api/core";
 import type { LineEnding, TextDiffOptions, TextDiffResult, TextFileInfo } from "./api";
+import type { BackupOrigin } from "./backupsApi";
 
 /** How a file is written back: encoding, BOM and the line-ending style to normalize to. */
 export interface TextFormat {
@@ -71,8 +72,9 @@ export const mergeApi = {
   loadTextPair: (left: string, right: string) => invoke<TextPair>("load_text_pair", { left, right }),
   diffTexts: (left: string[], right: string[], options: TextDiffOptions) =>
     invoke<TextDiffResult>("diff_texts", { left, right, options }),
-  saveTextFile: (path: string, text: string, format: TextFormat) =>
-    invoke<TextFileInfo>("save_text_file", { path, text, format }),
+  /** With an `origin` (a merge's output, not an export) the replaced file is kept in Backups when they are on. */
+  saveTextFile: (path: string, text: string, format: TextFormat, origin?: BackupOrigin) =>
+    invoke<TextFileInfo>("save_text_file", { path, text, format, origin }),
   /** An empty `base` runs a two-way merge. */
   loadMerge: (left: string, base: string, right: string, options: TextDiffOptions, rules?: MergeRules) =>
     invoke<MergeLoad>("load_merge", { left, base, right, options, rules: rules ?? null }),

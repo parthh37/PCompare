@@ -1226,8 +1226,9 @@ fn create_file(path: &Path, text: &str, format: &textfile::TextFormat) -> Result
 /// file under `base` and writes the result: the original rewritten in its
 /// own encoding and line endings, a new file created, or a renamed/deleted
 /// file's old version handed to `remove` (the app moves it to the Trash).
-/// A file deletion only happens when every hunk was selected and applied.
-/// Nothing is written when no selected hunk applies.
+/// `keep` sees each existing file just before it is rewritten in place (the
+/// app backs it up). A file deletion only happens when every hunk was
+/// selected and applied. Nothing is written when no selected hunk applies.
 pub fn write_to_folder(
     patch: &Patch,
     base: &Path,
@@ -1235,6 +1236,7 @@ pub fn write_to_folder(
     index: usize,
     selected: Option<&[usize]>,
     remove: &dyn Fn(&Path) -> std::io::Result<()>,
+    keep: &dyn Fn(&Path) -> std::io::Result<()>,
 ) -> Result<FileApply> {
     let f = &patch
         .files
@@ -1250,6 +1252,10 @@ pub fn write_to_folder(
         return Ok(result);
     }
     let removed = |path: &Path| remove(path).map_err(|e| CoreError::io(path, e));
+    let rewrite = |path: &Path| {
+        keep(path).map_err(|e| CoreError::io(path, e))?;
+        textfile::save_text(path, &p.text, &p.format)
+    };
     let action = match (&p.old, &p.new) {
         (Some(old), None) if complete && p.empty => {
             removed(old)?;
@@ -1257,7 +1263,7 @@ pub fn write_to_folder(
         }
         // A partial deletion keeps the file with the selected hunks applied.
         (Some(old), None) => {
-            textfile::save_text(old, &p.text, &p.format)?;
+            rewrite(old)?;
             WriteAction::Modified
         }
         (None, Some(new)) => {
@@ -1265,7 +1271,7 @@ pub fn write_to_folder(
             WriteAction::Created
         }
         (Some(old), Some(new)) if old == new => {
-            textfile::save_text(old, &p.text, &p.format)?;
+            rewrite(old)?;
             WriteAction::Modified
         }
         (Some(old), Some(new)) => {
@@ -1699,7 +1705,7 @@ new mode 100755
         };
 
         // Only the second hunk of main.c: x stays 1, d is appended, CRLF kept.
-        let r = write_to_folder(&p, root, 1, 0, Some(&[1]), &remove).unwrap();
+        let r = write_to_folder(&p, root, 1, 0, Some(&[1]), &remove, &|_| Ok(())).unwrap();
         assert_eq!(r.written, Some(WriteAction::Modified));
         assert!(r.hunks[0].skipped && r.hunks[1].applied);
         let text = std::fs::read_to_string(root.join("src/main.c")).unwrap();
@@ -1710,7 +1716,7 @@ new mode 100755
         assert!(text.ends_with("c\r\nd\r\n"), "{text:?}");
 
         // Now the first one too.
-        let r = write_to_folder(&p, root, 1, 0, Some(&[0]), &remove).unwrap();
+        let r = write_to_folder(&p, root, 1, 0, Some(&[0]), &remove, &|_| Ok(())).unwrap();
         assert_eq!(r.written, Some(WriteAction::Modified));
         assert!(r.hunks[0].applied && r.hunks[1].skipped);
         let text = std::fs::read_to_string(root.join("src/main.c")).unwrap();
@@ -1718,11 +1724,11 @@ new mode 100755
         assert_eq!(text.matches("d\r\n").count(), 1);
 
         // Nothing selected: nothing written.
-        let r = write_to_folder(&p, root, 1, 0, Some(&[]), &remove).unwrap();
+        let r = write_to_folder(&p, root, 1, 0, Some(&[]), &remove, &|_| Ok(())).unwrap();
         assert_eq!(r.written, None);
 
         // Rename with changes: new name created, old one handed to `remove`.
-        let r = write_to_folder(&p, root, 1, 1, None, &remove).unwrap();
+        let r = write_to_folder(&p, root, 1, 1, None, &remove, &|_| Ok(())).unwrap();
         assert_eq!(r.written, Some(WriteAction::Renamed));
         assert_eq!(
             std::fs::read_to_string(root.join("new name.txt")).unwrap(),
@@ -1731,19 +1737,19 @@ new mode 100755
         assert!(!root.join("old name.txt").exists());
 
         // New file, then again: it already exists.
-        let r = write_to_folder(&p, root, 1, 2, None, &remove).unwrap();
+        let r = write_to_folder(&p, root, 1, 2, None, &remove, &|_| Ok(())).unwrap();
         assert_eq!(r.written, Some(WriteAction::Created));
         assert_eq!(
             std::fs::read_to_string(root.join("added.txt")).unwrap(),
             "one\ntwo"
         );
-        assert!(write_to_folder(&p, root, 1, 2, None, &remove).is_err());
+        assert!(write_to_folder(&p, root, 1, 2, None, &remove, &|_| Ok(())).is_err());
 
         // Deleting a file goes through `remove`, and only when its hunk is selected.
-        let r = write_to_folder(&p, root, 1, 3, Some(&[]), &remove).unwrap();
+        let r = write_to_folder(&p, root, 1, 3, Some(&[]), &remove, &|_| Ok(())).unwrap();
         assert_eq!(r.written, None);
         assert!(root.join("gone.txt").exists());
-        let r = write_to_folder(&p, root, 1, 3, None, &remove).unwrap();
+        let r = write_to_folder(&p, root, 1, 3, None, &remove, &|_| Ok(())).unwrap();
         assert_eq!(r.written, Some(WriteAction::Deleted));
         assert!(!root.join("gone.txt").exists());
         assert_eq!(removed.borrow().len(), 2);

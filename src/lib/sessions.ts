@@ -21,6 +21,7 @@ import {
 import { FileDiff, FilePen } from "lucide-react";
 import { Package } from "lucide-react";
 import { CalendarClock } from "lucide-react"; // automation:ui
+import { ArchiveRestore } from "lucide-react";
 import { isArchivePath } from "./archiveApi";
 
 export type CompareKind =
@@ -40,7 +41,7 @@ export type CompareKind =
   | "patch"
   | "review"; // a comparison archive (.pcmpz), read-only
 
-export type SessionKind = "home" | "profiles" | "automation" | CompareKind; // automation:ui — automation
+export type SessionKind = "home" | "profiles" | "automation" | "backups" | CompareKind; // automation:ui — automation
 
 export interface SessionInfo {
   label: string;
@@ -74,6 +75,12 @@ export const SESSIONS: Record<SessionKind, SessionInfo> = {
     description: "Run folder syncs on a schedule or when files change, with failure alerts to Teams, email and more.",
   },
   // automation:ui end
+  backups: {
+    label: "Backups",
+    icon: ArchiveRestore,
+    color: "#34d399",
+    description: "Put back files that copies, saves, syncs and merges replaced or removed.",
+  },
   text: {
     label: "Text Compare",
     icon: FileText,
@@ -185,12 +192,12 @@ export const HOME_GROUPS: { title: string; kinds: Exclude<SessionKind, "home" | 
   { title: "Folders", kinds: ["folder", "sync", "folderMerge"] },
   { title: "Files", kinds: ["text", "merge", "table"] },
   { title: "Data and system", kinds: ["database", "registry"] },
-  { title: "Edit and connect", kinds: ["edit", "patch", "profiles", "automation"] },
+  { title: "Edit and connect", kinds: ["edit", "patch", "profiles", "automation", "backups"] },
   { title: "Media and binary", kinds: ["picture", "hex", "version", "mp3"] },
 ];
 
 export const isCompareKind = (k: SessionKind): k is CompareKind =>
-  k !== "home" && k !== "profiles" && k !== "automation"; // automation:ui — automation
+  k !== "home" && k !== "profiles" && k !== "automation" && k !== "backups"; // automation:ui — automation
 
 /** Lower-cased extension without the dot ("" when there is none). */
 export function extension(path: string): string {

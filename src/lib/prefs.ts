@@ -31,6 +31,21 @@ export type DiffColorKey =
   | "mergeMergeable"
   | "mergeConflict";
 
+/** Backups of the files PCompare overwrites or removes. The Rust side reads
+ *  these too (src-tauri/src/backups.rs), so background syncs follow them. */
+export interface BackupPrefs {
+  /** Keep a backup of every file a copy, save, sync or merge replaces. */
+  enabled: boolean;
+  /** The one-time "Keep backups?" question has been answered. */
+  asked: boolean;
+  /** Backup folder; "" = the default one in the app's data folder. */
+  folder: string;
+  /** Days a backup is kept; 0 = until removed by hand. */
+  keepDays: number;
+  /** Size limit for the whole backup folder in MB; 0 = no limit. */
+  maxSizeMb: number;
+}
+
 export interface Prefs {
   /** Check GitHub Releases for updates in the background. */
   autoUpdate: boolean;
@@ -69,6 +84,7 @@ export interface Prefs {
   /** Paths recently compared, newest first (offered under every path field). */
   recentFolders: string[];
   recentFiles: string[];
+  backups: BackupPrefs;
 }
 
 export const DEFAULT_PREFS: Prefs = {
@@ -94,6 +110,7 @@ export const DEFAULT_PREFS: Prefs = {
   printPaper: "a4",
   recentFolders: [],
   recentFiles: [],
+  backups: { enabled: false, asked: false, folder: "", keepDays: 30, maxSizeMb: 0 },
 };
 
 /** Size limits keep fixed-height diff rows (20px) readable. */
@@ -153,6 +170,21 @@ export function sanitizePrefs(raw: unknown): Prefs {
     printPaper: r.printPaper === "letter" ? "letter" : "a4",
     recentFolders: stringList(r.recentFolders),
     recentFiles: stringList(r.recentFiles),
+    backups: sanitizeBackups(r.backups),
+  };
+}
+
+function sanitizeBackups(raw: unknown): BackupPrefs {
+  const r = (raw && typeof raw === "object" ? raw : {}) as Partial<Record<keyof BackupPrefs, unknown>>;
+  const d = DEFAULT_PREFS.backups;
+  const count = (v: unknown, fallback: number) =>
+    typeof v === "number" && Number.isFinite(v) && v >= 0 ? Math.round(v) : fallback;
+  return {
+    enabled: typeof r.enabled === "boolean" ? r.enabled : d.enabled,
+    asked: typeof r.asked === "boolean" ? r.asked : d.asked,
+    folder: typeof r.folder === "string" ? r.folder.trim() : d.folder,
+    keepDays: count(r.keepDays, d.keepDays),
+    maxSizeMb: count(r.maxSizeMb, d.maxSizeMb),
   };
 }
 

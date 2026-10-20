@@ -1,6 +1,7 @@
 //! Tauri commands for the Registry, Version and MP3 Compare sessions.
 
 use crate::CmdResult;
+use pcompare_core::backups::BackupOrigin;
 use pcompare_core::CoreError;
 use pcompare_meta::audio::{self, AudioCompareResult};
 use pcompare_meta::registry::{
@@ -162,12 +163,37 @@ pub async fn registry_save(
                 .map_err(|e| CoreError::Other(format!("{}: {e}", source.spec)))?;
             writes.push((source.spec.clone(), bytes));
         }
+        let batch = crate::backups::begin(
+            &app,
+            BackupOrigin {
+                tool: "Registry Compare".into(),
+                action: format!("Save {}", side_names(&sides)),
+                left: left.clone(),
+                right: right.clone(),
+            },
+        );
         for (spec, bytes) in writes {
+            if let Some(b) = &batch {
+                b.keep_copy(Path::new(&spec))
+                    .map_err(|e| CoreError::Other(format!("couldn't back up {spec} first: {e}")))?;
+            }
             std::fs::write(&spec, bytes).map_err(|e| CoreError::io(spec.as_str(), e))?;
+        }
+        if let Some(b) = &batch {
+            crate::backups::finish(&app, b);
         }
         Ok(())
     })
     .await
+}
+
+/// "left side", "right side" or "both sides".
+fn side_names(sides: &[Side]) -> &'static str {
+    match (sides.iter().any(|s| matches!(s, Side::Left)), sides.iter().any(|s| matches!(s, Side::Right))) {
+        (true, true) => "both sides",
+        (true, false) => "left side",
+        _ => "right side",
+    }
 }
 
 /// The `reg.exe` steps that would apply `edit` to the live key on `side`

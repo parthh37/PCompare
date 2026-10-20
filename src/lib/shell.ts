@@ -8,6 +8,8 @@ export interface Shell {
   selectLeft: (path: string | null) => void;
   /** Compares `path` against the selected left side, then clears the selection. */
   compareToLeft: (path: string) => void;
+  /** Opens the Backups tab, showing backup `id` when given. */
+  openBackups: (id?: string | null) => void;
 }
 
 export const ShellContext = createContext<Shell>({
@@ -15,5 +17,6 @@ export const ShellContext = createContext<Shell>({
   leftSelection: null,
   selectLeft: () => {},
   compareToLeft: () => {},
+  openBackups: () => {},
 });
 export const useShell = () => useContext(ShellContext);

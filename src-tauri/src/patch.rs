@@ -3,6 +3,7 @@
 //! patched files (opened in Text Compare with the patched text in memory).
 
 use crate::CmdResult;
+use pcompare_core::backups::{BackupOrigin, BackupReason};
 use pcompare_core::patch::{self, ChangeKind, FileApply, Patch, PatchFormat, PatchHunk};
 use pcompare_core::text::DiffRow;
 use pcompare_core::{textfile, CoreError};
@@ -216,22 +217,37 @@ pub async fn patch_write_selected(
         let dir = local_base(&base)?;
         let (p, _) = read_patch(&app, &path)?;
         let trash = TrashDeleter::new();
-        let remove = |path: &Path| trash.delete(path);
-        Ok(files
+        let name = Path::new(&path).file_name().map_or_else(|| path.clone(), |n| n.to_string_lossy().into_owned());
+        let batch = crate::backups::begin(
+            &app,
+            BackupOrigin {
+                tool: "Patch".into(),
+                action: format!("Apply {name}"),
+                left: base.clone(),
+                right: path.clone(),
+            },
+        );
+        // With backups on, removed and rewritten files are kept there.
+        let remove = |path: &Path| match &batch {
+            Some(b) => b.keep_move(path, path, BackupReason::Removed).map(|_| ()),
+            None => trash.delete(path),
+        };
+        let keep = |path: &Path| match &batch {
+            Some(b) => b.keep_copy(path).map(|_| ()),
+            None => Ok(()),
+        };
+        let written = files
             .into_iter()
             .map(|sel| WrittenFile {
                 index: sel.index,
-                result: patch::write_to_folder(
-                    &p,
-                    dir,
-                    strip,
-                    sel.index,
-                    sel.hunks.as_deref(),
-                    &remove,
-                )
-                .unwrap_or_else(failed_file),
+                result: patch::write_to_folder(&p, dir, strip, sel.index, sel.hunks.as_deref(), &remove, &keep)
+                    .unwrap_or_else(failed_file),
             })
-            .collect())
+            .collect();
+        if let Some(b) = &batch {
+            crate::backups::finish(&app, b);
+        }
+        Ok(written)
     })
     .await
 }

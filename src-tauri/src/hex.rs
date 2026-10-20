@@ -7,6 +7,7 @@
 
 use crate::{blocking, with_remote, CmdResult};
 use pcompare_core::hex::{self, HexChunk, HexEditAt, HexRow, HexSession, HexState, HexSummary, HexTarget, HexView};
+use pcompare_core::backups::BackupOrigin;
 use pcompare_core::hex_align::DEFAULT_ALIGN_LIMIT;
 use pcompare_core::CoreError;
 use serde::Serialize;
@@ -58,6 +59,8 @@ struct Open {
     /// The user's paths; remote sides are edited in the download cache and
     /// can't be saved.
     remote: [bool; 2],
+    /// The local files open on each side.
+    paths: [PathBuf; 2],
 }
 
 type Shared = Arc<Mutex<Open>>;
@@ -133,6 +136,7 @@ pub async fn hex_open(
             session,
             // files inside archives open from an extracted copy: read-only too
             remote: [&left, &right].map(|p| pcompare_remote::is_remote(p) || pcompare_remote::is_inside_container(p)),
+            paths: [l.clone(), r.clone()],
         };
         let mut map = SESSIONS.lock().unwrap_or_else(|e| e.into_inner());
         map.get_or_insert_with(HashMap::new)
@@ -299,12 +303,26 @@ pub async fn hex_replace_all(
     .await
 }
 
-/// Writes one side back to disk, keeping `<name>.bak` when `backup` is set.
+/// Writes one side back to disk. The version it replaces goes to the app's
+/// backups when they are on, else to `<name>.bak` when `backup` is set.
 #[tauri::command]
-pub async fn hex_save(id: String, side: usize, backup: bool, view: HexView) -> CmdResult<HexState> {
+pub async fn hex_save(
+    app: AppHandle,
+    id: String,
+    side: usize,
+    backup: bool,
+    view: HexView,
+    origin: Option<BackupOrigin>,
+) -> CmdResult<HexState> {
     with_session(id, move |o| {
         let s = editable(o, side)?;
-        o.session.save(s, backup)?;
+        let backups = crate::backups::settings(&app).enabled;
+        if backups {
+            let path = o.paths[s].clone();
+            let origin = origin.unwrap_or_else(|| crate::backups::save_origin("Hex Compare", &path.to_string_lossy()));
+            crate::backups::keep_before_save(&app, &path, origin)?;
+        }
+        o.session.save(s, backup && !backups)?;
         Ok(o.session.state(&view))
     })
     .await

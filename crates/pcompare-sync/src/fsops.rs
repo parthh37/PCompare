@@ -1,14 +1,17 @@
 //! File-system primitives shared by the sync and merge executors: safe
 //! relative-path resolution, timestamp-preserving atomic copies, staged
 //! replacement of existing files, and pluggable disposal of old versions
-//! (Recycle Bin / Trash or a versioning folder in the app, permanent in tests).
+//! (Recycle Bin / Trash, a versioning folder or the backup store in the app,
+//! permanent in tests).
 
 use std::fs::{self, File};
 use std::io::{self, Read, Write};
 use std::path::{Component, Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
 
 use filetime::FileTime;
+use pcompare_core::backups::{BackupBatch, BackupReason};
 
 use crate::baseline::Snap;
 use crate::failure::{FailureKind, OpError};
@@ -23,6 +26,13 @@ pub trait Deleter: Send + Sync {
     /// it can be restored from, when it was kept somewhere restorable.
     fn retire(&self, path: &Path, side: &str, rel: &str) -> io::Result<Option<PathBuf>> {
         let _ = (side, rel);
+        self.delete(path).map(|()| None)
+    }
+
+    /// Disposes of the local file at `path`, which a copy is about to
+    /// replace. Returns where it can be restored from, when it was kept
+    /// somewhere restorable.
+    fn dispose_replaced(&self, path: &Path) -> io::Result<Option<PathBuf>> {
         self.delete(path).map(|()| None)
     }
 }
@@ -117,6 +127,73 @@ impl Deleter for VersioningDeleter {
         let target = unused_name(&resolve(&self.root.join(side), rel)?);
         move_path(path, &target)?;
         Ok(Some(target))
+    }
+}
+
+/// Keeps old versions in PCompare's backup store (see
+/// [`pcompare_core::backups`]), recording where each one lived so the
+/// Backups page can put it back.
+pub struct BackupDeleter {
+    batch: Arc<BackupBatch>,
+    /// Side label ("left", "right", "output") → that side's root, so
+    /// [`Deleter::retire`] knows where an item lived.
+    roots: Vec<(String, PathBuf)>,
+    /// Where plain deletes go; `None` keeps them as backups too.
+    deletes: Option<Box<dyn Deleter>>,
+}
+
+impl BackupDeleter {
+    pub fn new(batch: Arc<BackupBatch>) -> Self {
+        BackupDeleter {
+            batch,
+            roots: Vec::new(),
+            deletes: None,
+        }
+    }
+
+    /// Names the root of `side`, as passed to [`Deleter::retire`].
+    pub fn with_root(mut self, side: &str, root: impl Into<PathBuf>) -> Self {
+        self.roots.push((side.to_owned(), root.into()));
+        self
+    }
+
+    /// Hands plain deletes (Folder Compare's Delete) to `deleter` instead of
+    /// keeping them, so only what a copy replaces is backed up.
+    pub fn deleting_with(mut self, deleter: Box<dyn Deleter>) -> Self {
+        self.deletes = Some(deleter);
+        self
+    }
+
+    pub fn batch(&self) -> &Arc<BackupBatch> {
+        &self.batch
+    }
+}
+
+impl Deleter for BackupDeleter {
+    fn delete(&self, path: &Path) -> io::Result<()> {
+        match &self.deletes {
+            Some(d) => d.delete(path),
+            None => self.batch.keep_move(path, path, BackupReason::Removed).map(|_| ()),
+        }
+    }
+
+    fn retire(&self, path: &Path, side: &str, rel: &str) -> io::Result<Option<PathBuf>> {
+        let original = match self.roots.iter().find(|(s, _)| s == side) {
+            Some((_, root)) => resolve(root, rel)?,
+            None => path.to_path_buf(),
+        };
+        // A deleted item is retired where it is; a replaced one from where
+        // it was staged aside.
+        let reason = if original == path {
+            BackupReason::Removed
+        } else {
+            BackupReason::Replaced
+        };
+        self.batch.keep_move(path, &original, reason).map(Some)
+    }
+
+    fn dispose_replaced(&self, path: &Path) -> io::Result<Option<PathBuf>> {
+        self.batch.keep_move(path, path, BackupReason::Replaced).map(Some)
     }
 }
 

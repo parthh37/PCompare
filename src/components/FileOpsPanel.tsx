@@ -1,11 +1,24 @@
 // The docked Operations panel of Folder Compare: every
 // background file operation with its progress, a Pause / Resume and Cancel
 // per operation, name-clash questions, and errors once it is done.
-import { ChevronDown, ChevronRight, CircleAlert, CircleCheck, CircleX, Hourglass, Lock, Pause, Play, X } from "lucide-react";
+import {
+  ArchiveRestore,
+  ChevronDown,
+  ChevronRight,
+  CircleAlert,
+  CircleCheck,
+  CircleX,
+  Hourglass,
+  Lock,
+  Pause,
+  Play,
+  X,
+} from "lucide-react";
 import { useState } from "react";
 import { errorMessage } from "../lib/api";
 import { fileOps, type ConflictAnswer, type FileOp, type FileOpProgress } from "../lib/fileOpsApi";
 import { formatSize, formatTime } from "../lib/format";
+import { useShell } from "../lib/shell";
 import "./FileOpsPanel.css";
 
 interface Props {
@@ -32,6 +45,7 @@ function statusLine(op: FileOp): string {
     if (r.skipped) parts.push(`${r.skipped.toLocaleString()} skipped`);
     if (r.filtered) parts.push(`${r.filtered.toLocaleString()} filtered out`);
     if (r.failed) parts.push(`${r.failed.toLocaleString()} failed`);
+    if (r.backedUp) parts.push(`${r.backedUp.toLocaleString()} replaced file${r.backedUp === 1 ? "" : "s"} kept in Backups`);
     if (r.bytes) parts.push(formatSize(r.bytes));
     parts.push(`${(r.elapsedMs / 1000).toFixed(1)} s`);
     return `${r.cancelled ? "Cancelled · " : ""}${parts.join(" · ")}`;
@@ -64,8 +78,11 @@ const ANSWERS: { answer: ConflictAnswer; label: string; title?: string }[] = [
 function OpRow({ op }: { op: FileOp }) {
   const [open, setOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const { openBackups } = useShell();
   const p = op.progress;
   const running = op.status === "running";
+  /** The backup holding the files it replaced (Backups on). */
+  const backup = op.report?.backedUp ? op.report.backup : null;
   const q = running ? p?.question : null;
   const issues = (op.report?.failures.length ?? 0) + (op.report?.notes.length ?? 0);
   const act = (f: () => Promise<unknown>) => f().catch((e) => setError(errorMessage(e)));
@@ -108,6 +125,11 @@ function OpRow({ op }: { op: FileOp }) {
               <X size={13} /> Cancel
             </button>
           </>
+        )}
+        {backup && (
+          <button className="fop-btn" onClick={() => openBackups(backup)} title="Show the replaced files on the Backups tab">
+            <ArchiveRestore size={13} /> View
+          </button>
         )}
         {!running && (
           <button className="fop-btn" onClick={() => fileOps.dismiss(op.id)} title="Remove from the list">

@@ -1,4 +1,4 @@
-import { CircleArrowUp, Keyboard, Palette, RotateCcw, Settings, Type } from "lucide-react";
+import { ArchiveRestore, CircleArrowUp, Keyboard, Palette, RotateCcw, Settings, Type } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import {
   bindingsWith,
@@ -30,19 +30,28 @@ import { GitBranch } from "lucide-react";
 import { VcsSetupPage } from "./VcsSetup";
 import { explorerApi, type MenuStatus } from "../lib/explorerApi";
 import { errorMessage } from "../lib/api";
+import { backupsApi, setBackupPrefs } from "../lib/backupsApi";
+import { formatSize } from "../lib/format";
+import { BackupSettingsFields } from "./BackupSettingsFields";
 
 interface Props {
   updater: Updater;
   onClose: () => void;
+  /** The page shown first (General by default). */
+  initialPage?: SettingsPage;
+  /** Opens the Backups tab (closing Settings). */
+  onOpenBackups?: () => void;
 }
 
-type Page = "general" | "appearance" | "fonts" | "keyboard" | "vcs";
+export type SettingsPage = "general" | "appearance" | "fonts" | "keyboard" | "backups" | "vcs";
+type Page = SettingsPage;
 
 const PAGES: { id: Page; label: string; icon: typeof Settings }[] = [
   { id: "general", label: "General", icon: Settings },
   { id: "appearance", label: "Colors", icon: Palette },
   { id: "fonts", label: "Fonts", icon: Type },
   { id: "keyboard", label: "Keyboard", icon: Keyboard },
+  { id: "backups", label: "Backups", icon: ArchiveRestore },
   { id: "vcs", label: "Source control", icon: GitBranch },
 ];
 
@@ -760,14 +769,57 @@ function KeyboardPage({ prefs, set }: { prefs: Prefs; set: SetPrefs }) {
   );
 }
 
+// ---------- backups ----------
+
+function BackupsSettingsPage({ prefs, onOpenBackups }: { prefs: Prefs; onOpenBackups?: () => void }) {
+  const [status, setStatus] = useState("");
+  const cleanUp = () =>
+    backupsApi
+      .prune()
+      .then(({ removed, freed }) =>
+        setStatus(
+          removed
+            ? `Removed ${removed} backup${removed === 1 ? "" : "s"} (${formatSize(freed)}).`
+            : "Nothing to clean up.",
+        ),
+      )
+      .catch((e) => setStatus(errorMessage(e)));
+  return (
+    <div className="settings-grid single">
+      <fieldset>
+        <legend>Backups</legend>
+        <BackupSettingsFields toggle sizeLimit value={prefs.backups} onChange={setBackupPrefs} />
+        <small className="muted">
+          Covers copies and moves in Folder Compare, saving an edited side (text, hex, registry), Text Merge output,
+          applied patches, and Folder Sync and Folder Merge runs set to the Recycle Bin / Trash. Files on remote or
+          cloud folders aren't backed up. While backups are off, each tool keeps its own setting (Recycle Bin / Trash,
+          .bak copies or a versioning folder).
+        </small>
+      </fieldset>
+      <fieldset>
+        <legend>Backups so far</legend>
+        <div className="settings-actions bkset-actions">
+          {status && <small className="muted">{status}</small>}
+          <button onClick={() => void cleanUp()}>Clean up now</button>
+          {onOpenBackups && (
+            <button className="primary" onClick={onOpenBackups}>
+              Open Backups
+            </button>
+          )}
+        </div>
+      </fieldset>
+    </div>
+  );
+}
+
 // ---------- dialog ----------
 
 type SetPrefs = ReturnType<typeof usePrefs>[1];
 
 /** Application-wide preferences (per-session options live in each session's own settings). */
-export function AppSettingsDialog({ updater, onClose }: Props) {
+export function AppSettingsDialog({ updater, onClose, initialPage, onOpenBackups }: Props) {
   const [prefs, set] = usePrefs();
-  const [page, setPage] = useState<Page>("general");
+  const [page, setPage] = useState<Page>(initialPage ?? "general");
 
   return (
     <Modal title="Settings" onClose={onClose} wide footer={<button onClick={onClose}>Close</button>}>
@@ -784,6 +836,7 @@ export function AppSettingsDialog({ updater, onClose }: Props) {
           {page === "appearance" && <AppearancePage prefs={prefs} set={set} />}
           {page === "fonts" && <FontsPage prefs={prefs} set={set} />}
           {page === "keyboard" && <KeyboardPage prefs={prefs} set={set} />}
+          {page === "backups" && <BackupsSettingsPage prefs={prefs} onOpenBackups={onOpenBackups} />}
           {page === "vcs" && <VcsSetupPage />}
         </div>
       </div>

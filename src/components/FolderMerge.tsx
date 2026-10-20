@@ -21,6 +21,8 @@ import { errorMessage, isRemote, type EntryMeta } from "../lib/api";
 import { COMPARE_PRESETS, DEFAULT_FOLDER_SETTINGS, toEngineOptions, type ComparePreset } from "../lib/folderSettings";
 import { isMergeTone, mergeFolderLooks, mergeRowTone, mergeSideTone, toneColor, type MergeSide } from "../lib/folderColors";
 import { formatSize, formatTime, joinPath } from "../lib/format";
+import { usePref } from "../lib/prefs";
+import { useShell } from "../lib/shell";
 import type { MergePaths, MergeProps } from "../lib/sessionProps";
 import {
   CONFLICT_CLASSES,
@@ -245,6 +247,11 @@ export function FolderMerge({
   const [progress, setProgress] = useState<MergeProgress | null>(null);
   const runKey = useRef<string | null>(null);
   const [report, setReport] = useState<MergeReport | null>(null);
+  /** With Backups on, the Trash choice keeps replaced and removed files there instead. */
+  const backups = usePref("backups").enabled;
+  /** The last run kept what it replaced and removed in Backups. */
+  const [reportInBackups, setReportInBackups] = useState(false);
+  const { openBackups } = useShell();
   /** Where the Legend is open, if it is. */
   const [legendAt, setLegendAt] = useState<{ x: number; y: number } | null>(null);
   const disposal: Disposal = cfg.disposal ?? { kind: "trash" };
@@ -594,6 +601,7 @@ export function FolderMerge({
     const key = crypto.randomUUID();
     runKey.current = key;
     setProgress(null);
+    setReportInBackups(disposal.kind === "trash" && backups);
     try {
       setReport(
         await syncApi.mergeExecute({
@@ -616,6 +624,16 @@ export function FolderMerge({
     }
     await run();
   };
+
+  /** Replaced output files the last run kept (in the versioning folder, or in Backups). */
+  const replacedKept = report?.results.filter((r) => r.backup).length ?? 0;
+  /** With Backups: "3 replaced file(s) and 2 removed item(s)"; "" when it kept nothing there. */
+  const keptInBackups =
+    report && reportInBackups
+      ? [replacedKept > 0 && `${replacedKept} replaced file(s)`, report.deleted > 0 && `${report.deleted} removed item(s)`]
+          .filter(Boolean)
+          .join(" and ")
+      : "";
 
   const counts = result?.counts ?? {};
   const n = (...classes: MergeClass[]) => classes.reduce((sum, c) => sum + (counts[c] ?? 0), 0);
@@ -904,7 +922,7 @@ export function FolderMerge({
                 checked={disposal.kind === "trash"}
                 onChange={() => update({ disposal: { kind: "trash" } })}
               />
-              <span>Move to the {TRASH_NAME}</span>
+              <span>{backups ? "Keep in Backups (restore from the Backups tab)" : `Move to the ${TRASH_NAME}`}</span>
             </label>
             <label className="field radio">
               <input
@@ -933,6 +951,7 @@ export function FolderMerge({
               />
               <span>Overwrite and delete permanently (no backup)</span>
             </label>
+            {backups && <small className="muted">A versioning folder or permanent deletion bypasses Backups.</small>}
           </fieldset>
         </Modal>
       )}
@@ -954,10 +973,16 @@ export function FolderMerge({
             {formatSize(report.bytesWritten)} written in {(report.elapsedMs / 1000).toFixed(1)} s
           </p>
           {report.cancelled && <p className="fm-warn">Stopped before every item was merged; what was written so far stays.</p>}
-          {report.results.some((r) => r.backup) && (
+          {keptInBackups ? (
             <p className="muted">
-              {report.results.filter((r) => r.backup).length} replaced file(s) kept in the versioning folder.
+              {keptInBackups} kept in Backups.{" "}
+              <button className="link" onClick={() => openBackups()}>
+                View
+              </button>
             </p>
+          ) : (
+            !reportInBackups &&
+            replacedKept > 0 && <p className="muted">{replacedKept} replaced file(s) kept in the versioning folder.</p>
           )}
           {report.results.some((r) => r.outcome === "failed" || r.outcome === "skipped" || r.error) && (
             <ul className="fm-report-list">

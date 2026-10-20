@@ -21,6 +21,7 @@ import {
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState, type WheelEvent } from "react";
 import { errorMessage, isRemote, type DiffRow, type Segment } from "../lib/api";
+import { backupsOn } from "../lib/backupsApi";
 import { basename } from "../lib/format";
 import { matches as keyMatches, shortcutLabel } from "../lib/keymap";
 import {
@@ -366,12 +367,10 @@ export function PatchViewer({ left: path, onPathsChange, settings, onSettingsCha
     const what = selection.hunks
       ? `${selection.hunks} hunk${selection.hunks === 1 ? "" : "s"} in ${n} file${n === 1 ? "" : "s"}`
       : `${n} file${n === 1 ? "" : "s"}`;
-    if (
-      !window.confirm(
-        `Apply ${what} to ${base}?\n\nThe files are changed in place. Deleted files and the old names of renamed files go to the Trash.`,
-      )
-    )
-      return;
+    const kept = backupsOn()
+      ? "The previous versions of changed files, deleted files and the old names of renamed files are kept in Backups."
+      : "Deleted files and the old names of renamed files go to the Trash.";
+    if (!window.confirm(`Apply ${what} to ${base}?\n\nThe files are changed in place. ${kept}`)) return;
     setWriting(true);
     setReport(null);
     try {

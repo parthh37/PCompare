@@ -321,13 +321,20 @@ export function TextEditor({ left: path, onPathsChange, settings, onSettingsChan
     setSaving(true);
     setError(null);
     try {
-      const { info, backup } = await textApi.saveTextFile(
+      const { info, backup, backupId } = await textApi.saveTextFile(
         target,
         joinLines(d.lines, d.trailingNewline),
         d.format,
         loadBackups(),
+        { tool: "Text Editor", action: "Save", left: target },
       );
-      setNotice(backup ? `Saved; previous version backed up to ${backup}` : `Saved ${basename(target)}`);
+      setNotice(
+        backupId
+          ? `Saved ${basename(target)} · previous version kept in Backups`
+          : backup
+            ? `Saved; previous version backed up to ${backup}`
+            : `Saved ${basename(target)}`,
+      );
       // Edits made while saving stay dirty: only the saved array is marked clean.
       setDoc((cur) => cur && { ...cur, info: { ...info, path: target }, saved: d.lines, savedFormat: d.format });
       return true;
