@@ -78,7 +78,7 @@ The toolbar:
 
 ## Editing
 - Gutter arrows (or the copy shortcuts) copy the current difference to the other side.
-- Double-click a line to edit it. Saving keeps each file's encoding, BOM and line endings.
+- Click a line to edit it there (Enter edits the caret line; double-click a blank padding row to add a line). Saving keeps each file's encoding, BOM and line endings.
 - Files are watched: when one changes on disk the compare refreshes by itself (never over unsaved edits).
 
 ## Colours
