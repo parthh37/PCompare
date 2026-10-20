@@ -19,7 +19,7 @@ import {
   RefreshCw,
   X,
 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState, type WheelEvent } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type WheelEvent } from "react";
 import { errorMessage, isRemote, type DiffRow, type Segment } from "../lib/api";
 import { backupsOn } from "../lib/backupsApi";
 import { basename } from "../lib/format";
@@ -41,6 +41,7 @@ import {
   type WrittenFile,
 } from "../lib/patchApi";
 import { languageFor, lineTokens } from "../lib/syntax";
+import { columnOf } from "../lib/textEdit";
 import { composeRuns, segmentRanges, type Run, type StyledRange } from "../lib/textRuns";
 import { ToolIcon } from "./icons";
 import { PathField } from "./PathField";
@@ -49,7 +50,15 @@ import "./TextCompare.css";
 import "./PatchViewer.css";
 
 const ROW_HEIGHT = 20;
+/** Fallback glyph width until the editor font is measured. */
 const CHAR_WIDTH = 7.8;
+/** Row geometry; mirrors `.trow` / `.tcell` in styles.css (line numbers, divider, cell's left padding, tab-size). */
+const LN_WIDTH = 52;
+const MID_WIDTH = 6;
+const CELL_PAD = 6;
+const TAB_SIZE = 4;
+/** Characters in the hidden probe that measures the editor font's glyph width. */
+const PROBE_CHARS = 100;
 /** File list entry for the patch's description (commit message, mail headers). */
 const DESCRIPTION = -1;
 
@@ -260,13 +269,52 @@ export function PatchViewer({ left: path, onPathsChange, settings, onSettingsCha
     items.forEach((it, i) => !("row" in it) && idx.push(i));
     return idx;
   }, [items]);
-  const maxChars = useMemo(() => {
+  /** The widest line in columns (tabs expanded): how far the panes scroll sideways. */
+  const maxCols = useMemo(() => {
     let m = 0;
     for (const h of file?.hunks ?? [])
       for (const r of h.rows)
-        for (const s of [r.left, r.right]) if (s) m = Math.max(m, s.reduce((n, x) => n + x.text.length, 0));
+        for (const segs of [r.left, r.right]) {
+          if (!segs) continue;
+          const text = segText(segs);
+          m = Math.max(m, text.includes("\t") ? columnOf(text, text.length, TAB_SIZE) : text.length);
+        }
     return m;
   }, [file]);
+
+  // The panes' glyph width (the editor font size is a preference), list width and vertical scrollbar width,
+  // which the horizontal scrollbars under the panes leave free.
+  const grid = useRef<HTMLDivElement>(null);
+  const probe = useRef<HTMLSpanElement>(null);
+  const [metrics, setMetrics] = useState({ charW: CHAR_WIDTH, listW: 0, vsb: 0 });
+  const hasGrid = !!file?.hunks.length;
+  useLayoutEffect(() => {
+    const listEl = grid.current?.querySelector<HTMLElement>(".pv-list");
+    const probeEl = probe.current;
+    if (!listEl || !probeEl) return;
+    const measure = () => {
+      const charW = probeEl.getBoundingClientRect().width / PROBE_CHARS || CHAR_WIDTH;
+      const listW = listEl.clientWidth;
+      const vsb = listEl.offsetWidth - listEl.clientWidth;
+      setMetrics((m) => (m.charW === charW && m.listW === listW && m.vsb === vsb ? m : { charW, listW, vsb }));
+    };
+    const ro = new ResizeObserver(measure);
+    ro.observe(listEl);
+    ro.observe(probeEl);
+    measure();
+    return () => ro.disconnect();
+  }, [hasGrid]);
+
+  // Sideways scrolling: both sides share `hx`, moved by the wheel and the scrollbars under the panes.
+  const cellW = (metrics.listW - 2 * LN_WIDTH - MID_WIDTH) / 2;
+  /** A cell's text width, with a character of room after the longest line. */
+  const textW = CELL_PAD + (maxCols + 1) * metrics.charW;
+  const maxHx = metrics.listW > 0 ? Math.max(0, Math.ceil(textW - cellW)) : 0;
+  useEffect(() => setHx((x) => Math.min(x, maxHx)), [maxHx]);
+  const hbars = useRef<(HTMLDivElement | null)[]>([]);
+  useLayoutEffect(() => {
+    for (const el of hbars.current) if (el && Math.abs(el.scrollLeft - hx) > 0.5) el.scrollLeft = hx;
+  }, [hx, maxHx]);
 
   const selectFile = (i: number) => {
     if (i < (hasDescription ? DESCRIPTION : 0) || i >= files.length) return;
@@ -414,7 +462,7 @@ export function PatchViewer({ left: path, onPathsChange, settings, onSettingsCha
   const onWheel = (e: WheelEvent<HTMLDivElement>) => {
     const dx = e.shiftKey ? e.deltaY : e.deltaX;
     if (!dx || (!e.shiftKey && Math.abs(e.deltaX) < Math.abs(e.deltaY))) return;
-    setHx((x) => Math.max(0, Math.min(maxChars * CHAR_WIDTH, x + dx)));
+    setHx((x) => Math.max(0, Math.min(maxHx, x + dx)));
   };
   const shift = { transform: `translateX(${-hx}px)` };
 
@@ -713,7 +761,10 @@ export function PatchViewer({ left: path, onPathsChange, settings, onSettingsCha
                     </button>
                   </div>
                   {file.hunks.length ? (
-                    <div className="text-grid pv-grid">
+                    <div className="text-grid pv-grid" ref={grid}>
+                      <span className="tc-probe" ref={probe} aria-hidden>
+                        {"0".repeat(PROBE_CHARS)}
+                      </span>
                       <VarList
                         ref={list}
                         className="text-list pv-list"
@@ -722,6 +773,21 @@ export function PatchViewer({ left: path, onPathsChange, settings, onSettingsCha
                         renderRow={renderRow}
                         onWheel={onWheel}
                       />
+                      {/* one horizontal scrollbar under each side's text, kept in step */}
+                      {maxHx > 0 && (
+                        <div className="pv-hbar" style={{ paddingRight: metrics.vsb }}>
+                          {[0, 1].map((i) => (
+                            <div
+                              key={i}
+                              ref={(el) => void (hbars.current[i] = el)}
+                              className={`pv-hscroll pv-hscroll-${i ? "right" : "left"}`}
+                              onScroll={(e) => setHx(e.currentTarget.scrollLeft)}
+                            >
+                              <div style={{ width: textW }} />
+                            </div>
+                          ))}
+                        </div>
+                      )}
                     </div>
                   ) : (
                     <div className="empty-state">

@@ -22,14 +22,17 @@
   overflow: hidden;
 }
 .tm-inputs {
+  position: relative;
   display: flex;
   flex-direction: column;
   flex-grow: 0;
   flex-shrink: 0;
   min-height: 0;
 }
+/* Keep the line-number column (44px), the cell's padding and tab-size in sync with LN_WIDTH / CELL_PAD / TAB_SIZE. */
 .tm-heads,
-.mrow {
+.mrow,
+.tm-hbar {
   display: grid;
   grid-template-columns: 44px minmax(0, 1fr) 44px minmax(0, 1fr) 44px minmax(0, 1fr);
 }
@@ -120,6 +123,36 @@
 .mrow.current .ln:first-child {
   box-shadow: inset 3px 0 0 var(--warn);
   color: var(--text);
+}
+
+/*
+ * One horizontal scrollbar under each input pane's text, all moving `hx`. The
+ * columns mirror the rows' (padding-right: the list's vertical scrollbar, set inline).
+ */
+.tm-hbar {
+  flex-shrink: 0;
+  border-top: 1px solid var(--border);
+  background: var(--panel);
+}
+.tm-hscroll {
+  min-width: 0;
+  height: 12px;
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+.tm-hscroll > div {
+  height: 1px;
+}
+/* Measures the editor font's glyph width (see TextMerge `metrics`). */
+.tm-probe {
+  position: absolute;
+  top: 0;
+  left: 0;
+  visibility: hidden;
+  pointer-events: none;
+  white-space: pre;
+  font-family: var(--mono);
+  font-size: var(--editor-font-size);
 }
 
 .tm-splitter {
@@ -222,7 +255,8 @@
 
 /* Two-way merge: no base column. */
 .tm-two .tm-heads,
-.tm-two .mrow {
+.tm-two .mrow,
+.tm-two .tm-hbar {
   grid-template-columns: 44px minmax(0, 1fr) 44px minmax(0, 1fr);
 }
 

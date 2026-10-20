@@ -14,8 +14,10 @@ import {
   WandSparkles,
 } from "lucide-react";
 import {
+  Fragment,
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -36,6 +38,7 @@ import {
   type MergeLoad,
   type TextDocument,
 } from "../lib/mergeApi";
+import { columnOf } from "../lib/textEdit";
 import { composeRuns, type StyledRange } from "../lib/textRuns";
 import type { MergePaths, MergeProps } from "../lib/sessionProps";
 import { PathField } from "./PathField";
@@ -45,7 +48,14 @@ import "./TextMerge.css";
 import { isComposing } from "../lib/ime";
 
 const ROW_HEIGHT = 20;
+/** Fallback glyph width until the editor font is measured. */
 const CHAR_WIDTH = 7.8;
+/** Input pane geometry; mirrors `.mrow` in TextMerge.css (line-number column, cell's left padding, tab-size). */
+const LN_WIDTH = 44;
+const CELL_PAD = 6;
+const TAB_SIZE = 4;
+/** Characters in the hidden probe that measures the editor font's glyph width. */
+const PROBE_CHARS = 100;
 /** Output textarea metrics; the highlight layer relies on them matching TextMerge.css. */
 const OUT_LINE_HEIGHT = 20;
 const OUT_PAD_TOP = 4;
@@ -609,12 +619,49 @@ export function TextMerge({
   /** Changes still showing the base text, waiting for the automatic merge. */
   const pendingCount = changes.filter((k) => out.states[k] === "pending").length;
 
-  const maxChars = useMemo(() => {
+  /** The widest input line in columns (tabs expanded): how far the input panes scroll sideways. */
+  const maxCols = useMemo(() => {
     if (!data) return 0;
     let m = 0;
-    for (const doc of [data.left, data.base, data.right]) if (doc) for (const l of doc.lines) m = Math.max(m, l.length);
+    for (const doc of [data.left, data.base, data.right])
+      if (doc) for (const l of doc.lines) m = Math.max(m, l.includes("\t") ? columnOf(l, l.length, TAB_SIZE) : l.length);
     return m;
   }, [data]);
+
+  // The input panes' glyph width (the editor font size is a preference), list width and vertical scrollbar
+  // width, which the horizontal scrollbars under the panes leave free.
+  const inputs = useRef<HTMLDivElement>(null);
+  const probe = useRef<HTMLSpanElement>(null);
+  const [metrics, setMetrics] = useState({ charW: CHAR_WIDTH, listW: 0, vsb: 0 });
+  const hasData = !!data;
+  useLayoutEffect(() => {
+    const listEl = inputs.current?.querySelector<HTMLElement>(".tm-list");
+    const probeEl = probe.current;
+    if (!listEl || !probeEl) return;
+    const measure = () => {
+      const charW = probeEl.getBoundingClientRect().width / PROBE_CHARS || CHAR_WIDTH;
+      const listW = listEl.clientWidth;
+      const vsb = listEl.offsetWidth - listEl.clientWidth;
+      setMetrics((m) => (m.charW === charW && m.listW === listW && m.vsb === vsb ? m : { charW, listW, vsb }));
+    };
+    const ro = new ResizeObserver(measure);
+    ro.observe(listEl);
+    ro.observe(probeEl);
+    measure();
+    return () => ro.disconnect();
+  }, [hasData]);
+
+  // Sideways scrolling: every input pane shares `hx`, moved by the wheel and the scrollbars under the panes.
+  const panes: Pane[] = twoWay ? ["left", "right"] : ["left", "base", "right"];
+  const cellW = (metrics.listW - panes.length * LN_WIDTH) / panes.length;
+  /** A cell's text width, with a character of room after the longest line. */
+  const textW = CELL_PAD + (maxCols + 1) * metrics.charW;
+  const maxHx = metrics.listW > 0 ? Math.max(0, Math.ceil(textW - cellW)) : 0;
+  useEffect(() => setHx((x) => Math.min(x, maxHx)), [maxHx]);
+  const hbars = useRef<Partial<Record<Pane, HTMLDivElement | null>>>({});
+  useLayoutEffect(() => {
+    for (const el of Object.values(hbars.current)) if (el && Math.abs(el.scrollLeft - hx) > 0.5) el.scrollLeft = hx;
+  }, [hx, maxHx]);
 
   const curChunk = sel >= 0 && sel < chunks.length && chunks[sel].kind !== "stable" ? chunks[sel] : null;
   const curBlock = curChunk ? blockOf.get(sel) : undefined;
@@ -961,7 +1008,7 @@ export function TextMerge({
   const onWheel = (e: WheelEvent<HTMLDivElement>) => {
     const dx = e.shiftKey ? e.deltaY : e.deltaX;
     if (!dx || (!e.shiftKey && Math.abs(e.deltaX) < Math.abs(e.deltaY))) return;
-    setHx((x) => Math.max(0, Math.min(maxChars * CHAR_WIDTH, x + dx)));
+    setHx((x) => Math.max(0, Math.min(maxHx, x + dx)));
   };
 
   const shift = { transform: `translateX(${-hx}px)` };
@@ -1361,7 +1408,10 @@ export function TextMerge({
         )}
         {data && (
           <>
-            <div className={`tm-inputs${twoWay ? " tm-two" : ""}`} style={{ flexBasis: `${split * 100}%` }}>
+            <div ref={inputs} className={`tm-inputs${twoWay ? " tm-two" : ""}`} style={{ flexBasis: `${split * 100}%` }}>
+              <span className="tm-probe" ref={probe} aria-hidden>
+                {"0".repeat(PROBE_CHARS)}
+              </span>
               <div className="tm-heads">
                 <DocInfo label="Left" doc={data.left} />
                 {data.base && <DocInfo label="Base" doc={data.base} />}
@@ -1375,6 +1425,23 @@ export function TextMerge({
                 renderRow={renderRow}
                 onWheel={onWheel}
               />
+              {/* one horizontal scrollbar under each pane's text, kept in step */}
+              {maxHx > 0 && (
+                <div className="tm-hbar" style={{ paddingRight: metrics.vsb }}>
+                  {panes.map((pane) => (
+                    <Fragment key={pane}>
+                      <span />
+                      <div
+                        ref={(el) => void (hbars.current[pane] = el)}
+                        className="tm-hscroll"
+                        onScroll={(e) => setHx(e.currentTarget.scrollLeft)}
+                      >
+                        <div style={{ width: textW }} />
+                      </div>
+                    </Fragment>
+                  ))}
+                </div>
+              )}
             </div>
             <div
               className="tm-splitter"

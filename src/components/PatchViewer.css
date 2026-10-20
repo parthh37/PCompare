@@ -105,8 +105,37 @@
   white-space: nowrap;
 }
 .pv-grid {
+  position: relative;
   flex: 1;
+  flex-direction: column;
   min-height: 0;
+  overflow: hidden;
+}
+/*
+ * One horizontal scrollbar under each side's text, both moving `hx`. The columns
+ * mirror `.trow`'s (padding-right: the list's vertical scrollbar, set inline).
+ */
+.pv-hbar {
+  display: grid;
+  grid-template-columns: 52px 1fr 6px 52px 1fr;
+  flex-shrink: 0;
+  border-top: 1px solid var(--border);
+  background: var(--panel);
+}
+.pv-hscroll {
+  min-width: 0;
+  height: 12px;
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+.pv-hscroll > div {
+  height: 1px;
+}
+.pv-hscroll-left {
+  grid-column: 2;
+}
+.pv-hscroll-right {
+  grid-column: 5;
 }
 .pv-hunk {
   display: flex;
