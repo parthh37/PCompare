@@ -255,10 +255,10 @@
 }
 
 .fm-progress {
-  display: grid;
-  justify-items: center;
-  gap: 8px;
-  max-width: 80%;
+  width: min(460px, 86%);
+}
+.fm-progress button {
+  justify-self: center;
 }
 .fm-progress-path {
   font-family: var(--mono);

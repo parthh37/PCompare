@@ -1384,7 +1384,7 @@ textarea:focus {
   align-items: center;
   gap: 10px;
 }
-.update-prompt-progress progress {
+.update-prompt-progress .pbar {
   flex: 1;
 }
 .modal-foot .spacer {

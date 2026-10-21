@@ -2,6 +2,7 @@ import { ArrowLeft, ArrowRight, ChevronDown, ChevronRight, Equal, EqualNot, Refr
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { matches as matchesKey, shortcutLabel } from "../lib/keymap";
 import type { DiffStatus, PropertyCompareResult, PropertyRow } from "../lib/metaApi";
+import { BusyOverlay } from "./ProgressBar";
 import "./PropertyCompare.css";
 
 export type PropertyFilter = "all" | "diffs" | "same";
@@ -125,7 +126,7 @@ export function PropertyCompare({
       {header}
 
       <div className="session-body">
-        {loading && <div className="overlay">{loadingText}</div>}
+        {loading && <BusyOverlay label={loadingText} />}
         {error && <div className="banner error">{error}</div>}
         {!result && !error && !loading && <div className="empty-state">{emptyText}</div>}
         {result && (

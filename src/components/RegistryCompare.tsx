@@ -52,6 +52,7 @@ import { STATUS_ICON } from "./PropertyCompare";
 import { LiveConfirmDialog, RegKeyDialog, RegValueDialog, type ValueDraft } from "./RegistryEditDialogs";
 import { VirtualList, type VirtualListHandle } from "./VirtualList";
 import "./PropertyCompare.css";
+import { BusyOverlay } from "./ProgressBar";
 import "./RegistryCompare.css";
 
 type Filter = "all" | "diffs" | "same" | "orphans";
@@ -931,7 +932,7 @@ export function RegistryCompare({
       )}
 
       <div className="session-body">
-        {(loading || working) && <div className="overlay">{working ?? "Reading registry…"}</div>}
+        {(loading || working) && <BusyOverlay label={working ?? "Reading registry…"} />}
         {error && <div className="banner error">{error}</div>}
         {notice && (
           <div className="banner error reg-notice" onClick={() => setNotice(null)} title="Click to dismiss">

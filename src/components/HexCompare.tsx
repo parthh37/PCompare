@@ -24,6 +24,7 @@ import { usePref } from "../lib/prefs";
 import type { CompareProps } from "../lib/sessionProps";
 import { autoRefreshTitle, useAutoRefresh } from "../lib/useAutoRefresh";
 import { PathBar } from "./PathBar";
+import { BusyOverlay, BusyStatus } from "./ProgressBar";
 import "./HexCompare.css";
 
 /** Per-session view settings, saved with the session. */
@@ -1200,7 +1201,7 @@ export function HexCompare({
           </div>
         )}
         {state?.note && <div className="banner info hx-banner">{state.note}</div>}
-        {loading && !state && <div className="overlay">Comparing…</div>}
+        {loading && !state && <BusyOverlay label="Comparing…" />}
         <div className="hx-scroll" ref={scroller} onScroll={(e) => setScrollTop(e.currentTarget.scrollTop)}>
           <div className="hx-spacer" style={{ height: spacerPx, width: `calc(${rowWidthCh(bpr)}ch + 20px)` }}>
             <div
@@ -1240,7 +1241,7 @@ export function HexCompare({
               </span>
             </>
           ))}
-        {state?.stale && <span className="muted">Recomparing…</span>}
+        {state?.stale && <BusyStatus label="Recomparing…" />}
         {state?.mode === "offset" && <span className="muted">Offset compare</span>}
         <span className="spacer" />
         {message && <span className="muted">{message}</span>}

@@ -70,6 +70,7 @@ import { PathField } from "./PathField";
 import { TextEncodingPicker } from "./TextEncodingPicker";
 import { VarList, type VarListHandle } from "./VarList";
 import "./TextCompare.css";
+import { BusyOverlay } from "./ProgressBar";
 import "./TextEditor.css";
 
 const ROW_HEIGHT = 20;
@@ -1144,7 +1145,7 @@ export function TextEditor({ left: path, onPathsChange, settings, onSettingsChan
         <span className="tc-probe te-probe" ref={probeRef} aria-hidden>
           {"0".repeat(PROBE_CHARS)}
         </span>
-        {loading && <div className="overlay">Loading…</div>}
+        {loading && <BusyOverlay label="Loading…" />}
         {error && <div className="banner error">{error}</div>}
         {gotoOpen && (
           <div className="te-goto">

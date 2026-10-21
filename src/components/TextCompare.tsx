@@ -127,6 +127,7 @@ import { useTextReview } from "./TextReview";
 import { ArrowRightLeft, GitCommitHorizontal } from "lucide-react";
 import type { MovedBlock } from "../lib/api";
 import { useTextBlame } from "./TextBlame";
+import { BusyOverlay } from "./ProgressBar";
 import "./TextCompare.css";
 
 const ROW_HEIGHT = 20;
@@ -3067,7 +3068,7 @@ export function TextCompare({
         {review.layer /* Bookmarks & comments panel */}
         {review.dialogs}
         {(loading || (docs && !binary && !diffed && !error && !diffError)) && (
-          <div className="overlay">Comparing…</div>
+          <BusyOverlay label="Comparing…" />
         )}
         {error && <div className="banner error">{error}</div>}
         {diffError && <div className="banner error">{diffError}</div>}

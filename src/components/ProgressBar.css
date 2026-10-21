@@ -1,0 +1,80 @@
+/* The shared progress bar (ProgressBar.tsx): determinate fill or a sliding stripe. */
+.pbar {
+  position: relative;
+  flex: none;
+  overflow: hidden;
+  background: var(--panel-sunk);
+  border: 1px solid var(--border);
+}
+.pbar-normal {
+  height: 6px;
+  border-radius: 3px;
+}
+.pbar-slim {
+  height: 4px;
+  border-radius: 2px;
+}
+.pbar-fill {
+  height: 100%;
+  background: var(--accent);
+  transition: width 0.15s linear;
+}
+.pbar-warn .pbar-fill {
+  background: var(--warn);
+}
+/* No total yet: a third-width stripe sweeps across. */
+.pbar-indeterminate .pbar-fill {
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 34%;
+  animation: pbar-sweep 1.25s ease-in-out infinite;
+}
+@keyframes pbar-sweep {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(300%);
+  }
+}
+/* Without motion, an unknown total shows as a dim full bar instead. */
+@media (prefers-reduced-motion: reduce) {
+  .pbar-indeterminate .pbar-fill {
+    width: 100%;
+    opacity: 0.45;
+    animation: none;
+  }
+  .pbar-fill {
+    transition: none;
+  }
+}
+
+/* Status-bar and inline progress (.live-progress in styles.css). */
+.live-progress .pbar {
+  width: 140px;
+}
+
+/* A viewer's "Comparing…" cover. */
+.busy-card {
+  display: grid;
+  gap: 8px;
+  justify-items: stretch;
+  min-width: 220px;
+  max-width: min(420px, 80%);
+  padding: 14px 18px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  box-shadow: 0 18px 60px var(--shadow-strong);
+  text-align: center;
+}
+
+/* A waiting message with an indeterminate bar under it (empty states, banners). */
+.busy-state {
+  display: grid;
+  gap: 8px;
+}
+.empty-state.busy-state .pbar {
+  width: 220px;
+  justify-self: center;
+}

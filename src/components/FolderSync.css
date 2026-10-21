@@ -198,18 +198,6 @@
   font-weight: 400;
   font-variant-numeric: tabular-nums;
 }
-.sync-bar {
-  height: 6px;
-  border-radius: 3px;
-  background: var(--bg);
-  border: 1px solid var(--border);
-  overflow: hidden;
-}
-.sync-bar > div {
-  height: 100%;
-  background: var(--accent);
-  transition: width 0.15s linear;
-}
 .sync-progress-file {
   font-family: var(--mono);
   font-size: 12px;

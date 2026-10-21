@@ -114,6 +114,8 @@ import { sessionForFiles } from "../lib/sessions";
 import { FolderSelectDialog, type SelectRequest } from "./FolderSelectDialog";
 import { FolderSplitPane, type SplitPair } from "./FolderSplitPane";
 import { countsSummary, DETAIL_LABEL, FolderToneIcon, LegendPopover, StatusGlyph, ToneSpot } from "./FolderStatusLegend";
+import { ProgressBar } from "./ProgressBar";
+import { estimateRemaining, progressCount } from "../lib/progress";
 import "./FolderCompare.css";
 
 export type { FolderSettings };
@@ -310,11 +312,16 @@ export function FolderCompare({
   const splitDirty = useRef(false);
   const [result, setResult] = useState<FolderCompareResult | null>(null);
   const [verdicts, setVerdicts] = useState<Verdicts>(new Map());
-  const [checking, setChecking] = useState<{ done: number; total: number } | null>(null);
+  /** "Compare contents" on selected rows: how far it got, and when it started (for the time left). */
+  const [checking, setChecking] = useState<{ done: number; total: number; started: number } | null>(null);
+  /** The running "Compare contents"; Stop / Esc set `stopped`. */
+  const recheckRun = useRef<{ stopped: boolean } | null>(null);
   const [error, setError] = useState<string | null>(null);
   /** What the running compare is doing; the list stays usable throughout. */
   const [phase, setPhase] = useState<"scanning" | "contents" | "updating" | null>(null);
   const [progress, setProgress] = useState<ScanProgress | null>(null);
+  /** The content pass running now: how many file pairs it has to classify (from the listing on screen) and when it started. */
+  const [contentPass, setContentPass] = useState<{ total: number; started: number } | null>(null);
   /** The rows on screen come from the quick pass; contents weren't read yet. */
   const [quickOnly, setQuickOnly] = useState(false);
   /** Run key of the compare in flight, for cancelling it. */
@@ -418,7 +425,10 @@ export function FolderCompare({
         if (!quiet) setProgress(null);
         scanOptions.current = opts;
         tree.beginPass();
-        return api.compareFolders(left, right, opts, key, (p) => !stale() && setProgress(p), expandArchives, onLevels, {
+        // Reports that only count classified pairs carry no folder: keep the last one.
+        const onProgress = (p: ScanProgress) =>
+          !stale() && setProgress((prev) => (p.current || !prev ? p : { ...p, current: prev.current }));
+        return api.compareFolders(left, right, opts, key, onProgress, expandArchives, onLevels, {
           id: scan,
           restage: again,
           showFiltered: suppressFilters.current,
@@ -434,7 +444,13 @@ export function FolderCompare({
           if (stale()) return;
           finish(quick, true);
         }
-        if (!quiet) setPhase(twoPass || (restage && reads) ? "contents" : restage ? "updating" : "scanning");
+        if (!quiet) {
+          const next = twoPass || (restage && reads) ? "contents" : restage ? "updating" : "scanning";
+          setPhase(next);
+          // The listing on screen tells how many pairs the content pass has ahead of it.
+          const total = next === "contents" ? pairedFiles(tree.tree()).length : 0;
+          setContentPass(total ? { total, started: performance.now() } : null);
+        }
         const res = await pass(options, restage || twoPass);
         if (stale()) return;
         finish(res);
@@ -523,6 +539,7 @@ export function FolderCompare({
 
   const cancel = () => {
     if (runKey.current) api.cancelCompareFolders(runKey.current).catch(() => {});
+    if (recheckRun.current) recheckRun.current.stopped = true;
   };
 
   // Options changed (or first show): re-run what they need on the kept listing.
@@ -652,24 +669,46 @@ export function FolderCompare({
   /** Re-checks the given files' contents and folds the verdicts into the tree. */
   const recheck = async (files: FolderEntry[], method: ContentMethod) => {
     if (!result || !files.length) return;
+    const me = { stopped: false };
+    recheckRun.current = me;
     const queue = [...files];
+    const total = files.length;
+    const started = performance.now();
     let done = 0;
-    setChecking({ done, total: files.length });
+    setChecking({ done, total, started });
     const failures: string[] = [];
+    // Verdicts and the count land a few times a second: one update per file
+    // would copy the whole verdict map and repaint the tree each time.
+    let batch: Verdicts = new Map();
+    let timer: number | undefined;
+    const flush = () => {
+      timer = undefined;
+      if (batch.size) {
+        const landed = batch;
+        batch = new Map();
+        setVerdicts((prev) => new Map([...prev, ...landed]));
+      }
+      setChecking({ done, total, started });
+    };
     const worker = async () => {
-      for (let e = queue.shift(); e; e = queue.shift()) {
+      for (let e = queue.shift(); e && !me.stopped; e = queue.shift()) {
         const [lp, rp] = paths(e)!;
         try {
           const v = await api.compareFileContents(lp, e.left!.size, rp, e.right!.size, method, engineOptions.rules);
-          setVerdicts((prev) => new Map(prev).set(e!.relPath, { ...v, method }));
+          batch.set(e.relPath, { ...v, method });
         } catch (err) {
           failures.push(`${e.relPath}: ${errorMessage(err)}`);
         }
-        setChecking({ done: ++done, total: files.length });
+        done++;
+        timer ??= window.setTimeout(flush, 250);
       }
     };
     await Promise.all(Array.from({ length: RECHECK_CONCURRENCY }, worker));
+    window.clearTimeout(timer);
+    flush();
+    recheckRun.current = null;
     setChecking(null);
+    if (me.stopped) addLog(`Compare contents stopped after ${done.toLocaleString()} of ${total.toLocaleString()} files`, true);
     if (failures.length) setError(failures.slice(0, 3).join("\n") + (failures.length > 3 ? "\n…" : ""));
   };
 
@@ -965,9 +1004,10 @@ export function FolderCompare({
           return;
         }
       }
-      if (e.key === "Escape" && runKey.current) {
+      if (e.key === "Escape" && (runKey.current || recheckRun.current)) {
         e.preventDefault();
-        api.cancelCompareFolders(runKey.current).catch(() => {});
+        if (runKey.current) api.cancelCompareFolders(runKey.current).catch(() => {});
+        if (recheckRun.current) recheckRun.current.stopped = true;
         return;
       }
       if (e.key !== "F5") return;
@@ -1078,18 +1118,44 @@ export function FolderCompare({
   const narrowed = cfg.filter !== "all" && cfg.filter !== "same";
   const filterLabel = DISPLAY_FILTERS.find((f) => f.value === cfg.filter)?.label ?? "All";
   const copy = fops.copyOther;
-  /** Status-bar stand-in for the old blocking overlay. */
+  /**
+   * Status-bar stand-in for the old blocking overlay. Listing can't know how
+   * much is left, so its bar only shows it's running. The content pass fills
+   * one in, sized by the pairs already listed. If it classifies more than
+   * that (rows the view leaves out), the bar goes back to running.
+   */
+  const passTotal =
+    phase === "contents" && contentPass && progress && progress.compared <= contentPass.total ? contentPass.total : null;
+  const passLeft = passTotal && estimateRemaining(performance.now() - contentPass!.started, progress!.compared, passTotal);
+  const phaseLabel = phase === "scanning" ? "Scanning folders…" : phase === "updating" ? "Applying changes…" : "Comparing contents…";
   const liveStatus = phase && (
     <span className="live-progress" title={progress?.current}>
-      <span className="spinner" />
-      {phase === "scanning" ? "Scanning folders…" : phase === "updating" ? "Applying changes…" : "Comparing contents…"}
+      {phaseLabel}
+      <ProgressBar size="slim" value={passTotal ? progress!.compared : null} max={passTotal} label={phaseLabel} />
       {progress && (
         <span className="muted">
-          {progress.scanned.toLocaleString()} items
-          {progress.compared ? ` · ${progress.compared.toLocaleString()} compared` : ""}
+          {passTotal
+            ? progressCount(progress.compared, passTotal)
+            : `${progress.scanned.toLocaleString()} items${progress.compared ? ` · ${progress.compared.toLocaleString()} compared` : ""}`}
+          {passLeft ? ` · ${passLeft}` : ""}
         </span>
       )}
       <button onClick={cancel} title="Stop comparing (Esc)">
+        Cancel
+      </button>
+    </span>
+  );
+  /** "Compare contents" on selected rows, in the status bar beside the live compare's. */
+  const checkLeft = checking && estimateRemaining(performance.now() - checking.started, checking.done, checking.total);
+  const checkStatus = checking && (
+    <span className="live-progress">
+      Comparing contents…
+      <ProgressBar size="slim" value={checking.done} max={checking.total} label="Comparing contents of the selected files" />
+      <span className="muted">
+        {progressCount(checking.done, checking.total)}
+        {checkLeft ? ` · ${checkLeft}` : ""}
+      </span>
+      <button onClick={cancel} title="Stop comparing contents (Esc); files already compared keep their result">
         Cancel
       </button>
     </span>
@@ -1243,7 +1309,7 @@ export function FolderCompare({
           onClick={() => onPathsChange(right, left)}
           title="Swap sides: exchange the left and right folders"
         />
-        <StackButton icon={<CircleStop size={16} />} label="Stop" disabled={!phase} onClick={cancel} title="Stop comparing (Esc)" />
+        <StackButton icon={<CircleStop size={16} />} label="Stop" disabled={!phase && !checking} onClick={cancel} title="Stop comparing (Esc)" />
         <span className="sep" />
         <label className="fc-filterbox" title="Files to include, then -names to exclude (files or folders), separated by ; — e.g. *.rs;*.ts;-target;-*.tmp. Press Enter to apply.">
           Filters:
@@ -1460,11 +1526,7 @@ export function FolderCompare({
             )}
             <span className="spacer" />
             {liveStatus}
-            {checking && (
-              <span>
-                Comparing contents {checking.done}/{checking.total}…
-              </span>
-            )}
+            {checkStatus}
             <span
               className="muted"
               title={result!.needs && !result!.stats.dirsRead ? "Applied to the folders already listed; nothing was read again" : undefined}

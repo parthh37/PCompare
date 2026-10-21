@@ -58,6 +58,7 @@ import { AutomationSettingsDialog, ExportTasksDialog, ImportTasksDialog } from "
 import { AutomationTaskDialog, TRIGGER_ICONS } from "./AutomationTaskDialog";
 import { MODES, RollbackDialog, modeLabel } from "./FolderSync";
 import { NotificationChannelsDialog } from "./NotificationChannelsDialog";
+import { ProgressBar } from "./ProgressBar";
 import { SessionIcon } from "./SessionIcon";
 import { SyncHistoryDialog } from "./SyncHistoryDialog";
 
@@ -686,9 +687,12 @@ function StatusCell({
     return (
       <>
         <span className="auto-status-line">
-          <span className={`auto-bar${pct == null ? " indeterminate" : ""}`}>
-            <span style={{ width: `${pct ?? 30}%` }} />
-          </span>
+          <ProgressBar
+            className="auto-bar"
+            value={pct == null ? null : pr!.doneOps}
+            max={pct == null ? null : pr!.totalOps}
+            label={text}
+          />
           <span className="auto-pct">{pct != null && `${pct}%`}</span>
           <button className="icon-btn auto-cancel" onClick={onCancel} title="Cancel this run">
             <Square size={11} />

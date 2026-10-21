@@ -46,6 +46,7 @@ import { TextRulesDialog } from "./TextRulesDialog";
 import { VirtualList, type VirtualListHandle } from "./VirtualList";
 import "./TextMerge.css";
 import { isComposing } from "../lib/ime";
+import { BusyOverlay } from "./ProgressBar";
 
 const ROW_HEIGHT = 20;
 /** Fallback glyph width until the editor font is measured. */
@@ -1398,7 +1399,7 @@ export function TextMerge({
       </div>
 
       <div className="session-body tm-body" ref={body}>
-        {loading && <div className="overlay">Merging…</div>}
+        {loading && <BusyOverlay label="Merging…" />}
         {error && <div className="banner error">{error}</div>}
         {!ready && !data && (
           <div className="empty-state">

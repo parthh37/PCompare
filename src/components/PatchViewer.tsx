@@ -47,6 +47,7 @@ import { ToolIcon } from "./icons";
 import { PathField } from "./PathField";
 import { VarList, type VarListHandle } from "./VarList";
 import "./TextCompare.css";
+import { BusyOverlay, BusyStatus } from "./ProgressBar";
 import "./PatchViewer.css";
 
 const ROW_HEIGHT = 20;
@@ -665,7 +666,7 @@ export function PatchViewer({ left: path, onPathsChange, settings, onSettingsCha
       )}
 
       <div className="session-body pv-body">
-        {loading && <div className="overlay">Reading patch…</div>}
+        {loading && <BusyOverlay label="Reading patch…" />}
         {error && <div className="banner error">{error}</div>}
         {!path && !loading && (
           <div className="empty-state">
@@ -821,7 +822,7 @@ export function PatchViewer({ left: path, onPathsChange, settings, onSettingsCha
                 {view.warnings.length} warning{view.warnings.length === 1 ? "" : "s"}
               </span>
             )}
-            {checking && <span className="muted">Checking against {basename(base)}…</span>}
+            {checking && <BusyStatus label={`Checking against ${basename(base)}…`} />}
             {check && !checking && (
               <span className={cleanFiles === files.length ? "ok" : "pv-fail"}>
                 {cleanFiles} of {files.length} file{files.length === 1 ? "" : "s"} apply cleanly to {basename(base)} (-p{check.strip})
