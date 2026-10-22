@@ -296,31 +296,9 @@ input.auto-switch:checked::after {
 }
 
 /* live progress */
-.auto-bar {
+.auto-status-line .auto-bar {
   flex: 1;
   min-width: 60px;
-  height: 6px;
-  border-radius: 3px;
-  background: var(--bg);
-  border: 1px solid var(--border);
-  overflow: hidden;
-}
-.auto-bar > span {
-  display: block;
-  height: 100%;
-  background: var(--accent);
-  transition: width 0.3s linear;
-}
-.auto-bar.indeterminate > span {
-  animation: auto-slide 1.2s ease-in-out infinite;
-}
-@keyframes auto-slide {
-  from {
-    transform: translateX(-100%);
-  }
-  to {
-    transform: translateX(340%);
-  }
 }
 .auto-pct {
   min-width: 30px;

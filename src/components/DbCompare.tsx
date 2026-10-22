@@ -86,6 +86,7 @@ import { Modal } from "./Modal";
 import { VirtualList } from "./VirtualList";
 import "./TableCompare.css";
 import "./FolderSync.css";
+import { BusyOverlay, ProgressBar } from "./ProgressBar";
 import "./DbCompare.css";
 
 type Mode = "schema" | "data";
@@ -731,7 +732,7 @@ export function DbCompare({ left, right, onPathsChange, settings, onSettingsChan
       )}
 
       <div className="session-body">
-        {isBusy && mode === "schema" && <div className="overlay">Reading both schemas…</div>}
+        {isBusy && mode === "schema" && <BusyOverlay label="Reading both schemas…" />}
         {isBusy && mode === "data" && (
           <div className="overlay">
             <div className="sync-progress">
@@ -739,9 +740,7 @@ export function DbCompare({ left, right, onPathsChange, settings, onSettingsChan
                 {cancelling ? "Cancelling…" : "Comparing data…"}
                 <span className="muted">{progress && progress.total ? `${progress.done} / ${progress.total} tables` : ""}</span>
               </div>
-              <div className="sync-bar">
-                <div style={{ width: `${progress && progress.total ? (progress.done / progress.total) * 100 : 0}%` }} />
-              </div>
+              <ProgressBar value={progress?.done} max={progress?.total} label="Comparing data" />
               <div className="sync-progress-file">{progress?.current || "Reading schemas…"}</div>
               <div className="sync-progress-foot">
                 <span className="muted">Stops after the current table</span>

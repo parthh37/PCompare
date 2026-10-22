@@ -38,6 +38,7 @@ import { SEPARATOR, type MenuItems } from "../lib/nativeMenu";
 import { useContextMenu } from "./ContextMenu";
 import { countsSummary, DETAIL_LABEL, FolderToneIcon, StatusGlyph, ToneSpot } from "./FolderStatusLegend";
 import { FileIcon } from "./icons";
+import { ProgressBar } from "./ProgressBar";
 import { StatsDialog } from "./StatsDialog";
 import { TextCompare, type TextSettings } from "./TextCompare";
 import { VirtualList, type VirtualListHandle } from "./VirtualList";
@@ -169,7 +170,12 @@ export function ReviewArchiveView({ left: path, onPathsChange, onDirtyChange }: 
         </button>
       </div>
       {error && <div className="banner error">{error}</div>}
-      {!archive && !error && <div className="empty-state">Opening the archive…</div>}
+      {!archive && !error && (
+        <div className="empty-state busy-state">
+          Opening the archive…
+          <ProgressBar size="slim" label="Opening the archive" />
+        </div>
+      )}
       {archive?.comparison.kind === "text" && (
         <TextReviewPane key={path + m?.createdMs} review={archive.comparison} marks={marks as Bookmark[]} onMarks={setMarks} />
       )}

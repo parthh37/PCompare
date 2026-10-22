@@ -46,6 +46,7 @@ import { VirtualList, type VirtualListHandle } from "./VirtualList";
 // Report… (HTML grid or CSV)
 import { FileText } from "lucide-react";
 import { ReportDialog } from "./ReportDialog";
+import { BusyOverlay, ProgressBar } from "./ProgressBar";
 import "./TableCompare.css";
 
 const ROW_HEIGHT = 22;
@@ -887,7 +888,7 @@ export function TableCompare({ left, right, onPathsChange, settings, onSettingsC
       )}
 
       <div className="session-body">
-        {loading && <div className="overlay">Comparing…</div>}
+        {loading && <BusyOverlay label="Comparing…" />}
         {error && <div className="banner error">{error}</div>}
         <div className="tbl-main">
           {allSheets && multiSheet && (
@@ -901,6 +902,7 @@ export function TableCompare({ left, right, onPathsChange, settings, onSettingsC
                     ? `Comparing ${sheetWord}…`
                     : ""}
               </div>
+              {sheetsLoading && !sheetsResult && <ProgressBar size="slim" label={`Comparing ${sheetWord}`} className="tbl-sheets-bar" />}
               {sheetsError && <div className="tbl-sheets-error">{sheetsError}</div>}
               {sheetsResult?.sheets.map((x, i) => {
                 const paired = x.left !== null && x.right !== null;

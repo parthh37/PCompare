@@ -42,6 +42,7 @@ import { PathField } from "./PathField";
 import { VirtualList, type VirtualListHandle } from "./VirtualList";
 import "./FolderMerge.css";
 import { FileIcon } from "./icons";
+import { BusyOverlay, ProgressBar } from "./ProgressBar";
 
 type Filter = "all" | "changes" | "conflicts";
 
@@ -809,14 +810,15 @@ export function FolderMerge({
       </div>
 
       <div className="session-body">
-        {loading && <div className="overlay">{base ? "Comparing three folders…" : "Comparing folders…"}</div>}
+        {loading && <BusyOverlay label={base ? "Comparing three folders…" : "Comparing folders…"} />}
         {merging && (
           <div className="overlay">
-            <div className="fm-progress">
+            <div className="busy-card fm-progress">
               <div>
-                Merging…{progress && progress.total > 0 && ` ${progress.done} of ${progress.total}`}
+                Merging…{progress && progress.total > 0 && ` ${progress.done.toLocaleString()} of ${progress.total.toLocaleString()}`}
                 {progress && progress.bytesWritten > 0 && ` · ${formatSize(progress.bytesWritten)} written`}
               </div>
+              <ProgressBar value={progress?.done} max={progress?.total} label="Merging folders" />
               {progress?.current && <div className="fm-progress-path muted">{progress.current}</div>}
               <button
                 onClick={() => runKey.current && void syncApi.cancel(runKey.current).catch(() => {})}

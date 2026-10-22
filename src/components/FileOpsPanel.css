@@ -108,8 +108,7 @@
   padding: 2px 8px;
   font-size: 12px;
 }
-.fop-bar {
-  height: 4px;
+.fop-row .fop-bar {
   margin-left: 24px;
 }
 .fop-current {

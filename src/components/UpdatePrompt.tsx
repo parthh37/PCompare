@@ -1,6 +1,7 @@
 import { BellOff, CircleArrowUp } from "lucide-react";
 import type { Updater } from "../lib/useUpdater";
 import { Modal } from "./Modal";
+import { ProgressBar } from "./ProgressBar";
 
 /**
  * "A new version is available" pop-up. It reappears on every hourly check
@@ -47,7 +48,7 @@ export function UpdatePrompt({ updater }: { updater: Updater }) {
       {downloading ? (
         <div className="update-prompt-progress">
           <span>Downloading{pct != null ? ` — ${pct}%` : "…"}</span>
-          <progress value={phase.done} max={phase.total ?? undefined} />
+          <ProgressBar value={phase.done} max={phase.total} label="Downloading the update" />
         </div>
       ) : (
         <small className="muted">

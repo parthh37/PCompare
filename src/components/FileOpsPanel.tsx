@@ -18,6 +18,8 @@ import { useState } from "react";
 import { errorMessage } from "../lib/api";
 import { fileOps, type ConflictAnswer, type FileOp, type FileOpProgress } from "../lib/fileOpsApi";
 import { formatSize, formatTime } from "../lib/format";
+import { estimateRemaining, useRunStart } from "../lib/progress";
+import { ProgressBar } from "./ProgressBar";
 import { useShell } from "../lib/shell";
 import "./FileOpsPanel.css";
 
@@ -36,7 +38,8 @@ const PHASE_LABEL: Record<FileOpProgress["phase"], string> = {
   finished: "Finishing…",
 };
 
-function statusLine(op: FileOp): string {
+/** `started`: when it began copying (`performance.now()`), for the time left. */
+function statusLine(op: FileOp, started: number | null): string {
   const p = op.progress;
   const r = op.report;
   if (op.status === "failed") return op.error ?? "Failed";
@@ -52,18 +55,22 @@ function statusLine(op: FileOp): string {
   }
   if (!p) return "Starting…";
   if (op.paused && p.phase !== "paused") return "Pausing…";
+  const [done, total] = amounts(p);
+  const left =
+    p.phase === "running" && started != null && done != null && total ? estimateRemaining(performance.now() - started, done, total) : null;
   const phase = PHASE_LABEL[p.phase];
   const counts = p.filesTotal ? `${p.filesDone.toLocaleString()} / ${p.filesTotal.toLocaleString()}` : "";
   const bytes = p.bytesTotal ? `${formatSize(p.bytesDone)} of ${formatSize(p.bytesTotal)}` : "";
   const waiting = p.retrying ? `${p.retrying.toLocaleString()} in use, retrying` : "";
   const later = p.deferred && p.phase !== "deferred" ? `${p.deferred.toLocaleString()} left for the end` : "";
-  return [phase, counts, bytes, waiting, later].filter(Boolean).join(" · ");
+  return [phase, counts, bytes, waiting, later, left].filter(Boolean).join(" · ");
 }
 
-function percent(p: FileOpProgress | null): number {
-  if (!p) return 0;
-  if (p.bytesTotal > 0) return Math.min(100, (p.bytesDone / p.bytesTotal) * 100);
-  return p.filesTotal > 0 ? Math.min(100, (p.filesDone / p.filesTotal) * 100) : 0;
+/** Done and total for the bar: bytes when known, else files; nulls while scanning. */
+function amounts(p: FileOpProgress | null): [number | null, number | null] {
+  if (!p || p.phase === "scanning") return [null, null];
+  if (p.bytesTotal > 0) return [p.bytesDone, p.bytesTotal];
+  return p.filesTotal > 0 ? [p.filesDone, p.filesTotal] : [null, null];
 }
 
 const ANSWERS: { answer: ConflictAnswer; label: string; title?: string }[] = [
@@ -81,6 +88,8 @@ function OpRow({ op }: { op: FileOp }) {
   const { openBackups } = useShell();
   const p = op.progress;
   const running = op.status === "running";
+  // Timed from the first file, not from when it was queued or scanning.
+  const started = useRunStart(running && p && p.phase !== "queued" && p.phase !== "scanning" ? op.id : null);
   /** The backup holding the files it replaced (Backups on). */
   const backup = op.report?.backedUp ? op.report.backup : null;
   const q = running ? p?.question : null;
@@ -109,7 +118,7 @@ function OpRow({ op }: { op: FileOp }) {
         <span className="fop-title" title={`${op.srcRoot}${op.dstRoot ? ` → ${op.dstRoot}` : ""}`}>
           {op.title}
         </span>
-        <span className="fop-status muted">{statusLine(op)}</span>
+        <span className="fop-status muted">{statusLine(op, started)}</span>
         <span className="spacer" />
         {running && (
           <>
@@ -138,9 +147,14 @@ function OpRow({ op }: { op: FileOp }) {
         )}
       </div>
       {running && p?.phase !== "queued" && (
-        <div className="sync-bar fop-bar">
-          <div style={{ width: `${percent(p)}%` }} />
-        </div>
+        <ProgressBar
+          className="fop-bar"
+          size="slim"
+          value={amounts(p)[0]}
+          max={amounts(p)[1]}
+          tone={op.paused || p?.phase === "paused" ? "warn" : "accent"}
+          label={op.title}
+        />
       )}
       {running && p?.current && <div className="fop-current" title={p.current}>{p.current}</div>}
       {q && (

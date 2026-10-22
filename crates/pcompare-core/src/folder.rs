@@ -359,7 +359,8 @@ pub struct FolderCompareResult {
     pub needs: Option<CompareNeeds>,
 }
 
-/// Progress of a running comparison, reported after each listed folder.
+/// Progress of a running comparison, reported after each listed folder and
+/// every [`PAIRS_PER_REPORT`] classified file pairs.
 #[derive(Debug, Clone, Default, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ScanProgress {
@@ -369,9 +370,14 @@ pub struct ScanProgress {
     pub folders: usize,
     /// File pairs classified so far.
     pub compared: usize,
-    /// Relative path of the folder listed last.
+    /// Relative path of the folder listed last; empty in the reports that
+    /// only count classified pairs.
     pub current: String,
 }
+
+/// How many classified file pairs make a progress report of their own, so a
+/// folder holding thousands of files doesn't sit silent while it's compared.
+pub const PAIRS_PER_REPORT: usize = 16;
 
 /// One folder's rows, streamed while a comparison runs so a view can fill in
 /// before the whole tree is done. A folder present on both sides is reported
@@ -400,8 +406,9 @@ pub struct ScanControl<'a> {
     pub cache: Option<&'a dyn ChecksumCache>,
     /// Set to stop the comparison; it then fails with [`CANCELLED`].
     pub cancel: Option<&'a AtomicBool>,
-    /// Called from worker threads after every listed folder; throttle in
-    /// the callback if forwarding is expensive.
+    /// Called from worker threads after every listed folder and every
+    /// [`PAIRS_PER_REPORT`] classified pairs; throttle in the callback if
+    /// forwarding is expensive.
     pub progress: Option<&'a (dyn Fn(&ScanProgress) + Sync)>,
     /// Called from worker threads with every folder's rows (see
     /// [`FolderLevel`]); batch in the callback if forwarding is expensive.
@@ -817,6 +824,22 @@ impl Ctx<'_> {
             .strip_prefix(['/', '\\'])
             .or_else(|| root.ends_with(['/', '\\']).then_some(rest))?;
         Some(rest.replace('\\', "/"))
+    }
+
+    /// Counts a classified file pair, reporting every [`PAIRS_PER_REPORT`].
+    fn pair_classified(&self) {
+        let compared = self.compared.fetch_add(1, Ordering::Relaxed) + 1;
+        if !compared.is_multiple_of(PAIRS_PER_REPORT) {
+            return;
+        }
+        if let Some(report) = self.control.progress {
+            report(&ScanProgress {
+                scanned: self.scanned.load(Ordering::Relaxed),
+                folders: self.folders.load(Ordering::Relaxed),
+                compared,
+                current: String::new(),
+            });
+        }
     }
 
     fn listed(&self, rel: &str, count: usize) {
@@ -1267,7 +1290,7 @@ fn compare_file_pair(
 ) -> Result<ContentVerdict> {
     let opts = ctx.opts;
     ctx.check_cancel()?;
-    ctx.compared.fetch_add(1, Ordering::Relaxed);
+    ctx.pair_classified();
     if !opts.follow_links && (l.link_target.is_some() || r.link_target.is_some()) {
         // Links listed as themselves are the same when they point to the same place.
         let same = l.link_target.is_some() && l.link_target == r.link_target;
@@ -2925,6 +2948,28 @@ mod feature_tests {
         let err =
             compare_folders_controlled(&LocalFs, &ls, &LocalFs, &rs, &opts(), control).unwrap_err();
         assert_eq!(err.to_string(), CANCELLED);
+    }
+
+    #[test]
+    fn a_folder_of_many_files_reports_as_its_pairs_are_classified() {
+        let p = pair();
+        let n = PAIRS_PER_REPORT * 3;
+        for i in 0..n {
+            write(&p.l, &format!("f{i}.txt"), b"x");
+            write(&p.r, &format!("f{i}.txt"), b"x");
+        }
+        let (ls, rs) = (p.l.to_string_lossy(), p.r.to_string_lossy());
+        let seen = std::sync::Mutex::new(Vec::new());
+        let report = |s: &ScanProgress| seen.lock().unwrap().push(s.clone());
+        let control = ScanControl {
+            progress: Some(&report),
+            ..Default::default()
+        };
+        compare_folders_controlled(&LocalFs, &ls, &LocalFs, &rs, &opts(), control).unwrap();
+        let seen = seen.into_inner().unwrap();
+        // The root listed once per side, then one report per PAIRS_PER_REPORT pairs.
+        assert_eq!(seen.len(), 2 + 3);
+        assert_eq!(seen.iter().map(|s| s.compared).max(), Some(n));
     }
 
     #[test]

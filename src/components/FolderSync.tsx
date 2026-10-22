@@ -17,7 +17,6 @@ import {
   Info,
   ListChecks,
   ListX,
-  LoaderCircle,
   Lock,
   Play,
   RefreshCw,
@@ -75,6 +74,8 @@ import { SyncHistoryDialog } from "./SyncHistoryDialog";
 import { SyncOptionsDialog, TRASH_NAME, safetySummary } from "./SyncOptionsDialog";
 import { VirtualList } from "./VirtualList";
 import { FolderToneIcon, ToneSpot } from "./FolderStatusLegend";
+import { BusyOverlay, BusyStatus, ProgressBar } from "./ProgressBar";
+import { estimateRemaining, useRunStart } from "../lib/progress";
 import "./FolderSync.css";
 
 /** "1 file", "3 files". */
@@ -1108,7 +1109,7 @@ export function FolderSync({ left, right, onPathsChange, settings, onSettingsCha
       </div>
 
       <div className="session-body">
-        {loading && !job && <div className="overlay">Planning sync…</div>}
+        {loading && !job && <BusyOverlay label="Planning sync…" />}
         {job && (
           <div className="overlay">
             <SyncProgressPanel job={job} onCancel={cancel} onPause={togglePause} />
@@ -1352,9 +1353,7 @@ function SyncConfirmDialog({
 
       <div className="sync-preflight">
         {issues === null ? (
-          <div className="muted">
-            <LoaderCircle size={13} className="sync-spin" /> Checking…
-          </div>
+          <BusyStatus label="Checking…" />
         ) : (
           issues.map((i, n) => (
             <div key={n} className={i.blocking ? "blocking" : "note"}>
@@ -1374,7 +1373,11 @@ function SyncConfirmDialog({
 /** The progress card shown over the list while a job runs. */
 function SyncProgressPanel({ job, onCancel, onPause }: { job: RunningJob; onCancel: () => void; onPause: () => void }) {
   const p = job.progress;
-  const pct = p ? (p.bytesTotal > 0 ? (p.bytesDone / p.bytesTotal) * 100 : p.total > 0 ? (p.done / p.total) * 100 : 0) : 0;
+  // Bytes say more than file counts when sizes vary; neither is known before the first report.
+  const [done, total] = !p ? [null, null] : p.bytesTotal > 0 ? [p.bytesDone, p.bytesTotal] : [p.done, p.total];
+  const started = useRunStart(job.key);
+  const held = job.paused || p?.phase === "paused" || p?.phase === "retrying";
+  const left = !held && started != null && done != null && total ? estimateRemaining(performance.now() - started, done, total) : null;
   let phase = "Synchronizing…";
   if (job.cancelling) phase = "Cancelling…";
   else if (p?.phase === "paused" || job.paused) phase = p?.phase === "paused" ? "Paused" : "Pausing…";
@@ -1391,14 +1394,15 @@ function SyncProgressPanel({ job, onCancel, onPause }: { job: RunningJob; onCanc
         <span className={p?.phase === "retrying" ? "sync-retrying" : undefined}>{phase}</span>
         <span className="muted">{p ? `${p.done} / ${p.total}` : ""}</span>
       </div>
-      <div className="sync-bar">
-        <div style={{ width: `${pct}%` }} />
-      </div>
+      <ProgressBar value={done} max={total} tone={held ? "warn" : "accent"} label={phase} />
       <div className="sync-progress-file" title={p?.current ?? undefined}>
         {p?.current ?? "Starting…"}
       </div>
       <div className="sync-progress-foot">
-        <span className="muted">{p ? `${formatSize(p.bytesDone)} of ${formatSize(p.bytesTotal)}` : ""}</span>
+        <span className="muted">
+          {p ? `${formatSize(p.bytesDone)} of ${formatSize(p.bytesTotal)}` : ""}
+          {left ? ` · ${left}` : ""}
+        </span>
         {p && p.failed > 0 && <span className="s-error-fg">{p.failed} failed</span>}
         {p && p.deferred > 0 && <span className="sync-deferred">{p.deferred} deferred</span>}
         <span className="spacer" />

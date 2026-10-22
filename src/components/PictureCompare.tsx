@@ -51,6 +51,7 @@ import {
   TransformControls,
   type ReplacedColor,
 } from "./PictureTools";
+import { BusyOverlay, BusyStatus } from "./ProgressBar";
 import "./PictureCompare.css";
 
 type ViewMode = "side" | "difference" | "overlay" | "swipe";
@@ -753,7 +754,7 @@ export function PictureCompare({ left, right, onPathsChange, settings, onSetting
       )}
 
       <div className="session-body">
-        {busy && <div className="overlay">{loading ? "Loading images…" : "Comparing…"}</div>}
+        {busy && <BusyOverlay label={loading ? "Loading images…" : "Comparing…"} />}
         {loupe && sources && (
           <Loupe
             probe={probe}
@@ -847,7 +848,7 @@ export function PictureCompare({ left, right, onPathsChange, settings, onSetting
             Preview at {Math.round(displayScale * 100)}% resolution
           </span>
         )}
-        {diffing && comparison && <span className="muted">Comparing…</span>}
+        {diffing && comparison && <BusyStatus label="Comparing…" />}
       </div>
     </div>
   );

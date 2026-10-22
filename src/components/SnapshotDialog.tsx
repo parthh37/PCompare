@@ -8,6 +8,7 @@ import { archiveApi, SNAPSHOT_EXT, type SnapshotSummary } from "../lib/archiveAp
 import { formatSize } from "../lib/format";
 import { Modal } from "./Modal";
 import { PathField } from "./PathField";
+import { ProgressBar } from "./ProgressBar";
 import "./Archives.css";
 
 interface Props {
@@ -112,7 +113,13 @@ export function SnapshotDialog({ folders, onClose }: Props) {
           Reads every file once to store its CRC-32, so content comparisons against the snapshot can tell changed files
           apart. Without CRCs, files are compared by size and date only.
         </small>
-        {busy && progress && <div className="banner info">Recording… {summaryText(progress)}</div>}
+        {busy && (
+          // The total isn't known until the walk ends, so the bar only shows it's running.
+          <div className="banner info busy-state">
+            Recording…{progress ? ` ${summaryText(progress)}` : ""}
+            <ProgressBar size="slim" label="Recording the snapshot" />
+          </div>
+        )}
         {done && (
           <div className="banner ok">
             Saved {summaryText(done)}
